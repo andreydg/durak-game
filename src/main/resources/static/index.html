@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card Game Lobby</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 2rem auto;
+            max-width: 680px;
+            line-height: 1.4;
+            padding: 0 1rem;
+        }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        label, input, button {
+            display: block;
+            margin: 0.5rem 0;
+        }
+        input {
+            width: 100%;
+            max-width: 300px;
+            padding: 0.5rem;
+        }
+        button {
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+        }
+        pre {
+            background: #f8f8f8;
+            padding: 0.75rem;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+<h1>Multiplayer Card Game Lobby</h1>
+<p>Create a game to get a unique code, then let others join (max 4 players).</p>
+
+<div class="card">
+    <h2>Create game</h2>
+    <label for="hostName">Host name</label>
+    <input id="hostName" type="text" placeholder="e.g. Andrey">
+    <button id="createBtn">Create</button>
+</div>
+
+<div class="card">
+    <h2>Join game</h2>
+    <label for="gameCode">Game code</label>
+    <input id="gameCode" type="text" placeholder="e.g. A1B2C3">
+    <label for="playerName">Player name</label>
+    <input id="playerName" type="text" placeholder="e.g. Alex">
+    <button id="joinBtn">Join</button>
+</div>
+
+<h2>Response</h2>
+<pre id="output">No requests yet.</pre>
+
+<script>
+    const output = document.getElementById("output");
+
+    async function callApi(url, options) {
+        const res = await fetch(url, options);
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+    }
+
+    document.getElementById("createBtn").addEventListener("click", async () => {
+        const hostName = document.getElementById("hostName").value;
+        await callApi("/api/games", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({hostName})
+        });
+    });
+
+    document.getElementById("joinBtn").addEventListener("click", async () => {
+        const gameCode = document.getElementById("gameCode").value;
+        const playerName = document.getElementById("playerName").value;
+        await callApi(`/api/games/${gameCode}/join`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({playerName})
+        });
+    });
+</script>
+</body>
+</html>
