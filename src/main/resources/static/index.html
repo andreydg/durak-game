@@ -3,92 +3,814 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Card Game Lobby</title>
+    <title>Durak Multiplayer</title>
     <style>
+        *, *::before, *::after { box-sizing: border-box; }
         body {
-            font-family: Arial, sans-serif;
-            margin: 2rem auto;
-            max-width: 680px;
-            line-height: 1.4;
-            padding: 0 1rem;
-        }
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-        }
-        label, input, button {
-            display: block;
-            margin: 0.5rem 0;
-        }
-        input {
+            margin: 0 auto;
             width: 100%;
-            max-width: 300px;
-            padding: 0.5rem;
+            max-width: none;
+            padding: 0.75rem clamp(0.5rem, 2vw, 1.25rem);
+            font-family: "Trebuchet MS", Arial, sans-serif;
+            background: #eee7dc;
+            color: #2f261b;
         }
-        button {
-            padding: 0.5rem 0.75rem;
+        .hidden { display: none; }
+        .stack { display: grid; gap: 1rem; }
+        .panel {
+            border: 1px solid #9f8b70;
+            border-radius: 12px;
+            background: #fff8ec;
+            padding: 0.9rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+        input, button, select {
+            border: 1px solid #9f8b70;
+            border-radius: 7px;
+            padding: 0.45rem 0.6rem;
+            background: #fff;
+        }
+        button { cursor: pointer; background: #f7ecd6; }
+        button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .pill {
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.4);
+            padding: 0.17rem 0.5rem;
+            font-size: 0.9rem;
+            background: rgba(255,255,255,0.18);
+            color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.4);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        /* Deck + trump live inside the battle (center) seat, top-left; T = talon over trump */
+        .deck-on-table {
+            align-self: flex-start;
+            margin: 0 0 0.4rem 0;
+            pointer-events: none;
+        }
+        .deck-on-table.deck-area.hidden {
+            display: none;
+        }
+        .deck-area {
+            flex: 0 0 auto;
+        }
+        /*
+          Sideways “I-”: vertical talon on the left, horizontal trump to the right.
+          Both vertically centered in the tableau. Talon shifted left of trump pivot so it
+          covers the left part of the face, not the right.
+        */
+        .deck-tableau {
+            position: relative;
+            width: 248px;
+            height: 132px;
+            padding: 0;
+            box-sizing: border-box;
+            overflow: visible;
+            pointer-events: none;
+        }
+        .talon-stack {
+            position: absolute;
+            z-index: 2;
+            left: calc(50% - 38px);
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 88px;
+        }
+        .trump-under {
+            position: absolute;
+            z-index: 1;
+            left: 50%;
+            top: 50%;
+            bottom: auto;
+            width: 88px;
+            height: auto;
+            aspect-ratio: 63 / 88;
+            object-fit: cover;
+            object-position: center center;
+            border-radius: 9px;
+            border: 1px solid rgba(0,0,0,0.35);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.22);
+            background: #fff;
+            transform: translateY(-50%) rotate(90deg);
+            transform-origin: left center;
+            pointer-events: none;
+            image-rendering: auto;
+        }
+        .talon-face {
+            display: block;
+            width: 88px;
+            height: auto;
+            aspect-ratio: 63 / 88;
+            object-fit: cover;
+            object-position: center center;
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.28);
+            vertical-align: top;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+            image-rendering: auto;
+        }
+        .muted { color: #6a5b48; font-size: 0.93rem; }
+        .table-shell {
+            border-radius: 16px;
+            padding: clamp(0.6rem, 1.5vw, 1rem);
+            padding-left: clamp(0.85rem, 2vw, 1.25rem);
+            border: 2px solid #7c5a3a;
+            width: 100%;
+            overflow: visible;
+            background:
+                radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(255,255,255,0) 55%),
+                linear-gradient(150deg, #2f7646, #245f39);
+            color: #fff;
+        }
+        .hud {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            gap: 0.5rem;
+            margin-bottom: 0.7rem;
+            overflow: visible;
+        }
+        .table-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.15fr 1fr;
+            grid-template-rows: auto auto auto;
+            gap: 0.7rem;
+        }
+        /* 2 players: opponent / battle / you — no side columns */
+        .table-grid.players-2 .seat.left,
+        .table-grid.players-2 .seat.right { display: none !important; }
+        .table-grid.players-2 {
+            grid-template-columns: 1fr;
+        }
+        .table-grid.players-2 .seat.top { grid-column: 1; grid-row: 1; }
+        .table-grid.players-2 .seat.center { grid-column: 1; grid-row: 2; }
+        .table-grid.players-2 .seat.bottom { grid-column: 1; grid-row: 3; }
+        /* 3 players: hide one side seat */
+        .table-grid.players-3 .seat.right { display: none !important; }
+        .seat {
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(13, 39, 24, 0.32);
+            padding: 0.55rem;
+            min-height: 88px;
+        }
+        /* Your hand: solid rail so card PNGs never show table through */
+        .seat.bottom.my-hand {
+            grid-column: 1 / -1;
+            grid-row: 3;
+            width: 100%;
+            max-width: 100%;
+            background: #f7f0e4;
+            border: 2px solid #c4b49a;
+            color: #2f261b;
+            padding: 0.65rem clamp(0.4rem, 1.5vw, 1rem);
+        }
+        .seat.bottom.my-hand .seat-title { color: #1a1510; }
+        .seat.bottom.my-hand .muted { color: #3a322b; font-size: 0.95rem; }
+        .seat-title { font-weight: 700; margin-bottom: 0.3rem; }
+        .seat:not(.my-hand) .seat-title {
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+        }
+        .seat:not(.my-hand) .muted {
+            color: rgba(255, 255, 255, 0.95);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.55);
+        }
+        .seat.top { grid-column: 2; grid-row: 1; }
+        .seat.left { grid-column: 1; grid-row: 2; }
+        .seat.right { grid-column: 3; grid-row: 2; }
+        .seat.bottom { grid-column: 2; grid-row: 3; }
+        .seat.center {
+            grid-column: 2;
+            grid-row: 2;
+            min-height: 170px;
+            background: rgba(12, 34, 22, 0.46);
+            padding: 0.5rem 0.55rem 0.55rem;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.35rem;
+        }
+        .back-fan { display: flex; gap: 0.15rem; margin-top: 0.3rem; }
+        .back-fan img {
+            width: 36px;
+            height: auto;
+            aspect-ratio: 63 / 88;
+            object-fit: contain;
+            object-position: center;
+            border-radius: 6px;
+            border: 1px solid rgba(0,0,0,0.3);
+            background: #fff;
+            margin-left: -12px;
+        }
+        .back-fan img:first-child { margin-left: 0; }
+        .battle-row {
+            display: flex;
+            gap: 0.55rem;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            flex: 1 1 auto;
+            min-height: 110px;
+        }
+        .battle-pair {
+            position: relative;
+            width: 106px;
+            height: 128px;
+        }
+        .battle-card {
+            position: absolute;
+            width: 82px;
+            height: 116px;
+            object-fit: cover;
+            object-position: center top;
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.45);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.28);
+            background-color: #fff;
+            background-image: linear-gradient(#fff, #fff);
+        }
+        .battle-card.attack { left: 0; top: 0; }
+        .battle-card.defense { right: 0; bottom: 0; transform: rotate(10deg); }
+        .hand-scroll {
+            width: 100%;
+            overflow-x: auto;
+            overflow-y: visible;
+            padding: 6px 2px 10px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .hand-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: flex-end;
+            gap: clamp(4px, 1vw, 12px);
+            min-height: 112px;
+            width: max(100%, min-content);
+            margin: 0 auto;
+        }
+        @media (min-width: 900px) {
+            .hand-row {
+                flex-wrap: nowrap;
+                justify-content: center;
+            }
+        }
+        .hand-card-btn {
+            border: none;
             cursor: pointer;
+            border-radius: 10px;
+            padding: 3px;
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+            flex: 0 0 auto;
+            line-height: 0;
+        }
+        .hand-card-btn.selected {
+            outline: 3px solid #3b7dff;
+            box-shadow: 0 0 0 2px rgba(59,125,255,0.35), 0 4px 12px rgba(0,0,0,0.25);
+        }
+        .hand-card-btn img {
+            display: block;
+            width: clamp(52px, min(7.5vw, 92px), 92px);
+            height: auto;
+            aspect-ratio: 63 / 88;
+            object-fit: cover;
+            object-position: center top;
+            border-radius: 7px;
+            border: 1px solid #8a7a68;
+            background-color: #fff;
+            background-image: linear-gradient(#fff, #fff);
+        }
+        .action-strip {
+            margin-top: 0.55rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            align-items: center;
+        }
+        .action-strip button {
+            background: #fff;
+            border: 1px solid #d7c6ab;
+            color: #2f261b;
+            font-weight: 600;
+        }
+        .action-strip select {
+            background: #fff;
+            border: 1px solid #d7c6ab;
         }
         pre {
-            background: #f8f8f8;
-            padding: 0.75rem;
+            margin: 0;
+            white-space: pre-wrap;
+            background: rgba(188,154,106,0.14);
             border-radius: 8px;
-            overflow-x: auto;
+            padding: 0.75rem;
         }
     </style>
 </head>
 <body>
-<h1>Multiplayer Card Game Lobby</h1>
-<p>Create a game to get a unique code, then let others join (max 4 players).</p>
+<h1>Durak Multiplayer</h1>
+<p class="muted">Click cards in your bottom seat to play. Legal options appear next to your hand.</p>
 
-<div class="card">
-    <h2>Create game</h2>
-    <label for="hostName">Host name</label>
-    <input id="hostName" type="text" placeholder="e.g. Andrey">
-    <button id="createBtn">Create</button>
-</div>
+<section id="lobbyView" class="stack">
+    <div class="panel">
+        <h2>Create Game</h2>
+        <label for="hostName">Host name</label>
+        <input id="hostName" type="text" placeholder="e.g. Andrey">
+        <div class="row"><button id="createBtn">Create game</button></div>
+    </div>
+    <div class="panel">
+        <h2>Join Game</h2>
+        <div class="row">
+            <div>
+                <label for="gameCode">Game code</label>
+                <input id="gameCode" type="text" placeholder="e.g. A1B2C3">
+            </div>
+            <div>
+                <label for="playerName">Player name</label>
+                <input id="playerName" type="text" placeholder="e.g. Alex">
+            </div>
+        </div>
+        <div class="row"><button id="joinBtn">Join game</button></div>
+    </div>
+</section>
 
-<div class="card">
-    <h2>Join game</h2>
-    <label for="gameCode">Game code</label>
-    <input id="gameCode" type="text" placeholder="e.g. A1B2C3">
-    <label for="playerName">Player name</label>
-    <input id="playerName" type="text" placeholder="e.g. Alex">
-    <button id="joinBtn">Join</button>
-</div>
+<section id="gameView" class="stack hidden">
+    <div class="panel">
+        <div class="row">
+            <h2 style="margin:0;">Game <span id="gameCodeLabel"></span></h2>
+            <span>Status: <strong id="statusLabel"></strong></span>
+            <button id="refreshBtn">Refresh</button>
+            <button id="startBtn">Start</button>
+            <button id="leaveBtn">Leave</button>
+        </div>
+        <div class="muted" id="roleLabel"></div>
+    </div>
 
-<h2>Response</h2>
-<pre id="output">No requests yet.</pre>
+    <div class="table-shell">
+        <div class="hud">
+            <span class="pill">Attacker: <strong id="tableAttackerLabel"></strong></span>
+            <span class="pill">Defender: <strong id="tableDefenderLabel"></strong></span>
+        </div>
+        <div class="table-grid" id="tableGrid">
+            <div class="seat top" id="seatTop"></div>
+            <div class="seat left" id="seatLeft"></div>
+            <div class="seat center">
+                <div class="deck-on-table deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
+                    <div class="deck-tableau">
+                        <div id="talonStack" class="talon-stack"></div>
+                        <img id="trumpUnderImg" class="trump-under hidden" alt="">
+                    </div>
+                </div>
+                <div id="battleCards" class="battle-row"></div>
+            </div>
+            <div class="seat right" id="seatRight"></div>
+            <div class="seat bottom my-hand">
+                <div class="seat-title" id="mySeatTitle">You</div>
+                <div class="hand-scroll">
+                    <div id="myHand" class="hand-row"></div>
+                </div>
+                <div class="action-strip">
+                    <button id="attackBtn">Attack</button>
+                    <button id="defendBtn">Defend</button>
+                    <button id="transferBtn">Transfer</button>
+                    <button id="takeBtn">Take cards</button>
+                    <button id="endRoundBtn">End round</button>
+                    <select id="defendTargetSelect" class="hidden"></select>
+                </div>
+                <div id="actionHint" class="muted"></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="panel">
+    <h3>Messages</h3>
+    <pre id="messages">Ready.</pre>
+</section>
 
 <script>
-    const output = document.getElementById("output");
+    const state = {
+        gameCode: localStorage.getItem("durak_game_code") || "",
+        playerId: localStorage.getItem("durak_player_id") || "",
+        game: null,
+        selectedHandCard: null,
+        pollTimer: null,
+        ws: null,
+        wsConnected: false
+    };
 
-    async function callApi(url, options) {
-        const res = await fetch(url, options);
-        const data = await res.json();
-        output.textContent = JSON.stringify(data, null, 2);
+    const lobbyView = document.getElementById("lobbyView");
+    const gameView = document.getElementById("gameView");
+    const messages = document.getElementById("messages");
+    const hostNameInput = document.getElementById("hostName");
+    const gameCodeInput = document.getElementById("gameCode");
+    const playerNameInput = document.getElementById("playerName");
+    const gameCodeLabel = document.getElementById("gameCodeLabel");
+    const statusLabel = document.getElementById("statusLabel");
+    const roleLabel = document.getElementById("roleLabel");
+    const deckArea = document.getElementById("deckArea");
+    const trumpUnderImg = document.getElementById("trumpUnderImg");
+    const talonStack = document.getElementById("talonStack");
+    const tableAttackerLabel = document.getElementById("tableAttackerLabel");
+    const tableDefenderLabel = document.getElementById("tableDefenderLabel");
+    const tableGrid = document.getElementById("tableGrid");
+    const seatTop = document.getElementById("seatTop");
+    const seatLeft = document.getElementById("seatLeft");
+    const seatRight = document.getElementById("seatRight");
+    const mySeatTitle = document.getElementById("mySeatTitle");
+    const myHand = document.getElementById("myHand");
+    const battleCards = document.getElementById("battleCards");
+    const actionHint = document.getElementById("actionHint");
+    const defendTargetSelect = document.getElementById("defendTargetSelect");
+
+    const startBtn = document.getElementById("startBtn");
+    const attackBtn = document.getElementById("attackBtn");
+    const defendBtn = document.getElementById("defendBtn");
+    const transferBtn = document.getElementById("transferBtn");
+    const takeBtn = document.getElementById("takeBtn");
+    const endRoundBtn = document.getElementById("endRoundBtn");
+
+    function log(message) {
+        const now = new Date().toLocaleTimeString();
+        messages.textContent = `[${now}] ${message}`;
+    }
+
+    async function api(path, method, body) {
+        const res = await fetch(path, {
+            method,
+            headers: {"Content-Type": "application/json"},
+            body: body ? JSON.stringify(body) : undefined
+        });
+        const payload = await res.json();
+        if (!res.ok) {
+            throw new Error(payload.message || "Request failed");
+        }
+        return payload;
+    }
+
+    function saveSession() {
+        localStorage.setItem("durak_game_code", state.gameCode || "");
+        localStorage.setItem("durak_player_id", state.playerId || "");
+    }
+
+    function prettyCard(code) {
+        if (!code) return "-";
+        const s = code.slice(-1);
+        const r = code.slice(0, -1);
+        const map = {S: "♠", H: "♥", D: "♦", C: "♣"};
+        return `${r}${map[s] || s}`;
+    }
+
+    function cardImage(code) {
+        return `/cards/${code}.png`;
+    }
+
+    function roleTags(player, game) {
+        const t = [];
+        if (player.id === game.attackerPlayerId) t.push("attacker");
+        if (player.id === game.defenderPlayerId) t.push("defender");
+        if (player.id === game.hostPlayerId) t.push("host");
+        if (player.team !== null && player.team !== undefined) t.push(`team ${player.team}`);
+        return t.join(", ");
+    }
+
+    function renderSeat(el, player, game) {
+        if (!player) {
+            el.innerHTML = "";
+            return;
+        }
+        const backCount = Math.min(player.handSize, 6);
+        let backs = "";
+        for (let i = 0; i < backCount; i++) {
+            backs += `<img src="/cards/BACK.png" alt="card back">`;
+        }
+        el.innerHTML = `<div class="seat-title">${player.name}</div>
+            <div class="muted">${roleTags(player, game)}</div>
+            <div class="back-fan">${backs}</div>`;
+    }
+
+    function renderBattle(game) {
+        battleCards.innerHTML = "";
+        if (!game.table || game.table.length === 0) {
+            battleCards.innerHTML = "<div class='muted'>No cards on table</div>";
+            return;
+        }
+        for (const pairData of game.table) {
+            const pair = document.createElement("div");
+            pair.className = "battle-pair";
+            pair.innerHTML = `<img class="battle-card attack" src="${cardImage(pairData.attackCard)}" title="${pairData.attackCard}" alt="${pairData.attackCard}">`;
+            if (pairData.defenseCard) {
+                pair.innerHTML += `<img class="battle-card defense" src="${cardImage(pairData.defenseCard)}" title="${pairData.defenseCard}" alt="${pairData.defenseCard}">`;
+            }
+            battleCards.appendChild(pair);
+        }
+    }
+
+    function renderMyHand(game, me) {
+        myHand.innerHTML = "";
+        const hand = me?.hand || [];
+        for (const code of hand) {
+            const btn = document.createElement("button");
+            btn.className = "hand-card-btn" + (state.selectedHandCard === code ? " selected" : "");
+            btn.innerHTML = `<img src="${cardImage(code)}" title="${code}" alt="${code}">`;
+            btn.addEventListener("click", () => {
+                state.selectedHandCard = state.selectedHandCard === code ? null : code;
+                renderActionState(game);
+                renderMyHand(game, me);
+            });
+            myHand.appendChild(btn);
+        }
+    }
+
+    function renderActionState(game) {
+        const lm = game.legalMoves || {};
+        const selected = state.selectedHandCard;
+        const attackable = lm.attackableCardCodes || [];
+        const transferable = lm.transferableCardCodes || [];
+        const defensesByAttack = lm.defensesByAttackCard || {};
+
+        const options = Object.keys(defensesByAttack);
+        const prevAttack = defendTargetSelect.value;
+
+        defendTargetSelect.innerHTML = "";
+        for (const atk of options) {
+            const opt = document.createElement("option");
+            opt.value = atk;
+            opt.textContent = `vs ${prettyCard(atk)} (${atk})`;
+            defendTargetSelect.appendChild(opt);
+        }
+
+        const validForCard = selected
+            ? options.filter(atk => (defensesByAttack[atk] || []).includes(selected))
+            : [];
+
+        let chosenAttack = "";
+        if (validForCard.length > 0) {
+            chosenAttack = validForCard.includes(prevAttack) ? prevAttack : validForCard[0];
+        } else if (options.length > 0) {
+            chosenAttack = options.includes(prevAttack) ? prevAttack : options[0];
+        }
+        if (chosenAttack && [...defendTargetSelect.options].some(o => o.value === chosenAttack)) {
+            defendTargetSelect.value = chosenAttack;
+        }
+
+        defendTargetSelect.classList.toggle("hidden", options.length <= 1);
+
+        const canDefendSelected = Boolean(
+            selected &&
+            chosenAttack &&
+            (defensesByAttack[chosenAttack] || []).includes(selected)
+        );
+
+        startBtn.disabled = !lm.canStart;
+        attackBtn.disabled = !(lm.canAttack && selected && attackable.includes(selected));
+        transferBtn.disabled = !(lm.canTransfer && selected && transferable.includes(selected));
+        defendBtn.disabled = !canDefendSelected;
+        takeBtn.disabled = !lm.canTake;
+        endRoundBtn.disabled = !lm.canEndRound;
+
+        if (lm.canEndRound) {
+            actionHint.textContent = lm.canAttack
+                ? "All attacks are defended — you may add another attack (matching rank) or press End round."
+                : "All attacks are defended — press End round to finish this bout.";
+        } else if (!selected) {
+            actionHint.textContent = "Select a card to see play options.";
+        } else {
+            const hints = [];
+            if (attackable.includes(selected)) hints.push("can attack");
+            if (transferable.includes(selected)) hints.push("can transfer");
+            if (validForCard.length > 0) hints.push(`can defend (${validForCard.map(prettyCard).join(" or ")})`);
+            actionHint.textContent = hints.length ? `${selected}: ${hints.join(", ")}` : `${selected}: no legal move right now`;
+        }
+    }
+
+    function render() {
+        const game = state.game;
+        const inGame = Boolean(state.gameCode && state.playerId && game);
+        lobbyView.classList.toggle("hidden", inGame);
+        gameView.classList.toggle("hidden", !inGame);
+        if (!inGame) return;
+
+        const me = game.players.find(p => p.id === state.playerId);
+        const others = game.players.filter(p => p.id !== state.playerId);
+        const attacker = game.players.find(p => p.id === game.attackerPlayerId);
+        const defender = game.players.find(p => p.id === game.defenderPlayerId);
+
+        gameCodeLabel.textContent = game.code;
+        statusLabel.textContent = game.status;
+        if (game.status === "IN_PROGRESS" && game.trumpCard) {
+            deckArea.classList.remove("hidden");
+            trumpUnderImg.src = cardImage(game.trumpCard);
+            trumpUnderImg.classList.remove("hidden");
+            talonStack.innerHTML = "";
+            const talonCount = Math.max(0, Number(game.talonSize) || 0);
+            if (talonCount > 0) {
+                const face = document.createElement("img");
+                face.src = "/cards/BACK.png";
+                face.className = "talon-face";
+                face.alt = "";
+                /* Light depth: one soft shadow stack (no heavy multi-blur halo). */
+                const extra = Math.min(Math.max(talonCount - 1, 0), 10);
+                if (extra > 0) {
+                    const y = Math.min(2 + extra * 0.35, 6);
+                    face.style.boxShadow = `0 ${y}px ${1 + extra * 0.15}px rgba(0,0,0,${0.12 + extra * 0.01})`;
+                } else {
+                    face.style.boxShadow = "";
+                }
+                talonStack.appendChild(face);
+            }
+        } else {
+            deckArea.classList.add("hidden");
+            trumpUnderImg.classList.add("hidden");
+            trumpUnderImg.removeAttribute("src");
+            talonStack.innerHTML = "";
+        }
+        tableAttackerLabel.textContent = attacker ? attacker.name : "-";
+        tableDefenderLabel.textContent = defender ? defender.name : "-";
+        roleLabel.textContent = `You: ${me ? me.name : "-"} | Attacker: ${attacker ? attacker.name : "-"} | Defender: ${defender ? defender.name : "-"}`;
+        mySeatTitle.textContent = me ? `${me.name} (you)` : "You";
+
+        const playerCount = game.players.length;
+        tableGrid.className = "table-grid players-" + playerCount;
+
+        seatLeft.classList.remove("hidden");
+        seatRight.classList.remove("hidden");
+
+        if (playerCount === 2) {
+            renderSeat(seatTop, others[0], game);
+            renderSeat(seatLeft, null, game);
+            renderSeat(seatRight, null, game);
+        } else if (playerCount === 3) {
+            renderSeat(seatTop, others[0], game);
+            renderSeat(seatLeft, others[1], game);
+            renderSeat(seatRight, null, game);
+        } else {
+            renderSeat(seatTop, others[0], game);
+            renderSeat(seatLeft, others[1], game);
+            renderSeat(seatRight, others[2], game);
+        }
+
+        renderBattle(game);
+        renderMyHand(game, me);
+        renderActionState(game);
+    }
+
+    async function refreshGame(showMessage = false) {
+        if (!state.gameCode) return;
+        try {
+            const query = new URLSearchParams({viewerPlayerId: state.playerId}).toString();
+            state.game = await api(`/api/games/${state.gameCode}?${query}`, "GET");
+            render();
+            if (showMessage) log("Game refreshed.");
+        } catch (err) {
+            log(`Refresh failed: ${err.message}`);
+        }
+    }
+
+    async function runAction(name, fn) {
+        try {
+            await fn();
+            await refreshGame();
+            log(`${name} success.`);
+        } catch (err) {
+            log(`${name} failed: ${err.message}`);
+        }
+    }
+
+    function beginPolling() {
+        if (state.pollTimer) clearInterval(state.pollTimer);
+        state.pollTimer = setInterval(() => {
+            if (!state.wsConnected) refreshGame(false);
+        }, 3000);
+    }
+
+    function stopPolling() {
+        if (state.pollTimer) clearInterval(state.pollTimer);
+        state.pollTimer = null;
+    }
+
+    function closeWebSocket() {
+        if (state.ws) state.ws.close();
+        state.ws = null;
+        state.wsConnected = false;
+    }
+
+    function connectWebSocket() {
+        closeWebSocket();
+        if (!state.gameCode) return;
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${state.gameCode}`);
+        state.ws = ws;
+        ws.onopen = () => { state.wsConnected = true; log("Realtime connected."); };
+        ws.onmessage = async () => { await refreshGame(false); };
+        ws.onclose = () => { state.wsConnected = false; };
+        ws.onerror = () => { state.wsConnected = false; log("Realtime lost, fallback to polling."); };
+    }
+
+    function clearSession() {
+        state.gameCode = "";
+        state.playerId = "";
+        state.game = null;
+        state.selectedHandCard = null;
+        saveSession();
+        stopPolling();
+        closeWebSocket();
+        render();
+        log("Session cleared.");
     }
 
     document.getElementById("createBtn").addEventListener("click", async () => {
-        const hostName = document.getElementById("hostName").value;
-        await callApi("/api/games", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({hostName})
+        await runAction("Create game", async () => {
+            const created = await api("/api/games", "POST", {hostName: hostNameInput.value.trim()});
+            state.gameCode = created.game.code;
+            state.playerId = created.hostPlayerId;
+            state.game = created.game;
+            state.selectedHandCard = null;
+            saveSession();
+            beginPolling();
+            connectWebSocket();
         });
     });
 
     document.getElementById("joinBtn").addEventListener("click", async () => {
-        const gameCode = document.getElementById("gameCode").value;
-        const playerName = document.getElementById("playerName").value;
-        await callApi(`/api/games/${gameCode}/join`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({playerName})
+        await runAction("Join game", async () => {
+            const code = gameCodeInput.value.trim().toUpperCase();
+            const joined = await api(`/api/games/${code}/join`, "POST", {playerName: playerNameInput.value.trim()});
+            state.gameCode = joined.game.code;
+            state.playerId = joined.playerId;
+            state.game = joined.game;
+            state.selectedHandCard = null;
+            saveSession();
+            beginPolling();
+            connectWebSocket();
         });
     });
+
+    document.getElementById("refreshBtn").addEventListener("click", () => refreshGame(true));
+    document.getElementById("leaveBtn").addEventListener("click", clearSession);
+
+    startBtn.addEventListener("click", async () => runAction("Start", async () => {
+        state.game = await api(`/api/games/${state.gameCode}/start`, "POST", {playerId: state.playerId});
+    }));
+
+    attackBtn.addEventListener("click", async () => runAction("Attack", async () => {
+        if (!state.selectedHandCard) throw new Error("Select a card first.");
+        state.game = await api(`/api/games/${state.gameCode}/attack`, "POST", {playerId: state.playerId, card: state.selectedHandCard});
+        state.selectedHandCard = null;
+    }));
+
+    transferBtn.addEventListener("click", async () => runAction("Transfer", async () => {
+        if (!state.selectedHandCard) throw new Error("Select a card first.");
+        state.game = await api(`/api/games/${state.gameCode}/transfer`, "POST", {playerId: state.playerId, card: state.selectedHandCard});
+        state.selectedHandCard = null;
+    }));
+
+    defendBtn.addEventListener("click", async () => runAction("Defend", async () => {
+        if (!state.selectedHandCard) throw new Error("Select a card first.");
+        const card = state.selectedHandCard;
+        const lm = state.game.legalMoves || {};
+        const defs = lm.defensesByAttackCard || {};
+        const attacksYouCanBeat = Object.keys(defs).filter(atk => (defs[atk] || []).includes(card));
+        let target = defendTargetSelect.value;
+        if (!attacksYouCanBeat.includes(target)) {
+            target = attacksYouCanBeat[0];
+        }
+        if (!target) throw new Error("No attack card available to defend.");
+        state.game = await api(`/api/games/${state.gameCode}/defend`, "POST", {
+            playerId: state.playerId,
+            attackCard: target,
+            defenseCard: card
+        });
+        state.selectedHandCard = null;
+    }));
+
+    takeBtn.addEventListener("click", async () => runAction("Take cards", async () => {
+        state.game = await api(`/api/games/${state.gameCode}/take`, "POST", {playerId: state.playerId});
+        state.selectedHandCard = null;
+    }));
+
+    endRoundBtn.addEventListener("click", async () => runAction("End round", async () => {
+        state.game = await api(`/api/games/${state.gameCode}/end-round`, "POST", {playerId: state.playerId});
+        state.selectedHandCard = null;
+    }));
+
+    defendTargetSelect.addEventListener("change", () => {
+        if (state.game) renderActionState(state.game);
+    });
+
+    (async function init() {
+        if (state.gameCode && state.playerId) {
+            beginPolling();
+            connectWebSocket();
+            await refreshGame();
+            log("Session restored.");
+        } else {
+            render();
+        }
+    })();
 </script>
 </body>
 </html>

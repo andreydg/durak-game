@@ -1,0 +1,4 @@
+# Install once: sdk install java 25.0.2-tem
+# Or pick a 25.x build: sdk list java
+# Then in this directory: sdk env
+java=25.0.2-tem

@@ -5,9 +5,11 @@ import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Player;
+import com.example.durakgame.model.ViewerLegalMoves;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 
 public record GameResponse(
         String code,
@@ -23,11 +25,12 @@ public record GameResponse(
         String trumpCard,
         int talonSize,
         List<TableCardPair> table,
-        List<PlayerSummary> players
+        List<PlayerSummary> players,
+        ViewerLegalMoves legalMoves
 ) {
-    public static GameResponse from(Game game, int maxPlayers) {
+    public static GameResponse from(Game game, int maxPlayers, String viewerPlayerId) {
         List<PlayerSummary> summaries = game.getPlayers().stream()
-                .map(PlayerSummary::from)
+                .map(player -> PlayerSummary.from(player, viewerPlayerId))
                 .toList();
         List<TableCardPair> table = game.getTable().stream()
                 .map(TableCardPair::from)
@@ -47,7 +50,8 @@ public record GameResponse(
                 game.getTrumpCard() == null ? null : game.getTrumpCard().code(),
                 game.getTalonSize(),
                 table,
-                summaries
+                summaries,
+                game.computeViewerLegalMoves(viewerPlayerId == null ? "" : viewerPlayerId)
         );
     }
 
@@ -59,15 +63,17 @@ public record GameResponse(
             int handSize,
             List<String> hand
     ) {
-        public static PlayerSummary from(Player player) {
-            List<String> hand = player.getHand().stream().map(Card::code).toList();
+        public static PlayerSummary from(Player player, String viewerPlayerId) {
+            List<String> fullHand = player.getHand().stream().map(Card::code).toList();
+            boolean canSeeHand = Objects.equals(player.getId(), viewerPlayerId);
+            List<String> visibleHand = canSeeHand ? fullHand : List.of();
             return new PlayerSummary(
                     player.getId(),
                     player.getName(),
                     player.getJoinedAt(),
                     player.getTeam(),
-                    hand.size(),
-                    hand
+                    fullHand.size(),
+                    visibleHand
             );
         }
     }

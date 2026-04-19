@@ -14,10 +14,12 @@ import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.Player;
 import com.example.durakgame.service.GameService;
+import com.example.durakgame.websocket.GameWebSocketHandler;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,7 +38,7 @@ public class GameController {
         Game game = gameService.createGame(request.hostName());
         Player host = game.getPlayers().getFirst();
         return new CreateGameResponse(
-                GameResponse.from(game, gameService.getMaxPlayers()),
+                GameResponse.from(game, gameService.getMaxPlayers(), host.getId()),
                 host.getId()
         );
     }
@@ -45,27 +47,30 @@ public class GameController {
     public JoinGameResponse joinGame(@PathVariable String code, @Valid @RequestBody JoinGameRequest request) {
         Player joined = gameService.joinGame(code, request.playerName());
         Game game = gameService.getGame(code);
+        GameWebSocketHandler.broadcastGameUpdated(code);
         return new JoinGameResponse(
-                GameResponse.from(game, gameService.getMaxPlayers()),
+                GameResponse.from(game, gameService.getMaxPlayers(), joined.getId()),
                 joined.getId()
         );
     }
 
     @GetMapping("/{code}")
-    public GameResponse getGame(@PathVariable String code) {
-        return GameResponse.from(gameService.getGame(code), gameService.getMaxPlayers());
+    public GameResponse getGame(@PathVariable String code, @RequestParam(required = false) String viewerPlayerId) {
+        return GameResponse.from(gameService.getGame(code), gameService.getMaxPlayers(), viewerPlayerId);
     }
 
     @PostMapping("/{code}/start")
     public GameResponse startGame(@PathVariable String code, @Valid @RequestBody StartGameRequest request) {
         Game game = gameService.startGame(code, request.playerId());
-        return GameResponse.from(game, gameService.getMaxPlayers());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 
     @PostMapping("/{code}/attack")
     public GameResponse attack(@PathVariable String code, @Valid @RequestBody AttackRequest request) {
         Game game = gameService.attack(code, request.playerId(), Card.fromCode(request.card()));
-        return GameResponse.from(game, gameService.getMaxPlayers());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 
     @PostMapping("/{code}/defend")
@@ -76,24 +81,28 @@ public class GameController {
                 Card.fromCode(request.attackCard()),
                 Card.fromCode(request.defenseCard())
         );
-        return GameResponse.from(game, gameService.getMaxPlayers());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 
     @PostMapping("/{code}/transfer")
     public GameResponse transfer(@PathVariable String code, @Valid @RequestBody TransferRequest request) {
         Game game = gameService.transfer(code, request.playerId(), Card.fromCode(request.card()));
-        return GameResponse.from(game, gameService.getMaxPlayers());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 
     @PostMapping("/{code}/take")
     public GameResponse take(@PathVariable String code, @Valid @RequestBody PlayerActionRequest request) {
         Game game = gameService.takeCards(code, request.playerId());
-        return GameResponse.from(game, gameService.getMaxPlayers());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 
     @PostMapping("/{code}/end-round")
     public GameResponse endRound(@PathVariable String code, @Valid @RequestBody PlayerActionRequest request) {
         Game game = gameService.endRound(code, request.playerId());
-        return GameResponse.from(game, gameService.getMaxPlayers());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 }

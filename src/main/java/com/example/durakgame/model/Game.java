@@ -7,7 +7,9 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
@@ -73,8 +75,10 @@ public class Game {
 
     public synchronized void attack(String playerId, Card card) {
         ensureInProgress();
-        if (table.size() >= maxAllowedAttackCards()) {
-            throw new IllegalStateException("Attack limit reached for this round");
+        int defenderHand = players.get(defenderIndex).handSize();
+        long undefended = table.stream().filter(e -> !e.isDefended()).count();
+        if (undefended >= defenderHand) {
+            throw new IllegalStateException("Defender cannot cover more undefended attacks");
         }
 
         Player attacker = getPlayerById(playerId);
@@ -178,13 +182,17 @@ public class Game {
 
     public synchronized void endRound(String playerId) {
         ensureInProgress();
-        ensureDefender(playerId);
         if (table.isEmpty()) {
             throw new IllegalStateException("No active bout");
         }
         boolean allDefended = table.stream().allMatch(AttackEntry::isDefended);
         if (!allDefended) {
             throw new IllegalStateException("Not all attack cards are defended");
+        }
+        boolean isDefender = Objects.equals(getDefenderPlayerId(), playerId);
+        boolean isAttacker = Objects.equals(getAttackerPlayerId(), playerId);
+        if (!isDefender && !isAttacker) {
+            throw new IllegalStateException("Only attacker or defender can end this bout");
         }
 
         clearTable();
@@ -246,6 +254,112 @@ public class Game {
 
     public String getLoserPlayerId() {
         return loserPlayerId;
+    }
+
+    /**
+     * Computes which actions and card plays are legal for {@code viewerPlayerId},
+     * matching the checks in {@link #attack}, {@link #defend}, {@link #transfer}, etc.
+     */
+    public synchronized ViewerLegalMoves computeViewerLegalMoves(String viewerPlayerId) {
+        if (viewerPlayerId == null || viewerPlayerId.isBlank()) {
+            return ViewerLegalMoves.empty();
+        }
+        if (status == GameStatus.FINISHED) {
+            return ViewerLegalMoves.empty();
+        }
+        if (status == GameStatus.LOBBY) {
+            boolean canStart = Objects.equals(hostPlayerId, viewerPlayerId) && players.size() >= 2;
+            return new ViewerLegalMoves(
+                    canStart,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    List.of(),
+                    List.of(),
+                    Map.of()
+            );
+        }
+
+        final Player viewer;
+        try {
+            viewer = getPlayerById(viewerPlayerId);
+        } catch (NoSuchElementException ex) {
+            return ViewerLegalMoves.empty();
+        }
+
+        int viewerSeat = indexOfPlayer(viewerPlayerId);
+        boolean isDefenderSeat = viewerSeat == defenderIndex;
+        boolean isAttackerSeat = viewerSeat == attackerIndex;
+
+        int defenderHand = players.get(defenderIndex).handSize();
+        long undefended = table.stream().filter(e -> !e.isDefended()).count();
+        List<String> attackable = new ArrayList<>();
+        if (!isDefenderSeat && !isTeammate(viewerSeat, defenderIndex) && undefended < defenderHand) {
+            for (Card card : viewer.getHand()) {
+                if (table.isEmpty() || tableRanks.contains(card.rank())) {
+                    attackable.add(card.code());
+                }
+            }
+        }
+        boolean canAttack = !attackable.isEmpty();
+
+        List<String> transferable = new ArrayList<>();
+        if (isDefenderSeat && !table.isEmpty()) {
+            boolean anyDefended = table.stream().anyMatch(AttackEntry::isDefended);
+            if (!anyDefended) {
+                Rank initialRank = table.getFirst().getAttackCard().rank();
+                int nextDefenderIndex = nextEligibleIndex(defenderIndex);
+                Player nextDefender = players.get(nextDefenderIndex);
+                int futureAttackCount = table.size() + 1;
+                if (nextDefender.handSize() >= futureAttackCount) {
+                    for (Card card : viewer.getHand()) {
+                        if (card.rank() == initialRank) {
+                            transferable.add(card.code());
+                        }
+                    }
+                }
+            }
+        }
+        boolean canTransfer = !transferable.isEmpty();
+
+        boolean canTake = isDefenderSeat && !table.isEmpty();
+        boolean allDefended = !table.isEmpty() && table.stream().allMatch(AttackEntry::isDefended);
+        boolean canEndRound = (isDefenderSeat || isAttackerSeat) && allDefended;
+
+        Map<String, List<String>> defensesByAttack = new LinkedHashMap<>();
+        boolean canDefend = false;
+        if (isDefenderSeat) {
+            for (AttackEntry entry : table) {
+                if (entry.isDefended()) {
+                    continue;
+                }
+                Card attackCard = entry.getAttackCard();
+                List<String> validDefense = new ArrayList<>();
+                for (Card defenseCard : viewer.getHand()) {
+                    if (canBeat(attackCard, defenseCard)) {
+                        validDefense.add(defenseCard.code());
+                    }
+                }
+                if (!validDefense.isEmpty()) {
+                    defensesByAttack.put(attackCard.code(), List.copyOf(validDefense));
+                    canDefend = true;
+                }
+            }
+        }
+
+        return new ViewerLegalMoves(
+                false,
+                canAttack,
+                canDefend,
+                canTransfer,
+                canTake,
+                canEndRound,
+                List.copyOf(attackable),
+                List.copyOf(transferable),
+                Map.copyOf(defensesByAttack)
+        );
     }
 
     private void ensureLobby() {
@@ -319,10 +433,6 @@ public class Game {
             return true;
         }
         return defense.suit() == trumpSuit && attack.suit() != trumpSuit;
-    }
-
-    private int maxAllowedAttackCards() {
-        return players.get(defenderIndex).handSize();
     }
 
     private void clearTable() {
