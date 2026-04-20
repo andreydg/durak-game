@@ -11,6 +11,7 @@
             width: 100%;
             max-width: none;
             padding: 0.75rem clamp(0.5rem, 2vw, 1.25rem);
+            padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
             font-family: "Trebuchet MS", Arial, sans-serif;
             background: #eee7dc;
             color: #2f261b;
@@ -46,17 +47,39 @@
             align-items: center;
             gap: 0.35rem;
         }
-        /* Deck + trump live inside the battle (center) seat, top-left; T = talon over trump */
-        .deck-on-table {
-            align-self: flex-start;
-            margin: 0 0 0.4rem 0;
-            pointer-events: none;
+        /* Deck + trump: left column, flush left; vertically centered in full table height */
+        .table-felt-wrap {
+            display: flex;
+            flex-direction: row;
+            align-items: stretch;
+            gap: clamp(0.35rem, 1.2vw, 0.65rem);
+            width: 100%;
+            min-width: 0;
+            overflow: visible;
         }
-        .deck-on-table.deck-area.hidden {
+        .deck-outside {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: flex-start;
+            align-self: stretch;
+            pointer-events: none;
+            /* Rotated trump + talon extend left of the tableau box — reserve space so nothing clips */
+            min-width: clamp(172px, 44vw, 248px);
+            padding-left: clamp(16px, 4vw, 32px);
+            padding-right: 2px;
+            box-sizing: border-box;
+        }
+        .deck-outside.deck-area.hidden {
             display: none;
         }
         .deck-area {
             flex: 0 0 auto;
+        }
+        .table-felt-wrap > .table-grid {
+            flex: 1 1 auto;
+            min-width: 0;
         }
         /*
           Sideways “I-”: vertical talon on the left, horizontal trump to the right.
@@ -65,17 +88,19 @@
         */
         .deck-tableau {
             position: relative;
-            width: 248px;
-            height: 132px;
+            width: min(210px, 100%);
+            height: 128px;
+            margin-left: 0;
             padding: 0;
             box-sizing: border-box;
             overflow: visible;
             pointer-events: none;
+            max-width: 100%;
         }
         .talon-stack {
             position: absolute;
             z-index: 2;
-            left: calc(50% - 38px);
+            left: calc(50% - 32px);
             top: 50%;
             /* Push talon down so it sits on the trump bar (sideways “I-”), vertically centered */
             transform: translate(-50%, calc(-50% + 43px));
@@ -123,13 +148,18 @@
             aspect-ratio: 63 / 88;
         }
         .muted { color: #6a5b48; font-size: 0.93rem; }
+        #playingArea {
+            overflow: visible;
+        }
         .table-shell {
             border-radius: 16px;
             padding: clamp(0.6rem, 1.5vw, 1rem);
-            padding-left: clamp(0.85rem, 2vw, 1.25rem);
+            padding-left: clamp(0.75rem, 2.2vw, 1.15rem);
             border: 2px solid #7c5a3a;
             width: 100%;
+            max-width: 100%;
             overflow: visible;
+            box-sizing: border-box;
             background:
                 radial-gradient(circle at top, rgba(255,255,255,0.08), rgba(255,255,255,0) 55%),
                 linear-gradient(150deg, #2f7646, #245f39);
@@ -155,11 +185,40 @@
         .table-grid.players-2 {
             grid-template-columns: 1fr;
         }
-        .table-grid.players-2 .seat.top { grid-column: 1; grid-row: 1; }
+        .table-grid.players-2 .seat-top-1 { grid-column: 1; grid-row: 1; }
+        .table-grid.players-2 .seat-top-2,
+        .table-grid.players-2 .seat-top-3 { display: none !important; }
         .table-grid.players-2 .seat.center { grid-column: 1; grid-row: 2; }
         .table-grid.players-2 .seat.bottom { grid-column: 1; grid-row: 3; }
-        /* 3 players: hide one side seat */
+        /* 2 players: compact top strip (single opponent) */
+        .table-grid.players-2 .seat-top-1 {
+            min-height: auto;
+            padding: 0.38rem 0.5rem 0.45rem;
+        }
+        .table-grid.players-2 .seat-top-1 .back-fan {
+            min-height: 56px;
+            padding: 6px 6px 4px;
+            margin-top: 0.2rem;
+        }
+        /* 3 players: hide one side seat; single opponent on top center */
         .table-grid.players-3 .seat.right { display: none !important; }
+        .table-grid.players-3 .seat-top-1 { grid-column: 2; grid-row: 1; }
+        .table-grid.players-3 .seat-top-2,
+        .table-grid.players-3 .seat-top-3 { display: none !important; }
+        /* 4 players: three opponents across the top; battle + hand full width */
+        .table-grid.players-4 .seat.left,
+        .table-grid.players-4 .seat.right { display: none !important; }
+        .table-grid.players-4 .seat-top-1 { grid-column: 1; grid-row: 1; }
+        .table-grid.players-4 .seat-top-2 { grid-column: 2; grid-row: 1; }
+        .table-grid.players-4 .seat-top-3 { grid-column: 3; grid-row: 1; }
+        .table-grid.players-4 .seat.center {
+            grid-column: 1 / -1;
+            grid-row: 2;
+        }
+        .table-grid.players-4 .seat.bottom {
+            grid-column: 1 / -1;
+            grid-row: 3;
+        }
         .seat {
             border-radius: 12px;
             border: 1px solid rgba(255,255,255,0.18);
@@ -189,20 +248,26 @@
             color: rgba(255, 255, 255, 0.95);
             text-shadow: 0 1px 2px rgba(0,0,0,0.55);
         }
-        .seat.top { grid-column: 2; grid-row: 1; }
+        /* Top row: three slots (.seat-top-*); placement overridden per .players-N */
+        .seat-top-1 { grid-column: 2; grid-row: 1; }
+        .seat-top-2,
+        .seat-top-3 { grid-column: 2; grid-row: 1; }
         .seat.left { grid-column: 1; grid-row: 2; }
         .seat.right { grid-column: 3; grid-row: 2; }
         .seat.bottom { grid-column: 2; grid-row: 3; }
         .seat.center {
             grid-column: 2;
             grid-row: 2;
-            min-height: 170px;
+            min-height: 150px;
             background: rgba(12, 34, 22, 0.46);
-            padding: 0.5rem 0.55rem 0.55rem;
+            padding: 0.45rem 0.5rem 0.5rem;
             display: flex;
             flex-direction: column;
             align-items: stretch;
+            justify-content: center;
             gap: 0.35rem;
+            container-type: inline-size;
+            container-name: battleseat;
         }
         /* Opponent hand: fanned like table cards — overlap + rotate from bottom center */
         .back-fan {
@@ -211,40 +276,41 @@
             flex-wrap: nowrap;
             justify-content: center;
             margin-top: 0.35rem;
-            min-height: 58px;
-            padding: 10px 6px 4px;
+            min-height: 72px;
+            padding: 12px 8px 6px;
             overflow: visible;
         }
         .back-fan .card-back-face--fan {
             position: relative;
             flex: 0 0 auto;
-            width: 40px;
+            width: 52px;
             height: auto;
             aspect-ratio: 63 / 88;
             transform-origin: 50% 100%;
             /* transform + z-index set inline per index */
         }
         .back-fan:not(.back-fan--few) .card-back-face--fan {
-            margin-left: -26px;
+            margin-left: -34px;
         }
         .back-fan:not(.back-fan--few) .card-back-face--fan:first-child {
             margin-left: 0;
         }
         .back-fan--few .card-back-face--fan {
-            width: 42px;
-            margin-left: -18px;
+            width: 54px;
+            margin-left: -24px;
         }
         .back-fan--few .card-back-face--fan:first-child {
             margin-left: 0;
         }
         .battle-row {
             display: flex;
-            gap: 0.55rem;
+            gap: clamp(0.25rem, 1.2vw, 0.55rem);
             flex-wrap: wrap;
             align-items: center;
             justify-content: center;
             flex: 1 1 auto;
-            min-height: 110px;
+            min-height: 96px;
+            max-width: 100%;
             border-radius: 10px;
             transition: background 0.15s, box-shadow 0.15s;
         }
@@ -256,6 +322,8 @@
             position: relative;
             width: 106px;
             height: 128px;
+            width: clamp(76px, 22cqw, 106px);
+            height: clamp(92px, 26cqw, 128px);
             border-radius: 10px;
             flex: 0 0 auto;
             transition: box-shadow 0.12s, background 0.12s;
@@ -268,6 +336,8 @@
             position: absolute;
             width: 82px;
             height: 116px;
+            width: clamp(58px, 17cqw, 82px);
+            height: clamp(84px, 24cqw, 116px);
             object-fit: cover;
             object-position: center top;
             border-radius: 8px;
@@ -339,6 +409,11 @@
             flex-wrap: wrap;
             gap: 0.45rem;
             align-items: center;
+            justify-content: center;
+        }
+        .seat.bottom.my-hand #actionHint {
+            text-align: center;
+            width: 100%;
         }
         .action-strip button {
             background: #fff;
@@ -511,6 +586,15 @@
             background: rgba(124, 90, 58, 0.08);
             border: 1px dashed #c4b49a;
         }
+        .lobby-hint {
+            margin: 0.35rem 0 0;
+            font-size: 0.82rem;
+            line-height: 1.35;
+        }
+        .lobby-optional {
+            font-weight: 500;
+            opacity: 0.85;
+        }
     </style>
 </head>
 <body>
@@ -535,8 +619,9 @@
         <div class="panel lobby-card">
             <h2>Host a table</h2>
             <div class="lobby-field">
-                <label for="hostName">Your name</label>
-                <input id="hostName" type="text" placeholder="e.g. Andrey" autocomplete="nickname">
+                <label for="hostName">Your name <span class="lobby-optional">(optional)</span></label>
+                <input id="hostName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
+                <p class="lobby-hint muted">Empty picks a silly Eastern European–style guest name.</p>
             </div>
             <div class="lobby-actions">
                 <button type="button" class="btn-primary" id="createBtn">Create game</button>
@@ -550,10 +635,11 @@
                     <input id="gameCode" type="text" placeholder="e.g. A1B2C3" autocomplete="off" autocapitalize="characters">
                 </div>
                 <div class="lobby-field" style="margin-bottom:0;">
-                    <label for="playerName">Your name</label>
-                    <input id="playerName" type="text" placeholder="e.g. Alex" autocomplete="nickname">
+                    <label for="playerName">Your name <span class="lobby-optional">(optional)</span></label>
+                    <input id="playerName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
                 </div>
             </div>
+            <p class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code — you can join with one tap; we’ll assign a guest name if the field is empty.</p>
             <div class="lobby-actions">
                 <button type="button" class="btn-primary" id="joinBtn">Join game</button>
             </div>
@@ -579,16 +665,19 @@
             <span class="pill">Attacker: <strong id="tableAttackerLabel"></strong></span>
             <span class="pill">Defender: <strong id="tableDefenderLabel"></strong></span>
         </div>
-        <div class="table-grid" id="tableGrid">
-            <div class="seat top" id="seatTop"></div>
+        <div class="table-felt-wrap">
+            <aside class="deck-outside deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
+                <div class="deck-tableau">
+                    <div id="talonStack" class="talon-stack"></div>
+                    <img id="trumpUnderImg" class="trump-under hidden" alt="">
+                </div>
+            </aside>
+            <div class="table-grid" id="tableGrid">
+            <div class="seat top seat-top-1" id="seatTop1"></div>
+            <div class="seat top seat-top-2" id="seatTop2"></div>
+            <div class="seat top seat-top-3" id="seatTop3"></div>
             <div class="seat left" id="seatLeft"></div>
             <div class="seat center">
-                <div class="deck-on-table deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
-                    <div class="deck-tableau">
-                        <div id="talonStack" class="talon-stack"></div>
-                        <img id="trumpUnderImg" class="trump-under hidden" alt="">
-                    </div>
-                </div>
                 <div id="battleCards" class="battle-row"></div>
             </div>
             <div class="seat right" id="seatRight"></div>
@@ -606,6 +695,7 @@
                     <select id="defendTargetSelect" class="hidden"></select>
                 </div>
                 <div id="actionHint" class="muted"></div>
+            </div>
             </div>
         </div>
     </div>
@@ -648,7 +738,9 @@
     const tableAttackerLabel = document.getElementById("tableAttackerLabel");
     const tableDefenderLabel = document.getElementById("tableDefenderLabel");
     const tableGrid = document.getElementById("tableGrid");
-    const seatTop = document.getElementById("seatTop");
+    const seatTop1 = document.getElementById("seatTop1");
+    const seatTop2 = document.getElementById("seatTop2");
+    const seatTop3 = document.getElementById("seatTop3");
     const seatLeft = document.getElementById("seatLeft");
     const seatRight = document.getElementById("seatRight");
     const mySeatTitle = document.getElementById("mySeatTitle");
@@ -955,17 +1047,23 @@
         seatRight.classList.remove("hidden");
 
         if (playerCount === 2) {
-            renderSeat(seatTop, others[0], game);
+            renderSeat(seatTop1, others[0], game);
+            renderSeat(seatTop2, null, game);
+            renderSeat(seatTop3, null, game);
             renderSeat(seatLeft, null, game);
             renderSeat(seatRight, null, game);
         } else if (playerCount === 3) {
-            renderSeat(seatTop, others[0], game);
+            renderSeat(seatTop1, others[0], game);
+            renderSeat(seatTop2, null, game);
+            renderSeat(seatTop3, null, game);
             renderSeat(seatLeft, others[1], game);
             renderSeat(seatRight, null, game);
         } else {
-            renderSeat(seatTop, others[0], game);
-            renderSeat(seatLeft, others[1], game);
-            renderSeat(seatRight, others[2], game);
+            renderSeat(seatTop1, others[0], game);
+            renderSeat(seatTop2, others[1], game);
+            renderSeat(seatTop3, others[2], game);
+            renderSeat(seatLeft, null, game);
+            renderSeat(seatRight, null, game);
         }
 
         renderBattle(game);

@@ -6,6 +6,7 @@ import com.example.durakgame.model.Card;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -21,7 +22,8 @@ public class GameService {
     private final Map<String, Game> games = new ConcurrentHashMap<>();
 
     public Game createGame(String hostName) {
-        Player host = new Player(hostName);
+        String resolved = resolveDisplayName(hostName, List.of());
+        Player host = new Player(resolved);
         String code = generateUniqueCode();
         Game game = new Game(code, host);
         games.put(code, game);
@@ -39,7 +41,30 @@ public class GameService {
 
     public Player joinGame(String gameCode, String playerName) {
         Game game = getGame(gameCode);
-        return game.addPlayer(playerName, MAX_PLAYERS);
+        List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
+        String resolved = resolveDisplayName(playerName, taken);
+        return game.addPlayer(resolved, MAX_PLAYERS);
+    }
+
+    /**
+     * Non-blank trimmed names must be 2–24 chars; blank picks a funny guest name
+     * unique for join (when {@code alreadyTaken} is non-empty).
+     */
+    private String resolveDisplayName(String raw, List<String> alreadyTaken) {
+        String t = raw == null ? "" : raw.trim();
+        if (t.isEmpty()) {
+            if (alreadyTaken.isEmpty()) {
+                return GuestNameGenerator.randomName();
+            }
+            return GuestNameGenerator.randomNameDistinctFrom(alreadyTaken);
+        }
+        if (t.length() < 2) {
+            throw new IllegalArgumentException("Name must be at least 2 characters (or leave blank for a random name)");
+        }
+        if (t.length() > 24) {
+            throw new IllegalArgumentException("Name must be at most 24 characters");
+        }
+        return t;
     }
 
     public Game startGame(String gameCode, String playerId) {

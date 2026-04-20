@@ -1,9 +1,9 @@
 package com.example.durakgame.controller.dto;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
+/** {@code hostName} optional — blank means server assigns a guest name. */
 public record CreateGameRequest(
-        @NotBlank @Size(min = 2, max = 24) String hostName
+        @Size(max = 24) String hostName
 ) {
 }
