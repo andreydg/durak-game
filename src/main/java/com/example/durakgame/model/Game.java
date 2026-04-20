@@ -89,6 +89,9 @@ public class Game {
         if (isTeammate(attackerSeat, defenderIndex)) {
             throw new IllegalStateException("Cannot attack your teammate");
         }
+        if (players.size() == 4 && table.isEmpty() && attackerSeat != attackerIndex) {
+            throw new IllegalStateException("Only the opening attacker may play the first card this bout");
+        }
         if (!attacker.removeCard(card)) {
             throw new IllegalStateException("Card is not in player's hand");
         }
@@ -298,8 +301,13 @@ public class Game {
 
         int defenderHand = players.get(defenderIndex).handSize();
         long undefended = table.stream().filter(e -> !e.isDefended()).count();
+        boolean openingLeadReserved =
+                players.size() == 4 && table.isEmpty() && viewerSeat != attackerIndex;
         List<String> attackable = new ArrayList<>();
-        if (!isDefenderSeat && !isTeammate(viewerSeat, defenderIndex) && undefended < defenderHand) {
+        if (!isDefenderSeat
+                && !isTeammate(viewerSeat, defenderIndex)
+                && undefended < defenderHand
+                && !openingLeadReserved) {
             for (Card card : viewer.getHand()) {
                 if (table.isEmpty() || tableRanks.contains(card.rank())) {
                     attackable.add(card.code());

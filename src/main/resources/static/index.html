@@ -157,7 +157,17 @@
         .players-4 .seat:not(.my-hand) .seat-title.seat-title--team1 { text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
         .players-4 .seat.bottom.my-hand .seat-title.seat-title--team0 { color: #1d4ed8; }
         .players-4 .seat.bottom.my-hand .seat-title.seat-title--team1 { color: #c2410c; }
-        .pill .pill-role { margin-right: 0.25rem; opacity: 0.95; }
+        .pill .pill-role {
+            margin-right: 0.25rem;
+            opacity: 0.95;
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", emoji, sans-serif;
+            font-size: 1.2em;
+            line-height: 1;
+            vertical-align: -0.12em;
+            font-style: normal;
+            font-variant-emoji: emoji;
+        }
+        .my-hand .my-role-line { min-height: 1.25em; }
         #playingArea {
             overflow: visible;
         }
@@ -182,6 +192,14 @@
             gap: 0.5rem;
             margin-bottom: 0.7rem;
             overflow: visible;
+        }
+        .opening-lead-hud {
+            width: 100%;
+            font-size: 0.82rem;
+            opacity: 0.98;
+            margin: -0.35rem 0 0.55rem;
+            line-height: 1.35;
+            color: #f8fafc;
         }
         .table-grid {
             display: grid;
@@ -723,8 +741,6 @@
     </style>
 </head>
 <body>
-<p id="gameplayHint" class="muted hidden">Click or <strong>drag</strong> a card: <strong>transfer</strong> / <strong>attack</strong> use the whole battle row. To <strong>defend</strong>, drop on the specific attack card you are beating (or use Defend + the “vs …” menu).</p>
-
 <section id="lobbyView" class="lobby-root">
     <header class="lobby-hero">
         <div class="lobby-brand">
@@ -793,12 +809,11 @@
         <div class="row">
             <h2 style="margin:0;">Game <span id="gameCodeLabel"></span></h2>
             <span>Status: <strong id="statusLabel"></strong></span>
-            <button id="refreshBtn">Refresh</button>
             <button id="startBtn">Start</button>
             <button id="leaveBtn">Leave</button>
         </div>
         <div class="muted" id="roleLabel"></div>
-        <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. When everyone is ready, the host presses <strong>Start</strong>.</div>
+        <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. The game starts automatically when 4 players are seated.</div>
         <div id="gameOpenTablesWrap" class="game-open-tables panel hidden">
             <h3 class="game-open-tables-title">Open tables on this server</h3>
             <p class="lobby-hint muted game-open-tables-hint">Your room stays in this list until there are four players or the host starts the game. Friends also see it on the home page under Open tables.</p>
@@ -808,10 +823,11 @@
 
     <div id="playingArea" class="table-shell">
         <div class="hud">
-            <span class="pill" title="Attacker"><span class="pill-role" aria-hidden="true">⚔</span><strong id="tableAttackerLabel"></strong></span>
-            <span class="pill" title="Defender"><span class="pill-role" aria-hidden="true">🛡</span><strong id="tableDefenderLabel"></strong></span>
+            <span class="pill" title="Attacker"><span class="pill-role" aria-hidden="true">⚔️</span><strong id="tableAttackerLabel"></strong></span>
+            <span class="pill" title="Defender"><span class="pill-role" aria-hidden="true">🛡️</span><strong id="tableDefenderLabel"></strong></span>
             <span id="trumpSuitHud" class="pill hidden" title="Trump suit"></span>
         </div>
+        <div id="openingLeadHud" class="opening-lead-hud hidden" aria-live="polite"></div>
         <div class="table-felt-wrap">
             <aside class="deck-outside deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
                 <div class="deck-tableau">
@@ -830,6 +846,7 @@
             <div class="seat right" id="seatRight"></div>
             <div class="seat bottom my-hand">
                 <div class="seat-title" id="mySeatTitle">You</div>
+                <div class="muted my-role-line" id="myRoleLine" aria-live="polite"></div>
                 <div class="hand-scroll">
                     <div class="hand-scroll-x">
                         <div id="myHand" class="hand-row"></div>
@@ -844,6 +861,7 @@
                     <select id="defendTargetSelect" class="hidden"></select>
                 </div>
                 <div id="actionHint" class="muted"></div>
+                <p id="gameplayHint" class="muted hidden">Click or <strong>drag</strong> a card: <strong>transfer</strong> / <strong>attack</strong> use the whole battle row. To <strong>defend</strong>, drop on the specific attack card you are beating (or use Defend + the “vs …” menu).</p>
             </div>
             </div>
         </div>
@@ -900,6 +918,7 @@
     const tableAttackerLabel = document.getElementById("tableAttackerLabel");
     const tableDefenderLabel = document.getElementById("tableDefenderLabel");
     const trumpSuitHud = document.getElementById("trumpSuitHud");
+    const openingLeadHud = document.getElementById("openingLeadHud");
     const tableGrid = document.getElementById("tableGrid");
     const seatTop1 = document.getElementById("seatTop1");
     const seatTop2 = document.getElementById("seatTop2");
@@ -907,6 +926,7 @@
     const seatLeft = document.getElementById("seatLeft");
     const seatRight = document.getElementById("seatRight");
     const mySeatTitle = document.getElementById("mySeatTitle");
+    const myRoleLine = document.getElementById("myRoleLine");
     const myHand = document.getElementById("myHand");
     const battleCards = document.getElementById("battleCards");
     const actionHint = document.getElementById("actionHint");
@@ -1080,8 +1100,12 @@
 
     function roleTags(player, game) {
         const t = [];
-        if (player.id === game.attackerPlayerId) t.push("⚔");
-        if (player.id === game.defenderPlayerId) t.push("🛡");
+        if (game.status === "IN_PROGRESS") {
+            if (player.id === game.attackerPlayerId) t.push("⚔️");
+            if (player.id === game.defenderPlayerId) t.push("🛡️");
+        } else if (game.status === "FINISHED" && player.id === game.loserPlayerId) {
+            t.push("loser");
+        }
         if (player.id === game.hostPlayerId) t.push("host");
         if (player.team !== null && player.team !== undefined) t.push(`team ${player.team}`);
         return t.join(", ");
@@ -1156,12 +1180,32 @@
         }
     }
 
+    function playerTeam(game, playerId) {
+        const p = game?.players?.find(x => x.id === playerId);
+        if (!p || p.team === undefined || p.team === null) return null;
+        return p.team;
+    }
+
+    /** In 4p teams, “attacking side” is everyone not on the defender’s team. */
+    function onAttackingSide(game, viewerId) {
+        const defId = game?.defenderPlayerId;
+        if (!game || game.players?.length !== 4 || !defId || !viewerId) return false;
+        const dt = playerTeam(game, defId);
+        const vt = playerTeam(game, viewerId);
+        return dt != null && vt != null && vt !== dt;
+    }
+
     function renderActionState(game) {
         const lm = game.legalMoves || {};
         const selected = state.selectedHandCard;
         const attackable = lm.attackableCardCodes || [];
         const transferable = lm.transferableCardCodes || [];
         const defensesByAttack = lm.defensesByAttackCard || {};
+        const team4 = game?.players?.length === 4;
+        const tableEmpty = !game?.table || game.table.length === 0;
+        const openerId = game?.attackerPlayerId;
+        const iAmOpeningAttacker = Boolean(state.playerId && openerId === state.playerId);
+        const iOnAttackSide = Boolean(state.playerId && onAttackingSide(game, state.playerId));
 
         const options = Object.keys(defensesByAttack);
         const prevAttack = defendTargetSelect.value;
@@ -1208,13 +1252,28 @@
                 ? "All attacks are defended — you may add another attack (matching rank) or press End round."
                 : "All attacks are defended — press End round to finish this bout.";
         } else if (!selected) {
-            actionHint.textContent = "Select a card to see play options.";
+            if (team4 && tableEmpty && iOnAttackSide && iAmOpeningAttacker) {
+                actionHint.textContent = "Your turn — lead the first attack (⚔️ opening attacker).";
+            } else if (team4 && tableEmpty && iOnAttackSide && !iAmOpeningAttacker) {
+                const opener = game.players.find(p => p.id === openerId);
+                actionHint.textContent =
+                    `Wait for ${opener ? opener.name : "your teammate"} to lead; then you can add matching ranks.`;
+            } else {
+                actionHint.textContent = "Select a card to see play options.";
+            }
         } else {
             const hints = [];
             if (attackable.includes(selected)) hints.push("can attack");
             if (transferable.includes(selected)) hints.push("can transfer");
             if (validForCard.length > 0) hints.push(`can defend (${validForCard.map(prettyCard).join(" or ")})`);
-            actionHint.textContent = hints.length ? `${selected}: ${hints.join(", ")}` : `${selected}: no legal move right now`;
+            if (hints.length) {
+                actionHint.textContent = `${selected}: ${hints.join(", ")}`;
+            } else if (team4 && tableEmpty && iOnAttackSide && !iAmOpeningAttacker) {
+                actionHint.textContent =
+                    `${selected}: wait for your teammate to lead first; then matching ranks can be added.`;
+            } else {
+                actionHint.textContent = `${selected}: no legal move right now`;
+            }
         }
     }
 
@@ -1322,31 +1381,49 @@
                     face.style.boxShadow = `0 ${y}px ${1 + extra * 0.15}px rgba(0,0,0,${0.12 + extra * 0.01})`;
                 }
                 talonStack.appendChild(face);
-                if (trumpSuitHud) trumpSuitHud.classList.add("hidden");
             } else {
                 deckArea.classList.add("hidden");
                 trumpUnderImg.classList.add("hidden");
                 trumpUnderImg.removeAttribute("src");
                 talonStack.innerHTML = "";
-                if (trumpSuitHud && game.trumpSuit) {
-                    trumpSuitHud.textContent = `Trump ${trumpSuitGlyph(game.trumpSuit)}`;
-                    trumpSuitHud.classList.remove("hidden");
-                } else if (trumpSuitHud) {
-                    trumpSuitHud.classList.add("hidden");
-                }
             }
         } else {
             deckArea.classList.add("hidden");
             trumpUnderImg.classList.add("hidden");
             trumpUnderImg.removeAttribute("src");
             talonStack.innerHTML = "";
-            if (trumpSuitHud) trumpSuitHud.classList.add("hidden");
         }
-        tableAttackerLabel.textContent = attacker ? attacker.name : "—";
-        tableDefenderLabel.textContent = defender ? defender.name : "—";
-        const atk = attacker ? attacker.name : "—";
-        const def = defender ? defender.name : "—";
-        roleLabel.textContent = `You: ${me ? me.name : "—"} | ⚔ ${atk} | 🛡 ${def}`;
+        if (trumpSuitHud && game.trumpSuit) {
+            trumpSuitHud.textContent = trumpSuitGlyph(game.trumpSuit);
+            trumpSuitHud.classList.remove("hidden");
+        } else if (trumpSuitHud) {
+            trumpSuitHud.classList.add("hidden");
+        }
+        const loser = game.players.find(p => p.id === game.loserPlayerId);
+        if (game.status === "FINISHED") {
+            tableAttackerLabel.textContent = "—";
+            tableDefenderLabel.textContent = "—";
+            roleLabel.textContent = `You: ${me ? me.name : "—"} | Loser: ${loser ? loser.name : "—"}`;
+        } else {
+            tableAttackerLabel.textContent = attacker ? attacker.name : "—";
+            tableDefenderLabel.textContent = defender ? defender.name : "—";
+            const atk = attacker ? attacker.name : "—";
+            const def = defender ? defender.name : "—";
+            roleLabel.textContent = `You: ${me ? me.name : "—"} | ⚔️ ${atk} | 🛡️ ${def}`;
+        }
+        if (openingLeadHud) {
+            const emptyTable = !game.table || game.table.length === 0;
+            const showOpening =
+                game.status === "IN_PROGRESS" && game.players.length === 4 && emptyTable && attacker;
+            if (showOpening) {
+                openingLeadHud.textContent =
+                    `${attacker.name} — attacking; teammates add matching ranks after.`;
+                openingLeadHud.classList.remove("hidden");
+            } else {
+                openingLeadHud.textContent = "";
+                openingLeadHud.classList.add("hidden");
+            }
+        }
         if (me) {
             let cls = "seat-title";
             if (game.players.length === 4 && me.team !== null && me.team !== undefined) {
@@ -1354,9 +1431,14 @@
             }
             mySeatTitle.className = cls;
             mySeatTitle.textContent = `${me.name} (you)`;
+            if (myRoleLine) {
+                myRoleLine.textContent =
+                    game.status === "IN_PROGRESS" || game.status === "FINISHED" ? roleTags(me, game) : "";
+            }
         } else {
             mySeatTitle.className = "seat-title";
             mySeatTitle.textContent = "You";
+            if (myRoleLine) myRoleLine.textContent = "";
         }
 
         const playerCount = game.players.length;
@@ -1376,6 +1458,22 @@
             renderSeat(seatTop2, null, game);
             renderSeat(seatTop3, null, game);
             renderSeat(seatLeft, others[1], game);
+            renderSeat(seatRight, null, game);
+        } else if (playerCount === 4) {
+            /* Same physical order for everyone: you at bottom; (me+2) is teammate opposite; (me+1)/(me+3) are opponents */
+            const myIdx = game.players.findIndex(p => p.id === state.playerId);
+            const p = game.players;
+            const n = 4;
+            if (myIdx >= 0) {
+                renderSeat(seatTop1, p[(myIdx + 1) % n], game);
+                renderSeat(seatTop2, p[(myIdx + 2) % n], game);
+                renderSeat(seatTop3, p[(myIdx + 3) % n], game);
+            } else {
+                renderSeat(seatTop1, others[0], game);
+                renderSeat(seatTop2, others[1], game);
+                renderSeat(seatTop3, others[2], game);
+            }
+            renderSeat(seatLeft, null, game);
             renderSeat(seatRight, null, game);
         } else {
             renderSeat(seatTop1, others[0], game);
@@ -1472,7 +1570,6 @@
         await runAction("Join game", () => performJoin(null));
     });
 
-    document.getElementById("refreshBtn").addEventListener("click", () => refreshGame(true));
     document.getElementById("leaveBtn").addEventListener("click", clearSession);
 
     startBtn.addEventListener("click", async () => runAction("Start", async () => {

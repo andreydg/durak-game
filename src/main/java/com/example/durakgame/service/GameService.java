@@ -46,7 +46,11 @@ public class GameService {
         Game game = getGame(gameCode);
         List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
         String resolved = resolveDisplayName(playerName, taken);
-        return game.addPlayer(resolved, MAX_PLAYERS);
+        Player joined = game.addPlayer(resolved, MAX_PLAYERS);
+        if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
+            game.start(game.getHostPlayerId());
+        }
+        return joined;
     }
 
     /**
