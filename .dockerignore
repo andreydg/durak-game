@@ -1,0 +1,15 @@
+# Git / IDE
+.git
+.gitignore
+.github
+.idea
+.vscode
+.cursor
+*.iml
+.DS_Store
+
+# Maven (rebuilt in image)
+target/
+
+# Docs (not needed in build context)
+*.md
