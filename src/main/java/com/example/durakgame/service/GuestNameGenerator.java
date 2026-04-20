@@ -19,27 +19,14 @@ public final class GuestNameGenerator {
             "Matvey", "Sasha", "Taras", "Vanya", "Yakov", "Zoran"
     };
 
-    private static final String[] EPITHET = {
-            "the Unlucky", "2.0", "Jr", "??", "(again)", "no.7", "deluxe", "pro",
-            "from Minsk", "from Łódź", "the Bold", "the Tired"
-    };
-
     private GuestNameGenerator() {
     }
 
     /**
-     * Random display name, 2–24 chars, suitable for {@link com.example.durakgame.model.Player}.
+     * Random display name: a single first name only (2–24 chars).
      */
     public static String randomName() {
-        String first = FIRST[RANDOM.nextInt(FIRST.length)];
-        if (RANDOM.nextFloat() < 0.42f) {
-            String tag = EPITHET[RANDOM.nextInt(EPITHET.length)];
-            String combo = first + " " + tag;
-            if (combo.length() <= 24) {
-                return combo;
-            }
-        }
-        return first;
+        return FIRST[RANDOM.nextInt(FIRST.length)];
     }
 
     /**

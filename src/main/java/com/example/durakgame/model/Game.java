@@ -162,6 +162,9 @@ public class Game {
         if (table.isEmpty()) {
             throw new IllegalStateException("No cards on table");
         }
+        if (table.stream().allMatch(AttackEntry::isDefended)) {
+            throw new IllegalStateException("All attacks are defended; end the round instead");
+        }
 
         Player defender = players.get(defenderIndex);
         List<Card> allCards = new ArrayList<>();
@@ -324,8 +327,9 @@ public class Game {
         }
         boolean canTransfer = !transferable.isEmpty();
 
-        boolean canTake = isDefenderSeat && !table.isEmpty();
         boolean allDefended = !table.isEmpty() && table.stream().allMatch(AttackEntry::isDefended);
+        /* Take pile only while something is still undefended; once all are beaten, round ends via End round. */
+        boolean canTake = isDefenderSeat && !table.isEmpty() && !allDefended;
         boolean canEndRound = (isDefenderSeat || isAttackerSeat) && allDefended;
 
         Map<String, List<String>> defensesByAttack = new LinkedHashMap<>();
@@ -444,7 +448,7 @@ public class Game {
         int index = attackerIndex;
         do {
             refillPlayer(players.get(index));
-            index = (index + 1) % players.size();
+            index = prevSeat(index);
         } while (index != attackerIndex);
     }
 
@@ -493,10 +497,18 @@ public class Game {
         return indexOfPlayer(player.getId());
     }
 
+    /**
+     * Next seat in counterclockwise table order (index decreases, wrapping).
+     */
+    private int prevSeat(int index) {
+        int n = players.size();
+        return (index - 1 + n) % n;
+    }
+
     private int nextEligibleIndex(int startIndex) {
         int current = startIndex;
         for (int i = 0; i < players.size(); i++) {
-            current = (current + 1) % players.size();
+            current = prevSeat(current);
             Player candidate = players.get(current);
             boolean outOfGame = talon.isEmpty() && candidate.handSize() == 0;
             if (!outOfGame) {

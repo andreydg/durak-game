@@ -1,11 +1,14 @@
 package com.example.durakgame.service;
 
+import com.example.durakgame.controller.dto.LobbyGameSummary;
 import com.example.durakgame.model.Game;
+import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Player;
 import com.example.durakgame.model.Card;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -105,6 +108,30 @@ public class GameService {
 
     public int getMaxPlayers() {
         return MAX_PLAYERS;
+    }
+
+    /**
+     * Open lobby rooms waiting for players (same server instance only).
+     */
+    public List<LobbyGameSummary> listOpenLobbies() {
+        return games.values().stream()
+                .filter(g -> g.getStatus() == GameStatus.LOBBY)
+                .filter(g -> g.getPlayers().size() < MAX_PLAYERS)
+                .map(g -> {
+                    String hostName = g.getPlayers().stream()
+                            .filter(p -> p.getId().equals(g.getHostPlayerId()))
+                            .map(Player::getName)
+                            .findFirst()
+                            .orElse("?");
+                    return new LobbyGameSummary(
+                            g.getCode(),
+                            hostName,
+                            g.getPlayers().size(),
+                            MAX_PLAYERS
+                    );
+                })
+                .sorted(Comparator.comparing(LobbyGameSummary::code))
+                .toList();
     }
 
     private String generateUniqueCode() {
