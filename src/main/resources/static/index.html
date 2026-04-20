@@ -15,7 +15,8 @@
             background: #eee7dc;
             color: #2f261b;
         }
-        .hidden { display: none; }
+        /* Must win over .stack etc., or #gameView stays visible and the table leaks onto the lobby. */
+        .hidden { display: none !important; }
         .stack { display: grid; gap: 1rem; }
         .panel {
             border: 1px solid #9f8b70;
@@ -76,7 +77,8 @@
             z-index: 2;
             left: calc(50% - 38px);
             top: 50%;
-            transform: translate(-50%, -50%);
+            /* Push talon down so it sits on the trump bar (sideways “I-”), vertically centered */
+            transform: translate(-50%, calc(-50% + 40px));
             width: 88px;
         }
         .trump-under {
@@ -215,11 +217,24 @@
             justify-content: center;
             flex: 1 1 auto;
             min-height: 110px;
+            border-radius: 10px;
+            transition: background 0.15s, box-shadow 0.15s;
+        }
+        .battle-row.battle-drop-target {
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
         }
         .battle-pair {
             position: relative;
             width: 106px;
             height: 128px;
+            border-radius: 10px;
+            flex: 0 0 auto;
+            transition: box-shadow 0.12s, background 0.12s;
+        }
+        .battle-pair.battle-pair-drop-target {
+            background: rgba(255, 255, 255, 0.12);
+            box-shadow: inset 0 0 0 2px rgba(120, 200, 255, 0.85);
         }
         .battle-card {
             position: absolute;
@@ -260,13 +275,19 @@
         }
         .hand-card-btn {
             border: none;
-            cursor: pointer;
+            cursor: grab;
             border-radius: 10px;
             padding: 3px;
             background: #fff;
             box-shadow: 0 2px 8px rgba(0,0,0,0.22);
             flex: 0 0 auto;
             line-height: 0;
+            touch-action: none;
+        }
+        .hand-card-btn:active { cursor: grabbing; }
+        .hand-card-btn.dragging {
+            opacity: 0.55;
+            outline: 2px dashed #3b7dff;
         }
         .hand-card-btn.selected {
             outline: 3px solid #3b7dff;
@@ -308,32 +329,211 @@
             border-radius: 8px;
             padding: 0.75rem;
         }
+
+        /* —— Lobby —— */
+        .lobby-root {
+            max-width: 880px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+        .lobby-hero {
+            position: relative;
+            border-radius: 16px;
+            padding: 1.25rem 1.35rem;
+            background:
+                radial-gradient(ellipse 120% 80% at 100% 0%, rgba(124, 90, 58, 0.12), transparent 50%),
+                linear-gradient(165deg, #f0e6d4 0%, #e8dcc8 100%);
+            border: 1px solid #c4b49a;
+            box-shadow: 0 4px 18px rgba(47, 38, 27, 0.08);
+            overflow: hidden;
+        }
+        .lobby-hero::after {
+            content: "";
+            position: absolute;
+            right: -20px;
+            bottom: -30px;
+            width: 180px;
+            height: 180px;
+            background: radial-gradient(circle, rgba(47, 118, 70, 0.12), transparent 70%);
+            pointer-events: none;
+        }
+        .lobby-brand {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        .lobby-card-deco {
+            display: flex;
+            align-items: flex-end;
+            flex-shrink: 0;
+        }
+        .lobby-card-deco img {
+            width: 56px;
+            height: auto;
+            aspect-ratio: 63 / 88;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.28);
+            box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+            background: #fff;
+        }
+        .lobby-card-deco img:nth-child(1) { transform: rotate(-14deg) translateX(8px); z-index: 3; }
+        .lobby-card-deco img:nth-child(2) { transform: rotate(-4deg); margin-left: -28px; z-index: 2; }
+        .lobby-card-deco img:nth-child(3) { transform: rotate(10deg); margin-left: -28px; z-index: 1; }
+        .lobby-title {
+            margin: 0;
+            font-size: clamp(1.75rem, 4vw, 2.35rem);
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            color: #1e3d2a;
+            text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+        }
+        .lobby-title span {
+            color: #8b3a2f;
+        }
+        .lobby-tagline {
+            margin: 0.35rem 0 0;
+            font-size: 0.98rem;
+            color: #5c4f42;
+            max-width: 28rem;
+            line-height: 1.45;
+        }
+        .lobby-suits {
+            margin-top: 0.5rem;
+            font-size: 1.15rem;
+            letter-spacing: 0.35em;
+            color: #6a5b48;
+            opacity: 0.85;
+        }
+        .lobby-forms {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+        @media (min-width: 720px) {
+            .lobby-forms {
+                grid-template-columns: 1fr 1fr;
+                align-items: stretch;
+            }
+        }
+        .lobby-card.panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 100%;
+            padding: 1.05rem 1.1rem;
+        }
+        .lobby-card h2 {
+            margin: 0 0 0.85rem;
+            font-size: 1.15rem;
+            color: #3d3228;
+        }
+        .lobby-field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            margin-bottom: 0.75rem;
+        }
+        .lobby-field label {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #5a4d40;
+        }
+        .lobby-field input {
+            width: 100%;
+            padding: 0.55rem 0.65rem;
+            font-size: 1rem;
+        }
+        .lobby-join-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.65rem;
+        }
+        @media (min-width: 480px) {
+            .lobby-join-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+        .lobby-actions {
+            margin-top: auto;
+            padding-top: 0.35rem;
+        }
+        .btn-primary {
+            width: 100%;
+            padding: 0.6rem 1rem;
+            font-weight: 700;
+            font-size: 0.98rem;
+            border: 1px solid #2d5a3d;
+            border-radius: 10px;
+            background: linear-gradient(180deg, #3a8a55, #2f7646);
+            color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+            box-shadow: 0 2px 6px rgba(47, 118, 70, 0.35);
+        }
+        .btn-primary:hover:not(:disabled) {
+            filter: brightness(1.06);
+        }
+        .btn-primary:disabled {
+            opacity: 0.5;
+        }
+        .room-waiting {
+            margin-top: 0.5rem;
+            padding: 0.55rem 0.65rem;
+            border-radius: 8px;
+            background: rgba(124, 90, 58, 0.08);
+            border: 1px dashed #c4b49a;
+        }
     </style>
 </head>
 <body>
-<h1>Durak Multiplayer</h1>
-<p class="muted">Click cards in your bottom seat to play. Legal options appear next to your hand.</p>
+<p id="gameplayHint" class="muted hidden">Click or <strong>drag</strong> a card: <strong>transfer</strong> / <strong>attack</strong> use the whole battle row. To <strong>defend</strong>, drop on the specific attack card you are beating (or use Defend + the “vs …” menu).</p>
 
-<section id="lobbyView" class="stack">
-    <div class="panel">
-        <h2>Create Game</h2>
-        <label for="hostName">Host name</label>
-        <input id="hostName" type="text" placeholder="e.g. Andrey">
-        <div class="row"><button id="createBtn">Create game</button></div>
-    </div>
-    <div class="panel">
-        <h2>Join Game</h2>
-        <div class="row">
-            <div>
-                <label for="gameCode">Game code</label>
-                <input id="gameCode" type="text" placeholder="e.g. A1B2C3">
+<section id="lobbyView" class="lobby-root">
+    <header class="lobby-hero">
+        <div class="lobby-brand">
+            <div class="lobby-card-deco" aria-hidden="true">
+                <img src="/cards/BACK.png" alt="">
+                <img src="/cards/BACK.png" alt="">
+                <img src="/cards/BACK.png" alt="">
             </div>
             <div>
-                <label for="playerName">Player name</label>
-                <input id="playerName" type="text" placeholder="e.g. Alex">
+                <h1 class="lobby-title">Durak <span>Дурак</span></h1>
+                <p class="lobby-tagline">Create a room or join with a code.</p>
+                <div class="lobby-suits" aria-hidden="true">♠ ♥ ♦ ♣</div>
             </div>
         </div>
-        <div class="row"><button id="joinBtn">Join game</button></div>
+    </header>
+    <div class="lobby-forms">
+        <div class="panel lobby-card">
+            <h2>Host a table</h2>
+            <div class="lobby-field">
+                <label for="hostName">Your name</label>
+                <input id="hostName" type="text" placeholder="e.g. Andrey" autocomplete="nickname">
+            </div>
+            <div class="lobby-actions">
+                <button type="button" class="btn-primary" id="createBtn">Create game</button>
+            </div>
+        </div>
+        <div class="panel lobby-card">
+            <h2>Join with code</h2>
+            <div class="lobby-join-grid">
+                <div class="lobby-field" style="margin-bottom:0;">
+                    <label for="gameCode">Room code</label>
+                    <input id="gameCode" type="text" placeholder="e.g. A1B2C3" autocomplete="off" autocapitalize="characters">
+                </div>
+                <div class="lobby-field" style="margin-bottom:0;">
+                    <label for="playerName">Your name</label>
+                    <input id="playerName" type="text" placeholder="e.g. Alex" autocomplete="nickname">
+                </div>
+            </div>
+            <div class="lobby-actions">
+                <button type="button" class="btn-primary" id="joinBtn">Join game</button>
+            </div>
+        </div>
     </div>
 </section>
 
@@ -347,9 +547,10 @@
             <button id="leaveBtn">Leave</button>
         </div>
         <div class="muted" id="roleLabel"></div>
+        <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. When everyone is ready, the host presses <strong>Start</strong>.</div>
     </div>
 
-    <div class="table-shell">
+    <div id="playingArea" class="table-shell">
         <div class="hud">
             <span class="pill">Attacker: <strong id="tableAttackerLabel"></strong></span>
             <span class="pill">Defender: <strong id="tableDefenderLabel"></strong></span>
@@ -404,6 +605,9 @@
 
     const lobbyView = document.getElementById("lobbyView");
     const gameView = document.getElementById("gameView");
+    const playingArea = document.getElementById("playingArea");
+    const gameplayHintEl = document.getElementById("gameplayHint");
+    const roomWaitingLine = document.getElementById("roomWaitingLine");
     const messages = document.getElementById("messages");
     const hostNameInput = document.getElementById("hostName");
     const gameCodeInput = document.getElementById("gameCode");
@@ -501,6 +705,7 @@
         for (const pairData of game.table) {
             const pair = document.createElement("div");
             pair.className = "battle-pair";
+            pair.dataset.attackCard = pairData.attackCard;
             pair.innerHTML = `<img class="battle-card attack" src="${cardImage(pairData.attackCard)}" title="${pairData.attackCard}" alt="${pairData.attackCard}">`;
             if (pairData.defenseCard) {
                 pair.innerHTML += `<img class="battle-card defense" src="${cardImage(pairData.defenseCard)}" title="${pairData.defenseCard}" alt="${pairData.defenseCard}">`;
@@ -514,12 +719,24 @@
         const hand = me?.hand || [];
         for (const code of hand) {
             const btn = document.createElement("button");
+            btn.type = "button";
             btn.className = "hand-card-btn" + (state.selectedHandCard === code ? " selected" : "");
-            btn.innerHTML = `<img src="${cardImage(code)}" title="${code}" alt="${code}">`;
+            btn.innerHTML = `<img src="${cardImage(code)}" draggable="false" title="${code}" alt="${code}">`;
+            btn.draggable = true;
+            btn.dataset.cardCode = code;
             btn.addEventListener("click", () => {
                 state.selectedHandCard = state.selectedHandCard === code ? null : code;
                 renderActionState(game);
                 renderMyHand(game, me);
+            });
+            btn.addEventListener("dragstart", (e) => {
+                btn.classList.add("dragging");
+                e.dataTransfer.setData("text/plain", code);
+                e.dataTransfer.effectAllowed = "move";
+            });
+            btn.addEventListener("dragend", () => {
+                btn.classList.remove("dragging");
+                clearBattleDropUi();
             });
             myHand.appendChild(btn);
         }
@@ -587,12 +804,80 @@
         }
     }
 
+    /**
+     * Drag card to battle: transfer first, then attack, then defend.
+     * For defend, optional preferredAttackCard comes from the .battle-pair you dropped on.
+     */
+    async function playCardToTable(cardCode, preferredAttackCard) {
+        const game = state.game;
+        if (!game || game.status !== "IN_PROGRESS" || !cardCode) return;
+        const lm = game.legalMoves || {};
+        const attackable = lm.attackableCardCodes || [];
+        const transferable = lm.transferableCardCodes || [];
+        const defs = lm.defensesByAttackCard || {};
+        const attacksYouCanBeat = Object.keys(defs).filter(atk => (defs[atk] || []).includes(cardCode));
+
+        if (lm.canTransfer && transferable.includes(cardCode)) {
+            await runAction("Transfer", async () => {
+                state.game = await api(`/api/games/${state.gameCode}/transfer`, "POST", {
+                    playerId: state.playerId,
+                    card: cardCode
+                });
+                state.selectedHandCard = null;
+            });
+            return;
+        }
+        if (lm.canAttack && attackable.includes(cardCode)) {
+            await runAction("Attack", async () => {
+                state.game = await api(`/api/games/${state.gameCode}/attack`, "POST", {
+                    playerId: state.playerId,
+                    card: cardCode
+                });
+                state.selectedHandCard = null;
+            });
+            return;
+        }
+        if (attacksYouCanBeat.length > 0) {
+            let target = "";
+            if (preferredAttackCard && attacksYouCanBeat.includes(preferredAttackCard)) {
+                target = preferredAttackCard;
+            } else if (defendTargetSelect.value && attacksYouCanBeat.includes(defendTargetSelect.value)) {
+                target = defendTargetSelect.value;
+            } else {
+                target = attacksYouCanBeat[0];
+            }
+            if (!target) {
+                log("No attack to defend against.");
+                return;
+            }
+            await runAction("Defend", async () => {
+                state.game = await api(`/api/games/${state.gameCode}/defend`, "POST", {
+                    playerId: state.playerId,
+                    attackCard: target,
+                    defenseCard: cardCode
+                });
+                state.selectedHandCard = null;
+            });
+            return;
+        }
+        log(`Cannot play ${cardCode} to the table right now.`);
+    }
+
     function render() {
         const game = state.game;
-        const inGame = Boolean(state.gameCode && state.playerId && game);
-        lobbyView.classList.toggle("hidden", inGame);
-        gameView.classList.toggle("hidden", !inGame);
-        if (!inGame) return;
+        const hasSession = Boolean(state.gameCode && state.playerId && game);
+        lobbyView.classList.toggle("hidden", hasSession);
+        gameView.classList.toggle("hidden", !hasSession);
+
+        const showPlayingArea =
+            hasSession && game && (game.status === "IN_PROGRESS" || game.status === "FINISHED");
+        if (playingArea) playingArea.classList.toggle("hidden", !showPlayingArea);
+        if (gameplayHintEl) gameplayHintEl.classList.toggle("hidden", !showPlayingArea);
+        if (roomWaitingLine) {
+            roomWaitingLine.classList.toggle("hidden", !hasSession || !game || game.status !== "LOBBY");
+        }
+
+        if (!hasSession) return;
 
         const me = game.players.find(p => p.id === state.playerId);
         const others = game.players.filter(p => p.id !== state.playerId);
@@ -799,6 +1084,39 @@
 
     defendTargetSelect.addEventListener("change", () => {
         if (state.game) renderActionState(state.game);
+    });
+
+    let battlePairDropHover = null;
+    function setBattlePairDropHover(pair) {
+        if (battlePairDropHover === pair) return;
+        if (battlePairDropHover) battlePairDropHover.classList.remove("battle-pair-drop-target");
+        battlePairDropHover = pair;
+        if (pair) pair.classList.add("battle-pair-drop-target");
+    }
+    function clearBattleDropUi() {
+        battleCards.classList.remove("battle-drop-target");
+        setBattlePairDropHover(null);
+    }
+
+    battleCards.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const pair = e.target.closest(".battle-pair");
+        setBattlePairDropHover(pair);
+        /* Row highlight when not over a specific pair (attack / transfer onto open felt). */
+        battleCards.classList.toggle("battle-drop-target", !pair);
+    });
+    battleCards.addEventListener("dragleave", (e) => {
+        if (e.relatedTarget && battleCards.contains(e.relatedTarget)) return;
+        clearBattleDropUi();
+    });
+    battleCards.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const pair = e.target.closest(".battle-pair");
+        const preferred = pair?.dataset?.attackCard?.trim() || "";
+        clearBattleDropUi();
+        const code = (e.dataTransfer.getData("text/plain") || "").trim();
+        if (code) await playCardToTable(code, preferred || undefined);
     });
 
     (async function init() {
