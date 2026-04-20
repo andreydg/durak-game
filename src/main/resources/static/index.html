@@ -269,6 +269,18 @@
         }
         .seat.bottom.my-hand .seat-title { color: #1a1510; }
         .seat.bottom.my-hand .muted { color: #3a322b; font-size: 0.95rem; }
+        .help-toggle-btn {
+            margin-top: 0.35rem;
+            border: 1px solid #d5c4a7;
+            background: #fff9ef;
+            color: #5b4a36;
+            border-radius: 999px;
+            padding: 0.1rem 0.5rem;
+            font-size: 0.8rem;
+            line-height: 1.3;
+            cursor: pointer;
+        }
+        .help-toggle-btn:hover { background: #fff2dc; }
         .seat-title { font-weight: 700; margin-bottom: 0.3rem; }
         .seat:not(.my-hand) .seat-title {
             color: #fff;
@@ -861,6 +873,7 @@
                     <select id="defendTargetSelect" class="hidden"></select>
                 </div>
                 <div id="actionHint" class="muted"></div>
+                <button id="helpToggleBtn" class="help-toggle-btn" type="button" aria-expanded="false">Help ?</button>
                 <p id="gameplayHint" class="muted hidden">Click or <strong>drag</strong> a card: <strong>transfer</strong> / <strong>attack</strong> use the whole battle row. To <strong>defend</strong>, drop on the specific attack card you are beating (or use Defend + the “vs …” menu).</p>
             </div>
             </div>
@@ -892,6 +905,7 @@
         playerId: sessionStorage.getItem("durak_player_id") || "",
         game: null,
         selectedHandCard: null,
+        showGameplayHelp: false,
         pollTimer: null,
         ws: null,
         wsConnected: false
@@ -901,6 +915,7 @@
     const gameView = document.getElementById("gameView");
     const playingArea = document.getElementById("playingArea");
     const gameplayHintEl = document.getElementById("gameplayHint");
+    const helpToggleBtn = document.getElementById("helpToggleBtn");
     const roomWaitingLine = document.getElementById("roomWaitingLine");
     const messagesPanel = document.getElementById("messagesPanel");
     const messages = document.getElementById("messages");
@@ -1345,7 +1360,12 @@
         const showPlayingArea =
             hasSession && game && (game.status === "IN_PROGRESS" || game.status === "FINISHED");
         if (playingArea) playingArea.classList.toggle("hidden", !showPlayingArea);
-        if (gameplayHintEl) gameplayHintEl.classList.toggle("hidden", !showPlayingArea);
+        if (gameplayHintEl) gameplayHintEl.classList.toggle("hidden", !showPlayingArea || !state.showGameplayHelp);
+        if (helpToggleBtn) {
+            helpToggleBtn.classList.toggle("hidden", !showPlayingArea);
+            helpToggleBtn.setAttribute("aria-expanded", String(showPlayingArea && state.showGameplayHelp));
+            helpToggleBtn.textContent = showPlayingArea && state.showGameplayHelp ? "Hide help" : "Help ?";
+        }
         if (roomWaitingLine) {
             roomWaitingLine.classList.toggle("hidden", !hasSession || !game || game.status !== "LOBBY");
         }
@@ -1571,6 +1591,12 @@
     });
 
     document.getElementById("leaveBtn").addEventListener("click", clearSession);
+    if (helpToggleBtn) {
+        helpToggleBtn.addEventListener("click", () => {
+            state.showGameplayHelp = !state.showGameplayHelp;
+            render();
+        });
+    }
 
     startBtn.addEventListener("click", async () => runAction("Start", async () => {
         state.game = await api(`/api/games/${state.gameCode}/start`, "POST", {playerId: state.playerId});
