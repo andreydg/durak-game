@@ -65,6 +65,22 @@ public class Game {
         return players.removeIf(player -> player.getId().equals(playerId));
     }
 
+    /**
+     * Removes a non-host player after the game started and reopens the room as lobby.
+     * Remaining players stay seated; cards/round state are cleared so a fresh game can start.
+     */
+    public synchronized boolean removePlayerAndResetToLobby(String playerId) {
+        if (status == GameStatus.LOBBY) {
+            throw new IllegalStateException("Player removal from active game requires started game");
+        }
+        boolean removed = players.removeIf(player -> player.getId().equals(playerId));
+        if (!removed) {
+            return false;
+        }
+        resetToLobbyState();
+        return true;
+    }
+
     public synchronized void start(String playerId) {
         ensureLobby();
         if (!Objects.equals(hostPlayerId, playerId)) {
@@ -105,7 +121,7 @@ public class Game {
             }
         }
 
-        if (!takingCardsInProgress && players.size() == 4 && table.isEmpty() && attackerSeat != attackerIndex) {
+        if (!takingCardsInProgress && table.isEmpty() && attackerSeat != attackerIndex) {
             throw new IllegalStateException("Only the opening attacker may play the first card this bout");
         }
         if (!attacker.removeCard(card)) {
@@ -190,8 +206,14 @@ public class Game {
         if (table.stream().allMatch(AttackEntry::isDefended)) {
             throw new IllegalStateException("All attacks are defended; end the round instead");
         }
+        Player defender = players.get(defenderIndex);
+        long defendedOnTable = table.stream().filter(AttackEntry::isDefended).count();
         takingCardsInProgress = true;
-        takeLimit = players.get(defenderIndex).handSize();
+        /*
+         * Throw-in cap during take phase must use defender's bout-start hand size.
+         * If defender already spent cards on successful defenses, add them back logically.
+         */
+        takeLimit = defender.handSize() + (int) defendedOnTable;
     }
 
     public synchronized void endRound(String playerId) {
@@ -343,8 +365,7 @@ public class Game {
         } else {
             int defenderHand = players.get(defenderIndex).handSize();
             long undefended = table.stream().filter(e -> !e.isDefended()).count();
-            boolean openingLeadReserved =
-                    players.size() == 4 && table.isEmpty() && viewerSeat != attackerIndex;
+            boolean openingLeadReserved = table.isEmpty() && viewerSeat != attackerIndex;
             if (!isDefenderSeat
                     && !isTeammate(viewerSeat, defenderIndex)
                     && undefended < defenderHand
@@ -499,6 +520,21 @@ public class Game {
         endRoundApprovals.clear();
         takingCardsInProgress = false;
         takeLimit = 0;
+    }
+
+    private void resetToLobbyState() {
+        for (Player player : players) {
+            player.clearHand();
+            player.setTeam(null);
+        }
+        talon.clear();
+        clearTable();
+        status = GameStatus.LOBBY;
+        trumpSuit = null;
+        trumpCard = null;
+        attackerIndex = -1;
+        defenderIndex = -1;
+        loserPlayerId = null;
     }
 
     private void finalizeTakeCardsRound() {

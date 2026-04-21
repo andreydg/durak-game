@@ -51,6 +51,10 @@ public class Player {
         return hand.size();
     }
 
+    public synchronized void clearHand() {
+        hand.clear();
+    }
+
     public Integer getTeam() {
         return team;
     }

@@ -158,7 +158,6 @@
         .players-4 .seat.bottom.my-hand .seat-title.seat-title--team0 { color: #1d4ed8; }
         .players-4 .seat.bottom.my-hand .seat-title.seat-title--team1 { color: #c2410c; }
         .pill .pill-role {
-            margin-right: 0.25rem;
             opacity: 0.95;
             font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", emoji, sans-serif;
             font-size: 1.2em;
@@ -166,6 +165,9 @@
             vertical-align: -0.12em;
             font-style: normal;
             font-variant-emoji: emoji;
+        }
+        .pill .pill-role-after {
+            margin-left: 0.25rem;
         }
         .my-hand .my-role-line { min-height: 1.25em; }
         #playingArea {
@@ -228,11 +230,23 @@
             padding: 6px 6px 4px;
             margin-top: 0.2rem;
         }
-        /* 3 players: hide one side seat; single opponent on top center */
+        /* 3 players: two opponents across top; battle + hand full width */
+        .table-grid.players-3 .seat.left,
         .table-grid.players-3 .seat.right { display: none !important; }
-        .table-grid.players-3 .seat-top-1 { grid-column: 2; grid-row: 1; }
-        .table-grid.players-3 .seat-top-2,
+        .table-grid.players-3 {
+            grid-template-columns: 1fr 1fr;
+        }
+        .table-grid.players-3 .seat-top-1 { grid-column: 1; grid-row: 1; }
+        .table-grid.players-3 .seat-top-2 { grid-column: 2; grid-row: 1; }
         .table-grid.players-3 .seat-top-3 { display: none !important; }
+        .table-grid.players-3 .seat.center {
+            grid-column: 1 / -1;
+            grid-row: 2;
+        }
+        .table-grid.players-3 .seat.bottom {
+            grid-column: 1 / -1;
+            grid-row: 3;
+        }
         /* 4 players: three opponents across the top; battle + hand full width */
         .table-grid.players-4 .seat.left,
         .table-grid.players-4 .seat.right { display: none !important; }
@@ -282,6 +296,12 @@
         }
         .help-toggle-btn:hover { background: #fff2dc; }
         .seat-title { font-weight: 700; margin-bottom: 0.3rem; }
+        .seat-role-inline {
+            margin-left: 0.35rem;
+            opacity: 0.95;
+            font-weight: 600;
+            white-space: nowrap;
+        }
         .seat:not(.my-hand) .seat-title {
             color: #fff;
             text-shadow: 0 1px 2px rgba(0,0,0,0.45);
@@ -381,6 +401,9 @@
         .pill .pill-take {
             margin-right: 0.3rem;
             font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji, sans-serif;
+            font-size: 0.92em;
+            line-height: 1;
+            vertical-align: -0.03em;
         }
         .battle-pair {
             position: relative;
@@ -598,9 +621,10 @@
         #gameView .lobby-hero--in-game .lobby-title {
             margin: 0;
         }
-        /* Match lobby column width */
+        /* In-game view should use full page width (with body padding as margin). */
         #gameView.stack {
-            max-width: 880px;
+            width: 100%;
+            max-width: none;
             margin-left: auto;
             margin-right: auto;
         }
@@ -857,8 +881,8 @@
 
     <div id="playingArea" class="table-shell">
         <div class="hud">
-            <span class="pill" title="Attacker"><span class="pill-role" aria-hidden="true">⚔️</span><strong id="tableAttackerLabel"></strong></span>
-            <span class="pill" title="Defender"><span class="pill-role" aria-hidden="true">🛡️</span><strong id="tableDefenderLabel"></strong></span>
+            <span class="pill" title="Attacker"><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
+            <span class="pill" title="Defender"><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
             <span id="trumpSuitHud" class="pill hidden" title="Trump suit"></span>
         </div>
         <div id="openingLeadHud" class="opening-lead-hud hidden" aria-live="polite"></div>
@@ -1160,13 +1184,12 @@
         if (game.status === "IN_PROGRESS") {
             if (player.id === game.attackerPlayerId) t.push("⚔️");
             if (player.id === game.defenderPlayerId) t.push("🛡️");
-            if (game.takingCardsInProgress && player.id === game.takingPlayerId) t.push("📥");
+            if (game.takingCardsInProgress && player.id === game.takingPlayerId) t.push("⇩");
         } else if (game.status === "FINISHED" && player.id === game.loserPlayerId) {
             t.push("🤡");
         }
-        if (player.id === game.hostPlayerId) t.push("host");
         if (player.team !== null && player.team !== undefined) t.push(`team ${player.team}`);
-        return t.join(", ");
+        return t.join(" + ");
     }
 
     function renderSeat(el, player, game) {
@@ -1187,8 +1210,9 @@
         const fanClass = "back-fan" + (fewFan ? " back-fan--few" : "");
         const teamClass = game.players.length === 4 && player.team !== null && player.team !== undefined
             ? ` seat-title--team${player.team}` : "";
-        el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}</div>
-            <div class="muted">${roleTags(player, game)}</div>
+        const tags = roleTags(player, game);
+        const tagHtml = tags ? `<span class="seat-role-inline">${escapeHtml(tags)}</span>` : "";
+        el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${tagHtml}</div>
             <div class="${fanClass}">${backs}</div>`;
     }
 
@@ -1201,19 +1225,13 @@
         }
         const taking = game.players.find(p => p.id === game.takingPlayerId);
         const takingName = taking ? taking.name : "Defender";
-        const lm = game.legalMoves || {};
         const limit = Number(game.takeLimit) || 0;
         const n = (game.table || []).length;
-        let sub;
-        if (lm.canAttack && n < limit) {
-            sub = "Throw in matching ranks (first come), then all attackers press End round.";
-        } else if (lm.canEndRound) {
-            sub = "No more throw-ins — all attackers must press End round.";
-        } else {
-            sub = "Waiting for other attackers to confirm End round.";
-        }
+        const sub = n < limit
+            ? "Throw in matching ranks (first come), then all attackers press End round."
+            : "No more throw-ins — all attackers must press End round.";
         battleTableBanner.innerHTML =
-            `<span class="taking-lead-icon" aria-hidden="true">📥</span><strong>${escapeHtml(takingName)}</strong> is taking cards — ${sub}`;
+            `<span class="taking-lead-icon" aria-hidden="true">⇩</span><strong>${escapeHtml(takingName)}</strong> is taking cards — ${sub}`;
         battleTableBanner.classList.remove("hidden");
     }
 
@@ -1497,28 +1515,27 @@
             trumpSuitHud.innerHTML = "";
             trumpSuitHud.classList.add("hidden");
         }
-        const loser = game.players.find(p => p.id === game.loserPlayerId);
+        const host = game.players.find(p => p.id === game.hostPlayerId);
+        const othersList = game.players
+            .filter(p => p.id !== game.hostPlayerId)
+            .map(p => p.name)
+            .join(", ");
+        roleLabel.textContent = `Host: ${host ? host.name : "—"} | Players: ${othersList || "—"}`;
+
         if (game.status === "FINISHED") {
             tableAttackerLabel.textContent = "—";
             tableDefenderLabel.textContent = "—";
-            roleLabel.textContent = `You: ${me ? me.name : "—"} | 🤡 ${loser ? loser.name : "—"}`;
         } else if (game.takingCardsInProgress) {
             tableAttackerLabel.textContent = attacker ? attacker.name : "—";
             if (defender) {
                 tableDefenderLabel.innerHTML =
-                    `<span class="pill-take" title="Taking cards">📥</span><strong>${escapeHtml(defender.name)}</strong>`;
+                    `${escapeHtml(defender.name)}<span class="pill-take" title="Taking cards">⇩</span>`;
             } else {
                 tableDefenderLabel.textContent = "—";
             }
-            const atk = attacker ? attacker.name : "—";
-            const def = defender ? defender.name : "—";
-            roleLabel.textContent = `You: ${me ? me.name : "—"} | ⚔️ ${atk} | 🛡️ ${def}`;
         } else {
             tableAttackerLabel.textContent = attacker ? attacker.name : "—";
             tableDefenderLabel.textContent = defender ? defender.name : "—";
-            const atk = attacker ? attacker.name : "—";
-            const def = defender ? defender.name : "—";
-            roleLabel.textContent = `You: ${me ? me.name : "—"} | ⚔️ ${atk} | 🛡️ ${def}`;
         }
         if (openingLeadHud) {
             const emptyTable = !game.table || game.table.length === 0;
@@ -1539,11 +1556,9 @@
                 cls += ` seat-title--team${me.team}`;
             }
             mySeatTitle.className = cls;
-            mySeatTitle.textContent = `${me.name} (you)`;
-            if (myRoleLine) {
-                myRoleLine.textContent =
-                    game.status === "IN_PROGRESS" || game.status === "FINISHED" ? roleTags(me, game) : "";
-            }
+            const myTags = game.status === "IN_PROGRESS" || game.status === "FINISHED" ? roleTags(me, game) : "";
+            mySeatTitle.textContent = myTags ? `${me.name} (you) ${myTags}` : `${me.name} (you)`;
+            if (myRoleLine) myRoleLine.textContent = "";
         } else {
             mySeatTitle.className = "seat-title";
             mySeatTitle.textContent = "You";
@@ -1556,19 +1571,7 @@
         seatLeft.classList.remove("hidden");
         seatRight.classList.remove("hidden");
 
-        if (playerCount === 2) {
-            renderSeat(seatTop1, others[0], game);
-            renderSeat(seatTop2, null, game);
-            renderSeat(seatTop3, null, game);
-            renderSeat(seatLeft, null, game);
-            renderSeat(seatRight, null, game);
-        } else if (playerCount === 3) {
-            renderSeat(seatTop1, others[0], game);
-            renderSeat(seatTop2, null, game);
-            renderSeat(seatTop3, null, game);
-            renderSeat(seatLeft, others[1], game);
-            renderSeat(seatRight, null, game);
-        } else if (playerCount === 4) {
+        if (playerCount === 4) {
             /* Same physical order for everyone: you at bottom; (me+2) is teammate opposite; (me+1)/(me+3) are opponents */
             const myIdx = game.players.findIndex(p => p.id === state.playerId);
             const p = game.players;
@@ -1585,9 +1588,21 @@
             renderSeat(seatLeft, null, game);
             renderSeat(seatRight, null, game);
         } else {
-            renderSeat(seatTop1, others[0], game);
-            renderSeat(seatTop2, others[1], game);
-            renderSeat(seatTop3, others[2], game);
+            /*
+             * 2 or 3 players: keep a stable relative table order per viewer,
+             * same principle as 4-player layout (neighbors by seat index).
+             */
+            const myIdx = game.players.findIndex(p => p.id === state.playerId);
+            const p = game.players;
+            const n = playerCount;
+            if (myIdx >= 0) {
+                renderSeat(seatTop1, p[(myIdx + 1) % n], game);
+                renderSeat(seatTop2, n >= 3 ? p[(myIdx + 2) % n] : null, game);
+            } else {
+                renderSeat(seatTop1, others[0], game);
+                renderSeat(seatTop2, others[1], game);
+            }
+            renderSeat(seatTop3, null, game);
             renderSeat(seatLeft, null, game);
             renderSeat(seatRight, null, game);
         }

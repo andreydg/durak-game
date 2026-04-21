@@ -112,19 +112,28 @@ public class GameService {
     }
 
     /**
-     * Remove player from lobby, or remove whole room when host leaves / game already started.
+     * Leave room:
+     * - in lobby: remove player; remove room when host leaves or room becomes empty;
+     * - after start: host leaving removes room, non-host leaving resets game to lobby.
      * Returns true when the whole game room was removed.
      */
     public boolean leaveGame(String gameCode, String playerId) {
         String normalizedCode = normalizeCode(gameCode);
         Game game = getGame(normalizedCode);
+        boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
 
         if (game.getStatus() != GameStatus.LOBBY) {
-            games.remove(normalizedCode);
-            return true;
+            if (hostLeaving) {
+                games.remove(normalizedCode);
+                return true;
+            }
+            boolean removed = game.removePlayerAndResetToLobby(playerId);
+            if (!removed) {
+                throw new NoSuchElementException("Player not found in this game");
+            }
+            return false;
         }
 
-        boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
         boolean removed = game.removePlayerFromLobby(playerId);
         if (!removed) {
             throw new NoSuchElementException("Player not found in this game");
