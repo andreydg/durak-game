@@ -360,6 +360,28 @@
             background: rgba(255, 255, 255, 0.08);
             box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
         }
+        .battle-table-banner {
+            width: 100%;
+            text-align: center;
+            padding: 0.4rem 0.55rem 0.5rem;
+            margin: 0 0 0.4rem;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.28);
+            color: rgba(255, 255, 255, 0.96);
+            font-size: clamp(0.82rem, 2.1vw, 0.95rem);
+            line-height: 1.4;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+        }
+        .battle-table-banner .taking-lead-icon {
+            margin-right: 0.35rem;
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji, sans-serif;
+            font-size: 1.1em;
+            vertical-align: -0.08em;
+        }
+        .pill .pill-take {
+            margin-right: 0.3rem;
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji, sans-serif;
+        }
         .battle-pair {
             position: relative;
             width: 106px;
@@ -853,6 +875,7 @@
             <div class="seat top seat-top-3" id="seatTop3"></div>
             <div class="seat left" id="seatLeft"></div>
             <div class="seat center">
+                <div id="battleTableBanner" class="battle-table-banner hidden" aria-live="polite"></div>
                 <div id="battleCards" class="battle-row"></div>
             </div>
             <div class="seat right" id="seatRight"></div>
@@ -944,6 +967,7 @@
     const myRoleLine = document.getElementById("myRoleLine");
     const myHand = document.getElementById("myHand");
     const battleCards = document.getElementById("battleCards");
+    const battleTableBanner = document.getElementById("battleTableBanner");
     const actionHint = document.getElementById("actionHint");
     const defendTargetSelect = document.getElementById("defendTargetSelect");
     const lobbyGameList = document.getElementById("lobbyGameList");
@@ -1104,13 +1128,31 @@
         return `${r}${map[s] || s}`;
     }
 
+    function sortCardCodesByRank(codes) {
+        const rankOrder = { "6": 0, "7": 1, "8": 2, "9": 3, "10": 4, "J": 5, "Q": 6, "K": 7, "A": 8 };
+        const suitOrder = { C: 0, D: 1, H: 2, S: 3 };
+        return [...(codes || [])].sort((a, b) => {
+            const rankA = String(a || "").slice(0, -1).toUpperCase();
+            const rankB = String(b || "").slice(0, -1).toUpperCase();
+            const suitA = String(a || "").slice(-1).toUpperCase();
+            const suitB = String(b || "").slice(-1).toUpperCase();
+            const rankCmp = (rankOrder[rankA] ?? 999) - (rankOrder[rankB] ?? 999);
+            if (rankCmp !== 0) return rankCmp;
+            return (suitOrder[suitA] ?? 999) - (suitOrder[suitB] ?? 999);
+        });
+    }
+
     function cardImage(code) {
         return `/cards/${code}.png`;
     }
 
     function trumpSuitGlyph(suitCode) {
         const map = { S: "♠", H: "♥", D: "♦", C: "♣" };
-        return map[suitCode] || suitCode || "";
+        if (!suitCode) return "";
+        const u = String(suitCode).toUpperCase();
+        if (map[u]) return map[u];
+        const full = { HEARTS: "♥", DIAMONDS: "♦", CLUBS: "♣", SPADES: "♠" };
+        return full[u] || suitCode || "";
     }
 
     function roleTags(player, game) {
@@ -1118,8 +1160,9 @@
         if (game.status === "IN_PROGRESS") {
             if (player.id === game.attackerPlayerId) t.push("⚔️");
             if (player.id === game.defenderPlayerId) t.push("🛡️");
+            if (game.takingCardsInProgress && player.id === game.takingPlayerId) t.push("📥");
         } else if (game.status === "FINISHED" && player.id === game.loserPlayerId) {
-            t.push("loser");
+            t.push("🤡");
         }
         if (player.id === game.hostPlayerId) t.push("host");
         if (player.team !== null && player.team !== undefined) t.push(`team ${player.team}`);
@@ -1149,6 +1192,31 @@
             <div class="${fanClass}">${backs}</div>`;
     }
 
+    function updateBattleTableBanner(game) {
+        if (!battleTableBanner) return;
+        if (game.status !== "IN_PROGRESS" || !game.takingCardsInProgress) {
+            battleTableBanner.innerHTML = "";
+            battleTableBanner.classList.add("hidden");
+            return;
+        }
+        const taking = game.players.find(p => p.id === game.takingPlayerId);
+        const takingName = taking ? taking.name : "Defender";
+        const lm = game.legalMoves || {};
+        const limit = Number(game.takeLimit) || 0;
+        const n = (game.table || []).length;
+        let sub;
+        if (lm.canAttack && n < limit) {
+            sub = "Throw in matching ranks (first come), then all attackers press End round.";
+        } else if (lm.canEndRound) {
+            sub = "No more throw-ins — all attackers must press End round.";
+        } else {
+            sub = "Waiting for other attackers to confirm End round.";
+        }
+        battleTableBanner.innerHTML =
+            `<span class="taking-lead-icon" aria-hidden="true">📥</span><strong>${escapeHtml(takingName)}</strong> is taking cards — ${sub}`;
+        battleTableBanner.classList.remove("hidden");
+    }
+
     function renderBattle(game) {
         battleCards.innerHTML = "";
         if (!game.table || game.table.length === 0) {
@@ -1169,7 +1237,7 @@
 
     function renderMyHand(game, me) {
         myHand.innerHTML = "";
-        const hand = me?.hand || [];
+        const hand = sortCardCodesByRank(me?.hand || []);
         for (const code of hand) {
             const btn = document.createElement("button");
             btn.type = "button";
@@ -1265,15 +1333,7 @@
         endRoundBtn.disabled = !lm.canEndRound;
 
         if (game.takingCardsInProgress) {
-            const taking = game.players.find(p => p.id === game.takingPlayerId);
-            const takingName = taking ? taking.name : "Defender";
-            if (lm.canAttack) {
-                actionHint.textContent = `${takingName} is taking — throw in matching ranks, then press End round.`;
-            } else if (lm.canEndRound) {
-                actionHint.textContent = `${takingName} is taking — no more throw-ins, press End round.`;
-            } else {
-                actionHint.textContent = `${takingName} is taking cards — waiting for attackers to finish throw-ins.`;
-            }
+            actionHint.textContent = "See the message on the table — use buttons or drag cards.";
             return;
         }
 
@@ -1429,21 +1489,30 @@
             talonStack.innerHTML = "";
         }
         if (trumpSuitHud && game.trumpSuit) {
-            trumpSuitHud.textContent = trumpSuitGlyph(game.trumpSuit);
+            const sym = trumpSuitGlyph(game.trumpSuit);
+            trumpSuitHud.innerHTML = `<span class="pill-role" aria-hidden="true">${sym}</span>`;
+            trumpSuitHud.title = `Trump ${sym}`;
             trumpSuitHud.classList.remove("hidden");
         } else if (trumpSuitHud) {
+            trumpSuitHud.innerHTML = "";
             trumpSuitHud.classList.add("hidden");
         }
         const loser = game.players.find(p => p.id === game.loserPlayerId);
-        const taking = game.players.find(p => p.id === game.takingPlayerId);
         if (game.status === "FINISHED") {
             tableAttackerLabel.textContent = "—";
             tableDefenderLabel.textContent = "—";
-            roleLabel.textContent = `You: ${me ? me.name : "—"} | Loser: ${loser ? loser.name : "—"}`;
+            roleLabel.textContent = `You: ${me ? me.name : "—"} | 🤡 ${loser ? loser.name : "—"}`;
         } else if (game.takingCardsInProgress) {
             tableAttackerLabel.textContent = attacker ? attacker.name : "—";
-            tableDefenderLabel.textContent = defender ? defender.name : "—";
-            roleLabel.textContent = `You: ${me ? me.name : "—"} | ${taking ? taking.name : "Defender"} is taking cards`;
+            if (defender) {
+                tableDefenderLabel.innerHTML =
+                    `<span class="pill-take" title="Taking cards">📥</span><strong>${escapeHtml(defender.name)}</strong>`;
+            } else {
+                tableDefenderLabel.textContent = "—";
+            }
+            const atk = attacker ? attacker.name : "—";
+            const def = defender ? defender.name : "—";
+            roleLabel.textContent = `You: ${me ? me.name : "—"} | ⚔️ ${atk} | 🛡️ ${def}`;
         } else {
             tableAttackerLabel.textContent = attacker ? attacker.name : "—";
             tableDefenderLabel.textContent = defender ? defender.name : "—";
@@ -1524,6 +1593,7 @@
         }
 
         renderBattle(game);
+        updateBattleTableBanner(game);
         renderMyHand(game, me);
         renderActionState(game);
         syncLobbyListPolling();

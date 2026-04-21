@@ -289,6 +289,11 @@ public class Game {
         return takingCardsInProgress ? getDefenderPlayerId() : null;
     }
 
+    /** Max cards on table during take phase (defender hand size when take started). */
+    public int getTakeLimit() {
+        return takingCardsInProgress ? takeLimit : 0;
+    }
+
     /**
      * Computes which actions and card plays are legal for {@code viewerPlayerId},
      * matching the checks in {@link #attack}, {@link #defend}, {@link #transfer}, etc.
