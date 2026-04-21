@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -110,6 +111,31 @@ public class GameService {
         return game;
     }
 
+    /**
+     * Remove player from lobby, or remove whole room when host leaves / game already started.
+     * Returns true when the whole game room was removed.
+     */
+    public boolean leaveGame(String gameCode, String playerId) {
+        String normalizedCode = normalizeCode(gameCode);
+        Game game = getGame(normalizedCode);
+
+        if (game.getStatus() != GameStatus.LOBBY) {
+            games.remove(normalizedCode);
+            return true;
+        }
+
+        boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
+        boolean removed = game.removePlayerFromLobby(playerId);
+        if (!removed) {
+            throw new NoSuchElementException("Player not found in this game");
+        }
+        if (hostLeaving || game.getPlayers().isEmpty()) {
+            games.remove(normalizedCode);
+            return true;
+        }
+        return false;
+    }
+
     public int getMaxPlayers() {
         return MAX_PLAYERS;
     }
@@ -127,9 +153,13 @@ public class GameService {
                             .map(Player::getName)
                             .findFirst()
                             .orElse("?");
+                    List<String> playerNames = g.getPlayers().stream()
+                            .map(Player::getName)
+                            .toList();
                     return new LobbyGameSummary(
                             g.getCode(),
                             hostName,
+                            playerNames,
                             g.getPlayers().size(),
                             MAX_PLAYERS
                     );

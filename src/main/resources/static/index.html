@@ -1004,7 +1004,7 @@
                 <li class="${rowClass}">
                     <div class="lobby-list-meta">
                         <span class="lobby-list-code">${escapeHtml(r.code)}</span>
-                        <span class="muted">Host: ${escapeHtml(r.hostName)} · ${r.playerCount}/${r.maxPlayers} players</span>
+                        <span class="muted">${(r.playerNames || []).map(escapeHtml).join(", ")} · ${r.playerCount}/${r.maxPlayers} players</span>
                     </div>
                     ${actionCol}
                 </li>`;
@@ -1201,10 +1201,12 @@
         return p.team;
     }
 
-    /** In 4p teams, “attacking side” is everyone not on the defender’s team. */
+    /** In 4p teams, attacking side is opposite team; otherwise all non-defenders. */
     function onAttackingSide(game, viewerId) {
         const defId = game?.defenderPlayerId;
-        if (!game || game.players?.length !== 4 || !defId || !viewerId) return false;
+        if (!game || !defId || !viewerId) return false;
+        if (viewerId === defId) return false;
+        if (game.players?.length !== 4) return true;
         const dt = playerTeam(game, defId);
         const vt = playerTeam(game, viewerId);
         return dt != null && vt != null && vt !== dt;
@@ -1261,6 +1263,19 @@
         defendBtn.disabled = !canDefendSelected;
         takeBtn.disabled = !lm.canTake;
         endRoundBtn.disabled = !lm.canEndRound;
+
+        if (game.takingCardsInProgress) {
+            const taking = game.players.find(p => p.id === game.takingPlayerId);
+            const takingName = taking ? taking.name : "Defender";
+            if (lm.canAttack) {
+                actionHint.textContent = `${takingName} is taking — throw in matching ranks, then press End round.`;
+            } else if (lm.canEndRound) {
+                actionHint.textContent = `${takingName} is taking — no more throw-ins, press End round.`;
+            } else {
+                actionHint.textContent = `${takingName} is taking cards — waiting for attackers to finish throw-ins.`;
+            }
+            return;
+        }
 
         if (lm.canEndRound) {
             actionHint.textContent = lm.canAttack
@@ -1420,10 +1435,15 @@
             trumpSuitHud.classList.add("hidden");
         }
         const loser = game.players.find(p => p.id === game.loserPlayerId);
+        const taking = game.players.find(p => p.id === game.takingPlayerId);
         if (game.status === "FINISHED") {
             tableAttackerLabel.textContent = "—";
             tableDefenderLabel.textContent = "—";
             roleLabel.textContent = `You: ${me ? me.name : "—"} | Loser: ${loser ? loser.name : "—"}`;
+        } else if (game.takingCardsInProgress) {
+            tableAttackerLabel.textContent = attacker ? attacker.name : "—";
+            tableDefenderLabel.textContent = defender ? defender.name : "—";
+            roleLabel.textContent = `You: ${me ? me.name : "—"} | ${taking ? taking.name : "Defender"} is taking cards`;
         } else {
             tableAttackerLabel.textContent = attacker ? attacker.name : "—";
             tableDefenderLabel.textContent = defender ? defender.name : "—";
@@ -1517,6 +1537,10 @@
             render();
             if (showMessage) log("Game refreshed.");
         } catch (err) {
+            if (err.message === "Game not found") {
+                clearSession();
+                return;
+            }
             log(`Refresh failed: ${err.message}`);
         }
     }
@@ -1590,7 +1614,19 @@
         await runAction("Join game", () => performJoin(null));
     });
 
-    document.getElementById("leaveBtn").addEventListener("click", clearSession);
+    document.getElementById("leaveBtn").addEventListener("click", async () => {
+        const code = state.gameCode;
+        const playerId = state.playerId;
+        try {
+            if (code && playerId) {
+                await api(`/api/games/${code}/leave`, "POST", {playerId});
+            }
+        } catch (err) {
+            log(`Leave notify failed: ${err.message}`);
+        } finally {
+            clearSession();
+        }
+    });
     if (helpToggleBtn) {
         helpToggleBtn.addEventListener("click", () => {
             state.showGameplayHelp = !state.showGameplayHelp;

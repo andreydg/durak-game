@@ -24,6 +24,9 @@ public class Game {
     private final Deque<Card> talon = new ArrayDeque<>();
     private final List<AttackEntry> table = new ArrayList<>();
     private final Set<Rank> tableRanks = new HashSet<>();
+    private final Set<String> endRoundApprovals = new HashSet<>();
+    private boolean takingCardsInProgress = false;
+    private int takeLimit = 0;
 
     private GameStatus status = GameStatus.LOBBY;
     private Suit trumpSuit;
@@ -57,6 +60,11 @@ public class Game {
         return player;
     }
 
+    public synchronized boolean removePlayerFromLobby(String playerId) {
+        ensureLobby();
+        return players.removeIf(player -> player.getId().equals(playerId));
+    }
+
     public synchronized void start(String playerId) {
         ensureLobby();
         if (!Objects.equals(hostPlayerId, playerId)) {
@@ -75,21 +83,29 @@ public class Game {
 
     public synchronized void attack(String playerId, Card card) {
         ensureInProgress();
-        int defenderHand = players.get(defenderIndex).handSize();
-        long undefended = table.stream().filter(e -> !e.isDefended()).count();
-        if (undefended >= defenderHand) {
-            throw new IllegalStateException("Defender cannot cover more undefended attacks");
-        }
-
+        endRoundApprovals.clear();
         Player attacker = getPlayerById(playerId);
         int attackerSeat = indexOfPlayer(playerId);
-        if (attackerSeat == defenderIndex) {
+        if (attackerSeat == defenderIndex || isTeammate(attackerSeat, defenderIndex)) {
             throw new IllegalStateException("Defender cannot attack");
         }
-        if (isTeammate(attackerSeat, defenderIndex)) {
-            throw new IllegalStateException("Cannot attack your teammate");
+
+        if (takingCardsInProgress) {
+            if (!isAttackingSideSeat(attackerSeat)) {
+                throw new IllegalStateException("Only attacking-side players can throw in");
+            }
+            if (table.size() >= takeLimit) {
+                throw new IllegalStateException("Cannot throw in more cards");
+            }
+        } else {
+            int defenderHand = players.get(defenderIndex).handSize();
+            long undefended = table.stream().filter(e -> !e.isDefended()).count();
+            if (undefended >= defenderHand) {
+                throw new IllegalStateException("Defender cannot cover more undefended attacks");
+            }
         }
-        if (players.size() == 4 && table.isEmpty() && attackerSeat != attackerIndex) {
+
+        if (!takingCardsInProgress && players.size() == 4 && table.isEmpty() && attackerSeat != attackerIndex) {
             throw new IllegalStateException("Only the opening attacker may play the first card this bout");
         }
         if (!attacker.removeCard(card)) {
@@ -107,6 +123,7 @@ public class Game {
     public synchronized void defend(String playerId, Card attackCard, Card defenseCard) {
         ensureInProgress();
         ensureDefender(playerId);
+        endRoundApprovals.clear();
         Player defender = getPlayerById(playerId);
         if (!defender.removeCard(defenseCard)) {
             throw new IllegalStateException("Card is not in defender hand");
@@ -129,6 +146,7 @@ public class Game {
     public synchronized void transfer(String playerId, Card transferCard) {
         ensureInProgress();
         ensureDefender(playerId);
+        endRoundApprovals.clear();
         if (table.isEmpty()) {
             throw new IllegalStateException("Cannot transfer before first attack");
         }
@@ -162,28 +180,18 @@ public class Game {
     public synchronized void takeCards(String playerId) {
         ensureInProgress();
         ensureDefender(playerId);
+        endRoundApprovals.clear();
+        if (takingCardsInProgress) {
+            throw new IllegalStateException("Defender is already taking");
+        }
         if (table.isEmpty()) {
             throw new IllegalStateException("No cards on table");
         }
         if (table.stream().allMatch(AttackEntry::isDefended)) {
             throw new IllegalStateException("All attacks are defended; end the round instead");
         }
-
-        Player defender = players.get(defenderIndex);
-        List<Card> allCards = new ArrayList<>();
-        for (AttackEntry entry : table) {
-            allCards.add(entry.getAttackCard());
-            if (entry.getDefenseCard() != null) {
-                allCards.add(entry.getDefenseCard());
-            }
-        }
-        defender.addCards(allCards);
-        clearTable();
-
-        refillHandsAfterRound();
-        attackerIndex = nextEligibleIndex(defenderIndex);
-        defenderIndex = nextEligibleIndex(attackerIndex);
-        updateFinishState();
+        takingCardsInProgress = true;
+        takeLimit = players.get(defenderIndex).handSize();
     }
 
     public synchronized void endRound(String playerId) {
@@ -191,21 +199,32 @@ public class Game {
         if (table.isEmpty()) {
             throw new IllegalStateException("No active bout");
         }
-        boolean allDefended = table.stream().allMatch(AttackEntry::isDefended);
-        if (!allDefended) {
-            throw new IllegalStateException("Not all attack cards are defended");
-        }
-        boolean isDefender = Objects.equals(getDefenderPlayerId(), playerId);
-        boolean isAttacker = Objects.equals(getAttackerPlayerId(), playerId);
-        if (!isDefender && !isAttacker) {
-            throw new IllegalStateException("Only attacker or defender can end this bout");
+        int callerSeat = indexOfPlayer(playerId);
+        boolean isAttackingSide = isAttackingSideSeat(callerSeat);
+        if (!isAttackingSide) {
+            throw new IllegalStateException("Only attacking-side players can end this bout");
         }
 
-        clearTable();
-        refillHandsAfterRound();
-        attackerIndex = defenderIndex;
-        defenderIndex = nextEligibleIndex(attackerIndex);
-        updateFinishState();
+        if (!takingCardsInProgress) {
+            boolean allDefended = table.stream().allMatch(AttackEntry::isDefended);
+            if (!allDefended) {
+                throw new IllegalStateException("Not all attack cards are defended");
+            }
+        }
+        endRoundApprovals.add(playerId);
+        if (!allRequiredEndRoundApprovalsPresent()) {
+            return;
+        }
+
+        if (takingCardsInProgress) {
+            finalizeTakeCardsRound();
+        } else {
+            clearTable();
+            refillHandsAfterRound();
+            attackerIndex = defenderIndex;
+            defenderIndex = nextEligibleIndex(attackerIndex);
+            updateFinishState();
+        }
     }
 
     public String getCode() {
@@ -262,6 +281,14 @@ public class Game {
         return loserPlayerId;
     }
 
+    public boolean isTakingCardsInProgress() {
+        return takingCardsInProgress;
+    }
+
+    public String getTakingPlayerId() {
+        return takingCardsInProgress ? getDefenderPlayerId() : null;
+    }
+
     /**
      * Computes which actions and card plays are legal for {@code viewerPlayerId},
      * matching the checks in {@link #attack}, {@link #defend}, {@link #transfer}, etc.
@@ -299,25 +326,35 @@ public class Game {
         boolean isDefenderSeat = viewerSeat == defenderIndex;
         boolean isAttackerSeat = viewerSeat == attackerIndex;
 
-        int defenderHand = players.get(defenderIndex).handSize();
-        long undefended = table.stream().filter(e -> !e.isDefended()).count();
-        boolean openingLeadReserved =
-                players.size() == 4 && table.isEmpty() && viewerSeat != attackerIndex;
         List<String> attackable = new ArrayList<>();
-        if (!isDefenderSeat
-                && !isTeammate(viewerSeat, defenderIndex)
-                && undefended < defenderHand
-                && !openingLeadReserved) {
-            for (Card card : viewer.getHand()) {
-                if (table.isEmpty() || tableRanks.contains(card.rank())) {
-                    attackable.add(card.code());
+        if (takingCardsInProgress) {
+            if (isAttackingSideSeat(viewerSeat) && table.size() < takeLimit) {
+                for (Card card : viewer.getHand()) {
+                    if (table.isEmpty() || tableRanks.contains(card.rank())) {
+                        attackable.add(card.code());
+                    }
+                }
+            }
+        } else {
+            int defenderHand = players.get(defenderIndex).handSize();
+            long undefended = table.stream().filter(e -> !e.isDefended()).count();
+            boolean openingLeadReserved =
+                    players.size() == 4 && table.isEmpty() && viewerSeat != attackerIndex;
+            if (!isDefenderSeat
+                    && !isTeammate(viewerSeat, defenderIndex)
+                    && undefended < defenderHand
+                    && !openingLeadReserved) {
+                for (Card card : viewer.getHand()) {
+                    if (table.isEmpty() || tableRanks.contains(card.rank())) {
+                        attackable.add(card.code());
+                    }
                 }
             }
         }
         boolean canAttack = !attackable.isEmpty();
 
         List<String> transferable = new ArrayList<>();
-        if (isDefenderSeat && !table.isEmpty()) {
+        if (!takingCardsInProgress && isDefenderSeat && !table.isEmpty()) {
             boolean anyDefended = table.stream().anyMatch(AttackEntry::isDefended);
             if (!anyDefended) {
                 Rank initialRank = table.getFirst().getAttackCard().rank();
@@ -337,12 +374,16 @@ public class Game {
 
         boolean allDefended = !table.isEmpty() && table.stream().allMatch(AttackEntry::isDefended);
         /* Take pile only while something is still undefended; once all are beaten, round ends via End round. */
-        boolean canTake = isDefenderSeat && !table.isEmpty() && !allDefended;
-        boolean canEndRound = (isDefenderSeat || isAttackerSeat) && allDefended;
+        boolean canTake = !takingCardsInProgress && isDefenderSeat && !table.isEmpty() && !allDefended;
+        boolean isAttackingSideSeat = isAttackingSideSeat(viewerSeat);
+        boolean canEndRound = (takingCardsInProgress || allDefended)
+                && !isDefenderSeat
+                && isAttackingSideSeat
+                && !endRoundApprovals.contains(viewerPlayerId);
 
         Map<String, List<String>> defensesByAttack = new LinkedHashMap<>();
         boolean canDefend = false;
-        if (isDefenderSeat) {
+        if (!takingCardsInProgress && isDefenderSeat) {
             for (AttackEntry entry : table) {
                 if (entry.isDefended()) {
                     continue;
@@ -450,6 +491,26 @@ public class Game {
     private void clearTable() {
         table.clear();
         tableRanks.clear();
+        endRoundApprovals.clear();
+        takingCardsInProgress = false;
+        takeLimit = 0;
+    }
+
+    private void finalizeTakeCardsRound() {
+        Player defender = players.get(defenderIndex);
+        List<Card> allCards = new ArrayList<>();
+        for (AttackEntry entry : table) {
+            allCards.add(entry.getAttackCard());
+            if (entry.getDefenseCard() != null) {
+                allCards.add(entry.getDefenseCard());
+            }
+        }
+        defender.addCards(allCards);
+        clearTable();
+        refillHandsAfterRound();
+        attackerIndex = nextEligibleIndex(defenderIndex);
+        defenderIndex = nextEligibleIndex(attackerIndex);
+        updateFinishState();
     }
 
     private void refillHandsAfterRound() {
@@ -483,6 +544,28 @@ public class Game {
         Integer t1 = players.get(firstIndex).getTeam();
         Integer t2 = players.get(secondIndex).getTeam();
         return t1 != null && Objects.equals(t1, t2);
+    }
+
+    private boolean isAttackingSideSeat(int seatIndex) {
+        return seatIndex != defenderIndex && !isTeammate(seatIndex, defenderIndex);
+    }
+
+    private boolean allRequiredEndRoundApprovalsPresent() {
+        for (int i = 0; i < players.size(); i++) {
+            Player p = players.get(i);
+            if (isOutOfGame(p)) {
+                continue;
+            }
+            boolean required = isAttackingSideSeat(i);
+            if (required && !endRoundApprovals.contains(p.getId())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isOutOfGame(Player player) {
+        return talon.isEmpty() && player.handSize() == 0;
     }
 
     private Player getPlayerById(String playerId) {

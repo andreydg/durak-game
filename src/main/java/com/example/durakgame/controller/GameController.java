@@ -105,4 +105,10 @@ public class GameController {
         GameWebSocketHandler.broadcastGameUpdated(code);
         return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
+
+    @PostMapping("/{code}/leave")
+    public void leaveGame(@PathVariable String code, @Valid @RequestBody PlayerActionRequest request) {
+        gameService.leaveGame(code, request.playerId());
+        GameWebSocketHandler.broadcastGameUpdated(code);
+    }
 }
