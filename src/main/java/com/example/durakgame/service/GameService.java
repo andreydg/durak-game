@@ -1,10 +1,13 @@
 package com.example.durakgame.service;
 
 import com.example.durakgame.controller.dto.LobbyGameSummary;
+import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Player;
-import com.example.durakgame.model.Card;
+import com.example.durakgame.model.ViewerLegalMoves;
+import com.example.durakgame.service.autoplay.AutoPlayAction;
+import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,9 +29,11 @@ public class GameService {
 
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
+    private final AutoPlayDecisionEngine autoPlayDecisionEngine;
 
-    public GameService(GameStore gameStore) {
+    public GameService(GameStore gameStore, AutoPlayDecisionEngine autoPlayDecisionEngine) {
         this.gameStore = gameStore;
+        this.autoPlayDecisionEngine = autoPlayDecisionEngine;
     }
 
     public Game createGame(String hostName) {
@@ -61,6 +66,28 @@ public class GameService {
         return joined;
     }
 
+    public Player addBot(String gameCode, String hostPlayerId, String botName) {
+        Game game = getGame(gameCode);
+        if (!Objects.equals(game.getHostPlayerId(), hostPlayerId)) {
+            throw new IllegalStateException("Only host can add bots");
+        }
+        List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
+        String resolved;
+        if (botName == null || botName.trim().isEmpty()) {
+            resolved = GuestNameGenerator.randomBotNameDistinctFrom(taken);
+        } else {
+            String base = resolveDisplayName(botName, List.of());
+            String withSuffix = base.endsWith(" Elektronik") ? base : (base + " Elektronik");
+            resolved = resolveDisplayName(withSuffix, taken);
+        }
+        Player bot = game.addPlayer(resolved, MAX_PLAYERS, true);
+        if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
+            game.start(game.getHostPlayerId());
+        }
+        runAutoPlayLoop(game);
+        return bot;
+    }
+
     /**
      * Non-blank trimmed names must be 2–24 chars; blank picks a funny guest name
      * unique for join (when {@code alreadyTaken} is non-empty).
@@ -85,6 +112,7 @@ public class GameService {
     public Game startGame(String gameCode, String playerId) {
         Game game = getGame(gameCode);
         game.start(playerId);
+        runAutoPlayLoop(game);
         gameStore.save(game);
         log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), playerId, game.getPlayers().size());
         return game;
@@ -93,6 +121,7 @@ public class GameService {
     public Game attack(String gameCode, String playerId, Card card) {
         Game game = getGame(gameCode);
         game.attack(playerId, card);
+        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=attack playerId={} card={} tableSize={}",
                 game.getCode(), playerId, card.code(), game.getTable().size());
@@ -102,6 +131,7 @@ public class GameService {
     public Game defend(String gameCode, String playerId, Card attackCard, Card defendCard) {
         Game game = getGame(gameCode);
         game.defend(playerId, attackCard, defendCard);
+        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=defend playerId={} attackCard={} defenseCard={} tableSize={}",
                 game.getCode(), playerId, attackCard.code(), defendCard.code(), game.getTable().size());
@@ -111,6 +141,7 @@ public class GameService {
     public Game transfer(String gameCode, String playerId, Card card) {
         Game game = getGame(gameCode);
         game.transfer(playerId, card);
+        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=transfer playerId={} card={} defenderPlayerId={} tableSize={}",
                 game.getCode(), playerId, card.code(), game.getDefenderPlayerId(), game.getTable().size());
@@ -120,6 +151,7 @@ public class GameService {
     public Game takeCards(String gameCode, String playerId) {
         Game game = getGame(gameCode);
         game.takeCards(playerId);
+        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=take_cards playerId={} takeLimit={} tableSize={}",
                 game.getCode(), playerId, game.getTakeLimit(), game.getTable().size());
@@ -130,6 +162,7 @@ public class GameService {
         Game game = getGame(gameCode);
         GameStatus before = game.getStatus();
         game.endRound(playerId);
+        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
                 game.getCode(), playerId, before, game.getStatus(), game.getTable().size());
@@ -228,5 +261,59 @@ public class GameService {
 
     private String normalizeCode(String code) {
         return code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private void runAutoPlayLoop(Game game) {
+        for (int i = 0; i < 48; i++) {
+            if (game.getStatus() != GameStatus.IN_PROGRESS) {
+                return;
+            }
+            boolean advanced = false;
+            for (Player player : game.getPlayers()) {
+                if (!player.isBot()) {
+                    continue;
+                }
+                ViewerLegalMoves legalMoves = game.computeViewerLegalMoves(player.getId());
+                AutoPlayAction action = autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
+                if (!isLegal(action, legalMoves)) {
+                    continue;
+                }
+                try {
+                    applyAction(game, player.getId(), action);
+                    advanced = true;
+                    break;
+                } catch (RuntimeException ignored) {
+                    // Ignore bad model decisions that became stale between compute and apply.
+                }
+            }
+            if (!advanced) {
+                return;
+            }
+        }
+    }
+
+    private boolean isLegal(AutoPlayAction action, ViewerLegalMoves legalMoves) {
+        if (action == null) {
+            return false;
+        }
+        return switch (action.type()) {
+            case ATTACK -> legalMoves.canAttack() && legalMoves.attackableCardCodes().contains(action.cardCode());
+            case DEFEND -> legalMoves.canDefend()
+                    && legalMoves.defensesByAttackCard().containsKey(action.attackCardCode())
+                    && legalMoves.defensesByAttackCard().get(action.attackCardCode()).contains(action.cardCode());
+            case TRANSFER -> legalMoves.canTransfer() && legalMoves.transferableCardCodes().contains(action.cardCode());
+            case TAKE -> legalMoves.canTake();
+            case END_ROUND -> legalMoves.canEndRound();
+        };
+    }
+
+    private void applyAction(Game game, String playerId, AutoPlayAction action) {
+        switch (action.type()) {
+            case ATTACK -> game.attack(playerId, Card.fromCode(action.cardCode()));
+            case DEFEND -> game.defend(playerId, Card.fromCode(action.attackCardCode()), Card.fromCode(action.cardCode()));
+            case TRANSFER -> game.transfer(playerId, Card.fromCode(action.cardCode()));
+            case TAKE -> game.takeCards(playerId);
+            case END_ROUND -> game.endRound(playerId);
+        }
     }
 }

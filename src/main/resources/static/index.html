@@ -302,6 +302,23 @@
             font-weight: 600;
             white-space: nowrap;
         }
+        .ai-badge {
+            margin-left: 0.35rem;
+            padding: 0.08rem 0.38rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.55);
+            background: rgba(255,255,255,0.14);
+            color: #fef3c7;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            vertical-align: middle;
+        }
+        .seat.bottom.my-hand .ai-badge {
+            border-color: #d7c6ab;
+            background: #fff8ea;
+            color: #8b3a2f;
+        }
         .seat:not(.my-hand) .seat-title {
             color: #fff;
             text-shadow: 0 1px 2px rgba(0,0,0,0.45);
@@ -868,6 +885,7 @@
             <h2 style="margin:0;">Game <span id="gameCodeLabel"></span></h2>
             <span>Status: <strong id="statusLabel"></strong></span>
             <button id="startBtn">Start</button>
+            <button id="addBotBtn">Add bot</button>
             <button id="leaveBtn">Leave</button>
         </div>
         <div class="muted" id="roleLabel"></div>
@@ -1007,6 +1025,7 @@
     const transferBtn = document.getElementById("transferBtn");
     const takeBtn = document.getElementById("takeBtn");
     const endRoundBtn = document.getElementById("endRoundBtn");
+    const addBotBtn = document.getElementById("addBotBtn");
 
     function log(message) {
         if (!debugUi || !messages) return;
@@ -1240,8 +1259,9 @@
         const teamClass = game.players.length === 4 && player.team !== null && player.team !== undefined
             ? ` seat-title--team${player.team}` : "";
         const tags = roleTags(player, game);
+        const aiBadge = player.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
         const tagHtml = tags ? `<span class="seat-role-inline">${escapeHtml(tags)}</span>` : "";
-        el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${tagHtml}</div>
+        el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}${tagHtml}</div>
             <div class="${fanClass}">${backs}</div>`;
     }
 
@@ -1550,6 +1570,15 @@
             .map(p => p.name)
             .join(", ");
         roleLabel.textContent = `Host: ${host ? host.name : "—"} | Players: ${othersList || "—"}`;
+        if (addBotBtn) {
+            const canAddBot = Boolean(
+                me &&
+                game.status === "LOBBY" &&
+                game.hostPlayerId === state.playerId &&
+                game.playerCount < game.maxPlayers
+            );
+            addBotBtn.disabled = !canAddBot;
+        }
 
         if (game.status === "FINISHED") {
             tableAttackerLabel.textContent = "—";
@@ -1586,7 +1615,9 @@
             }
             mySeatTitle.className = cls;
             const myTags = game.status === "IN_PROGRESS" || game.status === "FINISHED" ? roleTags(me, game) : "";
-            mySeatTitle.textContent = myTags ? `${me.name} (you) ${myTags}` : `${me.name} (you)`;
+            const myAi = me.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
+            const myTagHtml = myTags ? ` <span class="seat-role-inline">${escapeHtml(myTags)}</span>` : "";
+            mySeatTitle.innerHTML = `${escapeHtml(me.name)} (you)${myAi}${myTagHtml}`;
             if (myRoleLine) myRoleLine.textContent = "";
         } else {
             mySeatTitle.className = "seat-title";
@@ -1828,6 +1859,14 @@
         state.game = await api(`/api/games/${state.gameCode}/end-round`, "POST", {playerId: state.playerId});
         state.selectedHandCard = null;
     }));
+
+    if (addBotBtn) {
+        addBotBtn.addEventListener("click", async () => runAction("Add bot", async () => {
+            state.game = await api(`/api/games/${state.gameCode}/bots`, "POST", {
+                playerId: state.playerId
+            });
+        }));
+    }
 
     defendTargetSelect.addEventListener("change", () => {
         if (state.game) renderActionState(state.game);

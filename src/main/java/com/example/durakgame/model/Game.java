@@ -85,6 +85,10 @@ public class Game implements Serializable {
     }
 
     public synchronized Player addPlayer(String playerName, int maxPlayers) {
+        return addPlayer(playerName, maxPlayers, false);
+    }
+
+    public synchronized Player addPlayer(String playerName, int maxPlayers, boolean isBot) {
         ensureLobby();
 
         if (players.size() >= maxPlayers) {
@@ -97,7 +101,7 @@ public class Game implements Serializable {
             throw new IllegalStateException("Player name is already taken in this game");
         }
 
-        Player player = new Player(playerName);
+        Player player = new Player(playerName, isBot);
         players.add(player);
         touch();
         return player;

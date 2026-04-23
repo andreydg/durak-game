@@ -66,6 +66,7 @@ public record GameResponse(
     public record PlayerSummary(
             String id,
             String name,
+            boolean bot,
             Instant joinedAt,
             Integer team,
             int handSize,
@@ -78,6 +79,7 @@ public record GameResponse(
             return new PlayerSummary(
                     player.getId(),
                     player.getName(),
+                    player.isBot(),
                     player.getJoinedAt(),
                     player.getTeam(),
                     fullHand.size(),

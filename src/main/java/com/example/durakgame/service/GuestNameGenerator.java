@@ -42,4 +42,18 @@ public final class GuestNameGenerator {
         }
         return "Guest" + (1000 + RANDOM.nextInt(899_000));
     }
+
+    /**
+     * Bot display name based on a random first name with "Elektronik" suffix.
+     */
+    public static String randomBotNameDistinctFrom(List<String> takenFrom) {
+        for (int attempt = 0; attempt < 120; attempt++) {
+            String candidate = randomName() + " Elektronik";
+            boolean clash = takenFrom.stream().anyMatch(t -> t.equalsIgnoreCase(candidate));
+            if (!clash) {
+                return candidate;
+            }
+        }
+        return "Elektronik-" + (1000 + RANDOM.nextInt(899_000));
+    }
 }

@@ -2,6 +2,7 @@ package com.example.durakgame.controller;
 
 import com.example.durakgame.controller.dto.CreateGameRequest;
 import com.example.durakgame.controller.dto.CreateGameResponse;
+import com.example.durakgame.controller.dto.AddBotRequest;
 import com.example.durakgame.controller.dto.AttackRequest;
 import com.example.durakgame.controller.dto.DefendRequest;
 import com.example.durakgame.controller.dto.GameResponse;
@@ -52,6 +53,14 @@ public class GameController {
                 GameResponse.from(game, gameService.getMaxPlayers(), joined.getId()),
                 joined.getId()
         );
+    }
+
+    @PostMapping("/{code}/bots")
+    public GameResponse addBot(@PathVariable String code, @Valid @RequestBody AddBotRequest request) {
+        gameService.addBot(code, request.playerId(), request.botName());
+        Game game = gameService.getGame(code);
+        GameWebSocketHandler.broadcastGameUpdated(code);
+        return GameResponse.from(game, gameService.getMaxPlayers(), request.playerId());
     }
 
     @GetMapping("/{code}")
@@ -111,4 +120,5 @@ public class GameController {
         gameService.leaveGame(code, request.playerId());
         GameWebSocketHandler.broadcastGameUpdated(code);
     }
+
 }
