@@ -1,6 +1,8 @@
 package com.example.durakgame.model;
 
-public class AttackEntry {
+import java.io.Serializable;
+
+public class AttackEntry implements Serializable {
     private final Card attackCard;
     private final String attackerId;
     private Card defenseCard;

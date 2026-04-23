@@ -1,8 +1,9 @@
 package com.example.durakgame.model;
 
+import java.io.Serializable;
 import java.util.Locale;
 
-public record Card(Rank rank, Suit suit) {
+public record Card(Rank rank, Suit suit) implements Serializable {
     public String code() {
         return rank.code() + suit.code();
     }

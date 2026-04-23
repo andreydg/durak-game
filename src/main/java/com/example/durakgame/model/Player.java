@@ -1,12 +1,13 @@
 package com.example.durakgame.model;
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
-public class Player {
+public class Player implements Serializable {
     private final String id;
     private final String name;
     private final Instant joinedAt;

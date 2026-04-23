@@ -5,42 +5,46 @@ import com.example.durakgame.model.Game;
 import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Player;
 import com.example.durakgame.model.Card;
+import com.example.durakgame.service.store.GameStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class GameService {
+    private static final Logger log = LoggerFactory.getLogger(GameService.class);
     private static final String CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final int CODE_LENGTH = 6;
     private static final int MAX_PLAYERS = 4;
 
     private final SecureRandom random = new SecureRandom();
-    private final Map<String, Game> games = new ConcurrentHashMap<>();
+    private final GameStore gameStore;
+
+    public GameService(GameStore gameStore) {
+        this.gameStore = gameStore;
+    }
 
     public Game createGame(String hostName) {
         String resolved = resolveDisplayName(hostName, List.of());
         Player host = new Player(resolved);
         String code = generateUniqueCode();
         Game game = new Game(code, host);
-        games.put(code, game);
+        gameStore.save(game);
+        log.info("game_created code={} hostPlayerId={} hostName={}", game.getCode(), host.getId(), host.getName());
         return game;
     }
 
     public Game getGame(String gameCode) {
         String normalizedCode = normalizeCode(gameCode);
-        Game game = games.get(normalizedCode);
-        if (game == null) {
-            throw new NoSuchElementException("Game not found");
-        }
-        return game;
+        return gameStore.findByCode(normalizedCode)
+                .orElseThrow(() -> new NoSuchElementException("Game not found"));
     }
 
     public Player joinGame(String gameCode, String playerName) {
@@ -50,7 +54,10 @@ public class GameService {
         Player joined = game.addPlayer(resolved, MAX_PLAYERS);
         if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
             game.start(game.getHostPlayerId());
+            log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), game.getHostPlayerId(), game.getPlayers().size());
         }
+        gameStore.save(game);
+        log.info("game_joined code={} playerId={} playerName={} players={}", game.getCode(), joined.getId(), joined.getName(), game.getPlayers().size());
         return joined;
     }
 
@@ -78,36 +85,57 @@ public class GameService {
     public Game startGame(String gameCode, String playerId) {
         Game game = getGame(gameCode);
         game.start(playerId);
+        gameStore.save(game);
+        log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), playerId, game.getPlayers().size());
         return game;
     }
 
     public Game attack(String gameCode, String playerId, Card card) {
         Game game = getGame(gameCode);
         game.attack(playerId, card);
+        gameStore.save(game);
+        log.debug("game_action code={} action=attack playerId={} card={} tableSize={}",
+                game.getCode(), playerId, card.code(), game.getTable().size());
         return game;
     }
 
     public Game defend(String gameCode, String playerId, Card attackCard, Card defendCard) {
         Game game = getGame(gameCode);
         game.defend(playerId, attackCard, defendCard);
+        gameStore.save(game);
+        log.debug("game_action code={} action=defend playerId={} attackCard={} defenseCard={} tableSize={}",
+                game.getCode(), playerId, attackCard.code(), defendCard.code(), game.getTable().size());
         return game;
     }
 
     public Game transfer(String gameCode, String playerId, Card card) {
         Game game = getGame(gameCode);
         game.transfer(playerId, card);
+        gameStore.save(game);
+        log.debug("game_action code={} action=transfer playerId={} card={} defenderPlayerId={} tableSize={}",
+                game.getCode(), playerId, card.code(), game.getDefenderPlayerId(), game.getTable().size());
         return game;
     }
 
     public Game takeCards(String gameCode, String playerId) {
         Game game = getGame(gameCode);
         game.takeCards(playerId);
+        gameStore.save(game);
+        log.debug("game_action code={} action=take_cards playerId={} takeLimit={} tableSize={}",
+                game.getCode(), playerId, game.getTakeLimit(), game.getTable().size());
         return game;
     }
 
     public Game endRound(String gameCode, String playerId) {
         Game game = getGame(gameCode);
+        GameStatus before = game.getStatus();
         game.endRound(playerId);
+        gameStore.save(game);
+        log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
+                game.getCode(), playerId, before, game.getStatus(), game.getTable().size());
+        if (before != GameStatus.FINISHED && game.getStatus() == GameStatus.FINISHED) {
+            log.info("game_ended code={} loserPlayerId={}", game.getCode(), game.getLoserPlayerId());
+        }
         return game;
     }
 
@@ -124,13 +152,14 @@ public class GameService {
 
         if (game.getStatus() != GameStatus.LOBBY) {
             if (hostLeaving) {
-                games.remove(normalizedCode);
+                gameStore.deleteByCode(normalizedCode);
                 return true;
             }
             boolean removed = game.removePlayerAndResetToLobby(playerId);
             if (!removed) {
                 throw new NoSuchElementException("Player not found in this game");
             }
+            gameStore.save(game);
             return false;
         }
 
@@ -139,9 +168,10 @@ public class GameService {
             throw new NoSuchElementException("Player not found in this game");
         }
         if (hostLeaving || game.getPlayers().isEmpty()) {
-            games.remove(normalizedCode);
+            gameStore.deleteByCode(normalizedCode);
             return true;
         }
+        gameStore.save(game);
         return false;
     }
 
@@ -153,7 +183,7 @@ public class GameService {
      * Open lobby rooms waiting for players (same server instance only).
      */
     public List<LobbyGameSummary> listOpenLobbies() {
-        return games.values().stream()
+        return gameStore.listAll().stream()
                 .filter(g -> g.getStatus() == GameStatus.LOBBY)
                 .filter(g -> g.getPlayers().size() < MAX_PLAYERS)
                 .map(g -> {
@@ -180,7 +210,7 @@ public class GameService {
     private String generateUniqueCode() {
         for (int attempts = 0; attempts < 1000; attempts++) {
             String candidate = randomCode();
-            if (!games.containsKey(candidate)) {
+            if (!gameStore.existsByCode(candidate)) {
                 return candidate;
             }
         }

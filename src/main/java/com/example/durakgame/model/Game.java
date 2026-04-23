@@ -1,5 +1,6 @@
 package com.example.durakgame.model;
 
+import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -14,7 +15,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 
-public class Game {
+public class Game implements Serializable {
     public static final int MAX_HAND_SIZE = 6;
 
     private final String code;

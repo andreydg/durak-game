@@ -2,6 +2,18 @@
 
 Spring Boot multiplayer Durak game with a browser UI and websocket updates.
 
+## Game state storage
+
+By default (local development), game state is stored in-memory.
+
+When running on Cloud Run, the app automatically switches to Firestore-backed storage (detected via the `K_SERVICE` environment variable), so rooms survive instance restarts.
+
+If your Firestore database id is not `(default)`, set:
+
+- `FIRESTORE_DATABASE_ID` (for example `durak-store`)
+
+Games written to Firestore include an `expireAt` timestamp set to 24 hours after game creation. Configure Firestore TTL policy on `expireAt` to let Firestore delete stale game documents automatically.
+
 ## Deploy to Google Cloud Run
 
 This project already has a `Dockerfile`, so deployment uses Cloud Build + Cloud Run.
