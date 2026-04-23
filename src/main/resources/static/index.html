@@ -956,7 +956,8 @@
         pollTimer: null,
         ws: null,
         wsConnected: false,
-        leaveNotified: false
+        leaveNotified: false,
+        suppressWsRefreshUntilMs: 0
     };
 
     const lobbyView = document.getElementById("lobbyView");
@@ -1660,7 +1661,10 @@
     async function runAction(name, fn) {
         try {
             await fn();
-            await refreshGame();
+            render();
+            // The action response already carries updated game state.
+            // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
+            state.suppressWsRefreshUntilMs = Date.now() + 1200;
             log(`${name} success.`);
         } catch (err) {
             log(`${name} failed: ${err.message}`);
@@ -1692,7 +1696,12 @@
         const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${state.gameCode}`);
         state.ws = ws;
         ws.onopen = () => { state.wsConnected = true; log("Realtime connected."); };
-        ws.onmessage = async () => { await refreshGame(false); };
+        ws.onmessage = async () => {
+            if (Date.now() < state.suppressWsRefreshUntilMs) {
+                return;
+            }
+            await refreshGame(false);
+        };
         ws.onclose = () => { state.wsConnected = false; };
         ws.onerror = () => { state.wsConnected = false; log("Realtime lost, fallback to polling."); };
     }
