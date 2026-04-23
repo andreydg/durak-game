@@ -955,7 +955,8 @@
         showGameplayHelp: false,
         pollTimer: null,
         ws: null,
-        wsConnected: false
+        wsConnected: false,
+        leaveNotified: false
     };
 
     const lobbyView = document.getElementById("lobbyView");
@@ -1022,6 +1023,32 @@
             throw new Error(payload.message || "Request failed");
         }
         return payload;
+    }
+
+    function notifyLeaveOnUnload() {
+        if (state.leaveNotified) return;
+        const code = state.gameCode;
+        const playerId = state.playerId;
+        if (!code || !playerId) return;
+        state.leaveNotified = true;
+        const payload = JSON.stringify({ playerId });
+        try {
+            const blob = new Blob([payload], { type: "application/json" });
+            const sent = navigator.sendBeacon(`/api/games/${code}/leave`, blob);
+            if (sent) return;
+        } catch (_) {
+            // Fall through to fetch keepalive.
+        }
+        try {
+            fetch(`/api/games/${code}/leave`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: payload,
+                keepalive: true
+            });
+        } catch (_) {
+            // Best-effort only during unload.
+        }
     }
 
     function saveSession() {
@@ -1675,6 +1702,7 @@
         state.playerId = "";
         state.game = null;
         state.selectedHandCard = null;
+        state.leaveNotified = false;
         saveSession();
         stopPolling();
         closeWebSocket();
@@ -1702,6 +1730,7 @@
     document.getElementById("leaveBtn").addEventListener("click", async () => {
         const code = state.gameCode;
         const playerId = state.playerId;
+        state.leaveNotified = true;
         try {
             if (code && playerId) {
                 await api(`/api/games/${code}/leave`, "POST", {playerId});
@@ -1800,6 +1829,9 @@
         const code = (e.dataTransfer.getData("text/plain") || "").trim();
         if (code) await playCardToTable(code, preferred || undefined);
     });
+
+    window.addEventListener("pagehide", notifyLeaveOnUnload);
+    window.addEventListener("beforeunload", notifyLeaveOnUnload);
 
     (async function init() {
         if (state.gameCode && state.playerId) {
