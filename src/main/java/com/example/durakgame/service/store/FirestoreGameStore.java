@@ -1,6 +1,7 @@
 package com.example.durakgame.service.store;
 
 import com.example.durakgame.model.Game;
+import com.google.cloud.firestore.Blob;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
@@ -12,14 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,6 +29,7 @@ public class FirestoreGameStore implements GameStore {
     private static final String FIELD_EXPIRE_AT = "expireAt";
     private static final Duration GAME_TTL = Duration.ofHours(24);
     private final Firestore firestore;
+    private final GameBinaryCodec codec = new GameBinaryCodec();
 
     public FirestoreGameStore(@Value("${app.firestore.database-id:(default)}") String databaseId) {
         String resolvedDatabaseId = (databaseId == null || databaseId.isBlank()) ? "(default)" : databaseId.trim();
@@ -45,14 +42,14 @@ public class FirestoreGameStore implements GameStore {
 
     @Override
     public void save(Game game) {
-        String encoded = encode(game);
+        byte[] encoded = encode(game);
         try {
             Instant expireAt = game.getCreatedAt().plus(GAME_TTL);
             Timestamp expireTs = Timestamp.ofTimeSecondsAndNanos(expireAt.getEpochSecond(), expireAt.getNano());
             log.info("firestore_write code={} op=save", game.getCode());
             collection().document(game.getCode())
                     .set(Map.of(
-                            FIELD_PAYLOAD, encoded,
+                            FIELD_PAYLOAD, Blob.fromBytes(encoded),
                             FIELD_EXPIRE_AT, expireTs
                     ))
                     .get();
@@ -69,7 +66,8 @@ public class FirestoreGameStore implements GameStore {
             if (!snapshot.exists()) {
                 return Optional.empty();
             }
-            return Optional.of(decode(snapshot.getString(FIELD_PAYLOAD)));
+            Blob payload = snapshot.getBlob(FIELD_PAYLOAD);
+            return Optional.of(decode(payload == null ? null : payload.toBytes()));
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to read game from Firestore", ex);
         }
@@ -99,9 +97,22 @@ public class FirestoreGameStore implements GameStore {
     public List<Game> listAll() {
         try {
             log.info("firestore_read op=listAll");
-            return collection().get().get().getDocuments().stream()
-                    .map(doc -> decode(doc.getString(FIELD_PAYLOAD)))
-                    .toList();
+            List<Game> games = new ArrayList<>();
+            for (DocumentSnapshot doc : collection().get().get().getDocuments()) {
+                try {
+                    Blob payload = doc.getBlob(FIELD_PAYLOAD);
+                    games.add(decode(payload == null ? null : payload.toBytes()));
+                } catch (RuntimeException ex) {
+                    String code = doc.getId();
+                    log.warn("firestore_payload_decode_failed code={} - deleting stale document", code);
+                    try {
+                        collection().document(code).delete().get();
+                    } catch (Exception deleteEx) {
+                        log.warn("firestore_delete_failed code={} after decode failure", code);
+                    }
+                }
+            }
+            return games;
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to list games from Firestore", ex);
         }
@@ -111,27 +122,21 @@ public class FirestoreGameStore implements GameStore {
         return firestore.collection(COLLECTION);
     }
 
-    private String encode(Game game) {
-        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
-             ObjectOutputStream out = new ObjectOutputStream(bos)) {
-            out.writeObject(game);
-            out.flush();
-            return Base64.getEncoder().encodeToString(bos.toByteArray());
-        } catch (IOException ex) {
-            throw new IllegalStateException("Failed to serialize game", ex);
+    private byte[] encode(Game game) {
+        byte[] binary = codec.encode(game);
+        if (log.isDebugEnabled()) {
+            log.debug("firestore_payload_size code={} codecBytes={}", game.getCode(), binary.length);
         }
+        return binary;
     }
 
-    private Game decode(String payload) {
-        if (payload == null || payload.isBlank()) {
+    private Game decode(byte[] payload) {
+        if (payload == null || payload.length == 0) {
             throw new IllegalStateException("Missing persisted payload");
         }
-        byte[] bytes = Base64.getDecoder().decode(payload);
-        try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
-             ObjectInputStream in = new ObjectInputStream(bis)) {
-            return (Game) in.readObject();
-        } catch (IOException | ClassNotFoundException ex) {
-            throw new IllegalStateException("Failed to deserialize game", ex);
+        if (!codec.isCodecPayload(payload)) {
+            throw new IllegalStateException("Unsupported payload format");
         }
+        return codec.decode(payload);
     }
 }

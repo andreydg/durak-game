@@ -20,6 +20,12 @@ public class Player implements Serializable {
         this.joinedAt = Instant.now();
     }
 
+    public Player(String id, String name, Instant joinedAt) {
+        this.id = id;
+        this.name = name;
+        this.joinedAt = joinedAt;
+    }
+
     public String getId() {
         return id;
     }

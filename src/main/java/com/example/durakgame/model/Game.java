@@ -35,10 +35,51 @@ public class Game implements Serializable {
     private int attackerIndex = -1;
     private int defenderIndex = -1;
     private String loserPlayerId;
+    private long version = 0;
+
+    public record Snapshot(
+            String code,
+            long createdAtEpochMs,
+            String hostPlayerId,
+            GameStatus status,
+            Suit trumpSuit,
+            Card trumpCard,
+            int attackerIndex,
+            int defenderIndex,
+            String loserPlayerId,
+            boolean takingCardsInProgress,
+            int takeLimit,
+            long version,
+            List<PlayerSnapshot> players,
+            List<Card> talon,
+            List<AttackSnapshot> table,
+            Set<String> endRoundApprovals
+    ) {
+    }
+
+    public record PlayerSnapshot(
+            String id,
+            String name,
+            long joinedAtEpochMs,
+            Integer team,
+            List<Card> hand
+    ) {
+    }
+
+    public record AttackSnapshot(
+            Card attackCard,
+            Card defenseCard,
+            String attackerId
+    ) {
+    }
 
     public Game(String code, Player host) {
+        this(code, host, Instant.now());
+    }
+
+    private Game(String code, Player host, Instant createdAt) {
         this.code = code;
-        this.createdAt = Instant.now();
+        this.createdAt = createdAt;
         this.players.add(host);
         this.hostPlayerId = host.getId();
     }
@@ -58,12 +99,17 @@ public class Game implements Serializable {
 
         Player player = new Player(playerName);
         players.add(player);
+        touch();
         return player;
     }
 
     public synchronized boolean removePlayerFromLobby(String playerId) {
         ensureLobby();
-        return players.removeIf(player -> player.getId().equals(playerId));
+        boolean removed = players.removeIf(player -> player.getId().equals(playerId));
+        if (removed) {
+            touch();
+        }
+        return removed;
     }
 
     /**
@@ -79,6 +125,7 @@ public class Game implements Serializable {
             return false;
         }
         resetToLobbyState();
+        touch();
         return true;
     }
 
@@ -96,6 +143,7 @@ public class Game implements Serializable {
         chooseFirstAttacker();
         this.defenderIndex = nextEligibleIndex(attackerIndex);
         this.status = GameStatus.IN_PROGRESS;
+        touch();
     }
 
     public synchronized void attack(String playerId, Card card) {
@@ -135,6 +183,7 @@ public class Game implements Serializable {
 
         table.add(new AttackEntry(card, playerId));
         tableRanks.add(card.rank());
+        touch();
     }
 
     public synchronized void defend(String playerId, Card attackCard, Card defenseCard) {
@@ -158,6 +207,7 @@ public class Game implements Serializable {
 
         entry.defendWith(defenseCard);
         tableRanks.add(defenseCard.rank());
+        touch();
     }
 
     public synchronized void transfer(String playerId, Card transferCard) {
@@ -192,6 +242,7 @@ public class Game implements Serializable {
         tableRanks.add(transferCard.rank());
         attackerIndex = defenderIndex;
         defenderIndex = nextDefenderIndex;
+        touch();
     }
 
     public synchronized void takeCards(String playerId) {
@@ -215,6 +266,7 @@ public class Game implements Serializable {
          * If defender already spent cards on successful defenses, add them back logically.
          */
         takeLimit = defender.handSize() + (int) defendedOnTable;
+        touch();
     }
 
     public synchronized void endRound(String playerId) {
@@ -236,6 +288,7 @@ public class Game implements Serializable {
         }
         endRoundApprovals.add(playerId);
         if (!allRequiredEndRoundApprovalsPresent()) {
+            touch();
             return;
         }
 
@@ -248,6 +301,7 @@ public class Game implements Serializable {
             defenderIndex = nextEligibleIndex(attackerIndex);
             updateFinishState();
         }
+        touch();
     }
 
     public String getCode() {
@@ -302,6 +356,93 @@ public class Game implements Serializable {
 
     public String getLoserPlayerId() {
         return loserPlayerId;
+    }
+
+    public synchronized long getVersion() {
+        return version;
+    }
+
+    public synchronized Snapshot toSnapshot() {
+        List<PlayerSnapshot> playerSnapshots = players.stream()
+                .map(player -> new PlayerSnapshot(
+                        player.getId(),
+                        player.getName(),
+                        player.getJoinedAt().toEpochMilli(),
+                        player.getTeam(),
+                        player.getHand()
+                ))
+                .toList();
+        List<AttackSnapshot> tableSnapshots = table.stream()
+                .map(entry -> new AttackSnapshot(entry.getAttackCard(), entry.getDefenseCard(), entry.getAttackerId()))
+                .toList();
+        return new Snapshot(
+                code,
+                createdAt.toEpochMilli(),
+                hostPlayerId,
+                status,
+                trumpSuit,
+                trumpCard,
+                attackerIndex,
+                defenderIndex,
+                loserPlayerId,
+                takingCardsInProgress,
+                takeLimit,
+                version,
+                playerSnapshots,
+                new ArrayList<>(talon),
+                tableSnapshots,
+                Set.copyOf(endRoundApprovals)
+        );
+    }
+
+    public static Game fromSnapshot(Snapshot snapshot) {
+        if (snapshot.players().isEmpty()) {
+            throw new IllegalStateException("Snapshot has no players");
+        }
+        PlayerSnapshot hostSnapshot = snapshot.players().stream()
+                .filter(player -> Objects.equals(player.id(), snapshot.hostPlayerId()))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("Host player missing in snapshot"));
+
+        Player host = new Player(hostSnapshot.id(), hostSnapshot.name(), Instant.ofEpochMilli(hostSnapshot.joinedAtEpochMs()));
+        host.setTeam(hostSnapshot.team());
+        host.addCards(hostSnapshot.hand());
+
+        Game game = new Game(snapshot.code(), host, Instant.ofEpochMilli(snapshot.createdAtEpochMs()));
+        game.players.clear();
+        for (PlayerSnapshot ps : snapshot.players()) {
+            Player player = new Player(ps.id(), ps.name(), Instant.ofEpochMilli(ps.joinedAtEpochMs()));
+            player.setTeam(ps.team());
+            player.addCards(ps.hand());
+            game.players.add(player);
+        }
+        game.status = snapshot.status();
+        game.trumpSuit = snapshot.trumpSuit();
+        game.trumpCard = snapshot.trumpCard();
+        game.attackerIndex = snapshot.attackerIndex();
+        game.defenderIndex = snapshot.defenderIndex();
+        game.loserPlayerId = snapshot.loserPlayerId();
+        game.takingCardsInProgress = snapshot.takingCardsInProgress();
+        game.takeLimit = snapshot.takeLimit();
+        game.version = snapshot.version();
+        game.talon.clear();
+        game.talon.addAll(snapshot.talon());
+        game.table.clear();
+        game.tableRanks.clear();
+        for (AttackSnapshot ts : snapshot.table()) {
+            AttackEntry entry = new AttackEntry(ts.attackCard(), ts.attackerId());
+            if (ts.defenseCard() != null) {
+                entry.defendWith(ts.defenseCard());
+            }
+            game.table.add(entry);
+            game.tableRanks.add(ts.attackCard().rank());
+            if (ts.defenseCard() != null) {
+                game.tableRanks.add(ts.defenseCard().rank());
+            }
+        }
+        game.endRoundApprovals.clear();
+        game.endRoundApprovals.addAll(snapshot.endRoundApprovals());
+        return game;
     }
 
     public boolean isTakingCardsInProgress() {
@@ -649,5 +790,9 @@ public class Game implements Serializable {
             }
         }
         return startIndex;
+    }
+
+    private void touch() {
+        version++;
     }
 }

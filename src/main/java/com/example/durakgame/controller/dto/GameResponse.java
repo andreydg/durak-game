@@ -14,6 +14,7 @@ import java.util.Objects;
 public record GameResponse(
         String code,
         GameStatus status,
+        long version,
         int maxPlayers,
         int playerCount,
         Instant createdAt,
@@ -42,6 +43,7 @@ public record GameResponse(
         return new GameResponse(
                 game.getCode(),
                 game.getStatus(),
+                game.getVersion(),
                 maxPlayers,
                 summaries.size(),
                 game.getCreatedAt(),

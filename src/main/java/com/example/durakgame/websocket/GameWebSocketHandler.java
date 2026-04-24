@@ -35,11 +35,18 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     public static void broadcastGameUpdated(String gameCode) {
+        broadcastGameUpdated(gameCode, null);
+    }
+
+    public static void broadcastGameUpdated(String gameCode, Long version) {
         Set<WebSocketSession> sessions = GAME_SESSIONS.get(normalizeCode(gameCode));
         if (sessions == null) {
             return;
         }
-        TextMessage message = new TextMessage("{\"type\":\"GAME_UPDATED\"}");
+        String payload = version == null
+                ? "{\"type\":\"GAME_UPDATED\"}"
+                : "{\"type\":\"GAME_UPDATED\",\"version\":" + version + "}";
+        TextMessage message = new TextMessage(payload);
         sessions.removeIf(session -> !session.isOpen());
         for (WebSocketSession session : sessions) {
             try {

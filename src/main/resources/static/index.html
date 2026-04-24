@@ -957,7 +957,8 @@
         ws: null,
         wsConnected: false,
         leaveNotified: false,
-        suppressWsRefreshUntilMs: 0
+        suppressWsRefreshUntilMs: 0,
+        lastWsHealthRefreshMs: 0
     };
 
     const lobbyView = document.getElementById("lobbyView");
@@ -1674,7 +1675,20 @@
     function beginPolling() {
         if (state.pollTimer) clearInterval(state.pollTimer);
         state.pollTimer = setInterval(() => {
-            if (!state.wsConnected) refreshGame(false);
+            if (!state.wsConnected) {
+                refreshGame(false);
+                return;
+            }
+            const inProgress = state.game && state.game.status === "IN_PROGRESS";
+            if (!inProgress) {
+                refreshGame(false);
+                return;
+            }
+            const now = Date.now();
+            if (now - state.lastWsHealthRefreshMs >= 20000) {
+                state.lastWsHealthRefreshMs = now;
+                refreshGame(false);
+            }
         }, 3000);
     }
 
@@ -1696,8 +1710,21 @@
         const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${state.gameCode}`);
         state.ws = ws;
         ws.onopen = () => { state.wsConnected = true; log("Realtime connected."); };
-        ws.onmessage = async () => {
+        ws.onmessage = async (event) => {
             if (Date.now() < state.suppressWsRefreshUntilMs) {
+                return;
+            }
+            let msgVersion = null;
+            try {
+                const data = JSON.parse(event.data || "{}");
+                if (typeof data.version === "number" && Number.isFinite(data.version)) {
+                    msgVersion = data.version;
+                }
+            } catch (_) {
+                msgVersion = null;
+            }
+            const localVersion = Number(state.game?.version || 0);
+            if (msgVersion !== null && msgVersion <= localVersion) {
                 return;
             }
             await refreshGame(false);
