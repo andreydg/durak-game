@@ -61,6 +61,7 @@ public class Game implements Serializable {
             String id,
             String name,
             long joinedAtEpochMs,
+            boolean bot,
             Integer team,
             List<Card> hand
     ) {
@@ -372,6 +373,7 @@ public class Game implements Serializable {
                         player.getId(),
                         player.getName(),
                         player.getJoinedAt().toEpochMilli(),
+                        player.isBot(),
                         player.getTeam(),
                         player.getHand()
                 ))
@@ -408,14 +410,19 @@ public class Game implements Serializable {
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("Host player missing in snapshot"));
 
-        Player host = new Player(hostSnapshot.id(), hostSnapshot.name(), Instant.ofEpochMilli(hostSnapshot.joinedAtEpochMs()));
+        Player host = new Player(
+                hostSnapshot.id(),
+                hostSnapshot.name(),
+                Instant.ofEpochMilli(hostSnapshot.joinedAtEpochMs()),
+                hostSnapshot.bot()
+        );
         host.setTeam(hostSnapshot.team());
         host.addCards(hostSnapshot.hand());
 
         Game game = new Game(snapshot.code(), host, Instant.ofEpochMilli(snapshot.createdAtEpochMs()));
         game.players.clear();
         for (PlayerSnapshot ps : snapshot.players()) {
-            Player player = new Player(ps.id(), ps.name(), Instant.ofEpochMilli(ps.joinedAtEpochMs()));
+            Player player = new Player(ps.id(), ps.name(), Instant.ofEpochMilli(ps.joinedAtEpochMs()), ps.bot());
             player.setTeam(ps.team());
             player.addCards(ps.hand());
             game.players.add(player);

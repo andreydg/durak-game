@@ -18,7 +18,7 @@ import java.util.Set;
 
 final class GameBinaryCodec {
     private static final byte[] MAGIC = new byte[]{'D', 'G', '1'};
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     byte[] encode(Game game) {
         Game.Snapshot snapshot = game.toSnapshot();
@@ -53,6 +53,7 @@ final class GameBinaryCodec {
                 out.writeUTF(player.id());
                 out.writeUTF(player.name());
                 out.writeLong(player.joinedAtEpochMs());
+                out.writeBoolean(player.bot());
                 out.writeBoolean(player.team() != null);
                 if (player.team() != null) {
                     out.writeInt(player.team());
@@ -122,13 +123,14 @@ final class GameBinaryCodec {
                 String id = in.readUTF();
                 String name = in.readUTF();
                 long joinedAt = in.readLong();
+                boolean bot = in.readBoolean();
                 Integer team = in.readBoolean() ? in.readInt() : null;
                 int handCount = in.readInt();
                 List<Card> hand = new ArrayList<>(handCount);
                 for (int j = 0; j < handCount; j++) {
                     hand.add(idToCard(in.readUnsignedByte()));
                 }
-                players.add(new Game.PlayerSnapshot(id, name, joinedAt, team, hand));
+                players.add(new Game.PlayerSnapshot(id, name, joinedAt, bot, team, hand));
             }
 
             int talonCount = in.readInt();

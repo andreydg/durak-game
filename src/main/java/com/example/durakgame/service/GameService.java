@@ -85,6 +85,9 @@ public class GameService {
             game.start(game.getHostPlayerId());
         }
         runAutoPlayLoop(game);
+        gameStore.save(game);
+        log.info("game_joined code={} playerId={} playerName={} players={}",
+                game.getCode(), bot.getId(), bot.getName(), game.getPlayers().size());
         return bot;
     }
 

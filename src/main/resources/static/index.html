@@ -1051,12 +1051,14 @@
         const code = state.gameCode;
         const playerId = state.playerId;
         if (!code || !playerId) return;
-        state.leaveNotified = true;
         const payload = JSON.stringify({ playerId });
         try {
             const blob = new Blob([payload], { type: "application/json" });
             const sent = navigator.sendBeacon(`/api/games/${code}/leave`, blob);
-            if (sent) return;
+            if (sent) {
+                state.leaveNotified = true;
+                return;
+            }
         } catch (_) {
             // Fall through to fetch keepalive.
         }
@@ -1067,6 +1069,7 @@
                 body: payload,
                 keepalive: true
             });
+            state.leaveNotified = true;
         } catch (_) {
             // Best-effort only during unload.
         }
@@ -1906,6 +1909,11 @@
     });
 
     window.addEventListener("pagehide", notifyLeaveOnUnload);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+            notifyLeaveOnUnload();
+        }
+    });
     window.addEventListener("beforeunload", notifyLeaveOnUnload);
 
     (async function init() {
