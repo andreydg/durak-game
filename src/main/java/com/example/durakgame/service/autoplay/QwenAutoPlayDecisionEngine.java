@@ -5,7 +5,6 @@ import com.example.durakgame.model.Player;
 import com.example.durakgame.model.ViewerLegalMoves;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.context.annotation.Primary;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -21,7 +20,6 @@ import java.util.Map;
 import java.util.Objects;
 
 @Component
-@Primary
 public class QwenAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final HeuristicAutoPlayDecisionEngine fallback;
     private final ObjectMapper objectMapper;

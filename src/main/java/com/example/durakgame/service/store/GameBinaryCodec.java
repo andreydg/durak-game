@@ -18,7 +18,7 @@ import java.util.Set;
 
 final class GameBinaryCodec {
     private static final byte[] MAGIC = new byte[]{'D', 'G', '1'};
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     byte[] encode(Game game) {
         Game.Snapshot snapshot = game.toSnapshot();
@@ -82,6 +82,20 @@ final class GameBinaryCodec {
             out.writeInt(snapshot.endRoundApprovals().size());
             for (String playerId : snapshot.endRoundApprovals()) {
                 out.writeUTF(playerId);
+            }
+
+            out.writeInt(snapshot.discardedCards().size());
+            for (Card card : snapshot.discardedCards()) {
+                out.writeByte(cardToId(card));
+            }
+
+            out.writeInt(snapshot.knownCardsByPlayer().size());
+            for (Game.KnownCardsSnapshot known : snapshot.knownCardsByPlayer()) {
+                out.writeUTF(known.playerId());
+                out.writeInt(known.cards().size());
+                for (Card card : known.cards()) {
+                    out.writeByte(cardToId(card));
+                }
             }
 
             out.flush();
@@ -154,6 +168,24 @@ final class GameBinaryCodec {
                 approvals.add(in.readUTF());
             }
 
+            int discardedCount = in.readInt();
+            List<Card> discardedCards = new ArrayList<>(discardedCount);
+            for (int i = 0; i < discardedCount; i++) {
+                discardedCards.add(idToCard(in.readUnsignedByte()));
+            }
+
+            int knownPlayerCount = in.readInt();
+            List<Game.KnownCardsSnapshot> knownCardsByPlayer = new ArrayList<>(knownPlayerCount);
+            for (int i = 0; i < knownPlayerCount; i++) {
+                String playerId = in.readUTF();
+                int knownCardCount = in.readInt();
+                List<Card> knownCards = new ArrayList<>(knownCardCount);
+                for (int j = 0; j < knownCardCount; j++) {
+                    knownCards.add(idToCard(in.readUnsignedByte()));
+                }
+                knownCardsByPlayer.add(new Game.KnownCardsSnapshot(playerId, knownCards));
+            }
+
             return Game.fromSnapshot(new Game.Snapshot(
                     code,
                     createdAt,
@@ -170,7 +202,9 @@ final class GameBinaryCodec {
                     players,
                     talon,
                     table,
-                    approvals
+                    approvals,
+                    discardedCards,
+                    knownCardsByPlayer
             ));
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to decode game snapshot", ex);

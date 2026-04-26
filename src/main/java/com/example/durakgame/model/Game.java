@@ -26,6 +26,8 @@ public class Game implements Serializable {
     private final List<AttackEntry> table = new ArrayList<>();
     private final Set<Rank> tableRanks = new HashSet<>();
     private final Set<String> endRoundApprovals = new HashSet<>();
+    private final List<Card> discardedCards = new ArrayList<>();
+    private final Map<String, List<Card>> knownCardsByPlayer = new LinkedHashMap<>();
     private boolean takingCardsInProgress = false;
     private int takeLimit = 0;
 
@@ -53,7 +55,9 @@ public class Game implements Serializable {
             List<PlayerSnapshot> players,
             List<Card> talon,
             List<AttackSnapshot> table,
-            Set<String> endRoundApprovals
+            Set<String> endRoundApprovals,
+            List<Card> discardedCards,
+            List<KnownCardsSnapshot> knownCardsByPlayer
     ) {
     }
 
@@ -71,6 +75,12 @@ public class Game implements Serializable {
             Card attackCard,
             Card defenseCard,
             String attackerId
+    ) {
+    }
+
+    public record KnownCardsSnapshot(
+            String playerId,
+            List<Card> cards
     ) {
     }
 
@@ -112,6 +122,7 @@ public class Game implements Serializable {
         ensureLobby();
         boolean removed = players.removeIf(player -> player.getId().equals(playerId));
         if (removed) {
+            knownCardsByPlayer.remove(playerId);
             touch();
         }
         return removed;
@@ -129,6 +140,7 @@ public class Game implements Serializable {
         if (!removed) {
             return false;
         }
+        knownCardsByPlayer.remove(playerId);
         resetToLobbyState();
         touch();
         return true;
@@ -144,6 +156,8 @@ public class Game implements Serializable {
         }
 
         assignTeamsIfNeeded();
+        discardedCards.clear();
+        knownCardsByPlayer.clear();
         initDeckAndDeal();
         chooseFirstAttacker();
         this.defenderIndex = nextEligibleIndex(attackerIndex);
@@ -181,8 +195,12 @@ public class Game implements Serializable {
         if (!attacker.removeCard(card)) {
             throw new IllegalStateException("Card is not in player's hand");
         }
+        boolean wasKnownCard = forgetKnownCard(playerId, card);
         if (!table.isEmpty() && !tableRanks.contains(card.rank())) {
             attacker.addCard(card);
+            if (wasKnownCard) {
+                rememberKnownCard(playerId, card);
+            }
             throw new IllegalStateException("Podkidnoy attack must match an existing rank on table");
         }
 
@@ -199,6 +217,7 @@ public class Game implements Serializable {
         if (!defender.removeCard(defenseCard)) {
             throw new IllegalStateException("Card is not in defender hand");
         }
+        boolean wasKnownCard = forgetKnownCard(playerId, defenseCard);
 
         AttackEntry entry = table.stream()
                 .filter(it -> !it.isDefended() && it.getAttackCard().equals(attackCard))
@@ -207,6 +226,9 @@ public class Game implements Serializable {
 
         if (!canBeat(entry.getAttackCard(), defenseCard)) {
             defender.addCard(defenseCard);
+            if (wasKnownCard) {
+                rememberKnownCard(playerId, defenseCard);
+            }
             throw new IllegalStateException("Defense card does not beat attack card");
         }
 
@@ -242,6 +264,7 @@ public class Game implements Serializable {
         if (!defender.removeCard(transferCard)) {
             throw new IllegalStateException("Card is not in defender hand");
         }
+        forgetKnownCard(playerId, transferCard);
 
         table.add(new AttackEntry(transferCard, defender.getId()));
         tableRanks.add(transferCard.rank());
@@ -300,6 +323,7 @@ public class Game implements Serializable {
         if (takingCardsInProgress) {
             finalizeTakeCardsRound();
         } else {
+            discardTableCards();
             clearTable();
             refillHandsAfterRound();
             attackerIndex = defenderIndex;
@@ -335,6 +359,16 @@ public class Game implements Serializable {
 
     public synchronized List<AttackEntry> getTable() {
         return Collections.unmodifiableList(new ArrayList<>(table));
+    }
+
+    public synchronized List<Card> getDiscardedCards() {
+        return Collections.unmodifiableList(new ArrayList<>(discardedCards));
+    }
+
+    public synchronized Map<String, List<Card>> getKnownCardsByPlayer() {
+        Map<String, List<Card>> copy = new LinkedHashMap<>();
+        knownCardsByPlayer.forEach((playerId, cards) -> copy.put(playerId, List.copyOf(cards)));
+        return Collections.unmodifiableMap(copy);
     }
 
     public int getTalonSize() {
@@ -381,6 +415,9 @@ public class Game implements Serializable {
         List<AttackSnapshot> tableSnapshots = table.stream()
                 .map(entry -> new AttackSnapshot(entry.getAttackCard(), entry.getDefenseCard(), entry.getAttackerId()))
                 .toList();
+        List<KnownCardsSnapshot> knownCardsSnapshots = knownCardsByPlayer.entrySet().stream()
+                .map(entry -> new KnownCardsSnapshot(entry.getKey(), List.copyOf(entry.getValue())))
+                .toList();
         return new Snapshot(
                 code,
                 createdAt.toEpochMilli(),
@@ -397,7 +434,9 @@ public class Game implements Serializable {
                 playerSnapshots,
                 new ArrayList<>(talon),
                 tableSnapshots,
-                Set.copyOf(endRoundApprovals)
+                Set.copyOf(endRoundApprovals),
+                List.copyOf(discardedCards),
+                knownCardsSnapshots
         );
     }
 
@@ -453,6 +492,12 @@ public class Game implements Serializable {
         }
         game.endRoundApprovals.clear();
         game.endRoundApprovals.addAll(snapshot.endRoundApprovals());
+        game.discardedCards.clear();
+        game.discardedCards.addAll(snapshot.discardedCards());
+        game.knownCardsByPlayer.clear();
+        for (KnownCardsSnapshot known : snapshot.knownCardsByPlayer()) {
+            game.knownCardsByPlayer.put(known.playerId(), new ArrayList<>(known.cards()));
+        }
         return game;
     }
 
@@ -682,6 +727,8 @@ public class Game implements Serializable {
         }
         talon.clear();
         clearTable();
+        discardedCards.clear();
+        knownCardsByPlayer.clear();
         status = GameStatus.LOBBY;
         trumpSuit = null;
         trumpCard = null;
@@ -700,11 +747,57 @@ public class Game implements Serializable {
             }
         }
         defender.addCards(allCards);
+        rememberKnownCards(defender.getId(), allCards);
         clearTable();
         refillHandsAfterRound();
         attackerIndex = nextEligibleIndex(defenderIndex);
         defenderIndex = nextEligibleIndex(attackerIndex);
         updateFinishState();
+    }
+
+    private void discardTableCards() {
+        for (Card card : tableCards()) {
+            if (!discardedCards.contains(card)) {
+                discardedCards.add(card);
+            }
+        }
+    }
+
+    private List<Card> tableCards() {
+        List<Card> cards = new ArrayList<>();
+        for (AttackEntry entry : table) {
+            cards.add(entry.getAttackCard());
+            if (entry.getDefenseCard() != null) {
+                cards.add(entry.getDefenseCard());
+            }
+        }
+        return cards;
+    }
+
+    private void rememberKnownCards(String playerId, List<Card> cards) {
+        for (Card card : cards) {
+            rememberKnownCard(playerId, card);
+        }
+    }
+
+    private void rememberKnownCard(String playerId, Card card) {
+        knownCardsByPlayer.computeIfAbsent(playerId, ignored -> new ArrayList<>());
+        List<Card> known = knownCardsByPlayer.get(playerId);
+        if (!known.contains(card)) {
+            known.add(card);
+        }
+    }
+
+    private boolean forgetKnownCard(String playerId, Card card) {
+        List<Card> known = knownCardsByPlayer.get(playerId);
+        if (known == null) {
+            return false;
+        }
+        boolean removed = known.remove(card);
+        if (known.isEmpty()) {
+            knownCardsByPlayer.remove(playerId);
+        }
+        return removed;
     }
 
     private void refillHandsAfterRound() {

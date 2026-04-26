@@ -15,7 +15,9 @@ public class HeuristicAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         if (legalMoves.canDefend()) {
             Map<String, List<String>> byAttack = legalMoves.defensesByAttackCard();
             return byAttack.entrySet().stream()
-                    .min(Comparator.comparing(Map.Entry::getKey))
+                    .min(Comparator
+                            .comparingInt((Map.Entry<String, List<String>> entry) -> entry.getValue().size())
+                            .thenComparing(Map.Entry::getKey))
                     .flatMap(entry -> entry.getValue().stream().min(String::compareTo)
                             .map(defense -> AutoPlayAction.defend(entry.getKey(), defense)))
                     .orElse(null);

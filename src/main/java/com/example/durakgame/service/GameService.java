@@ -9,6 +9,7 @@ import com.example.durakgame.model.ViewerLegalMoves;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
+import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class GameService {
@@ -30,6 +35,10 @@ public class GameService {
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
     private final AutoPlayDecisionEngine autoPlayDecisionEngine;
+    private final Set<String> autoPlayRunning = ConcurrentHashMap.newKeySet();
+
+    private record AutoPlayRunResult(boolean changed, boolean continueLater) {
+    }
 
     public GameService(GameStore gameStore, AutoPlayDecisionEngine autoPlayDecisionEngine) {
         this.gameStore = gameStore;
@@ -63,6 +72,7 @@ public class GameService {
         }
         gameStore.save(game);
         log.info("game_joined code={} playerId={} playerName={} players={}", game.getCode(), joined.getId(), joined.getName(), game.getPlayers().size());
+        scheduleAutoPlay(game.getCode());
         return joined;
     }
 
@@ -84,10 +94,10 @@ public class GameService {
         if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
             game.start(game.getHostPlayerId());
         }
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.info("game_joined code={} playerId={} playerName={} players={}",
                 game.getCode(), bot.getId(), bot.getName(), game.getPlayers().size());
+        scheduleAutoPlay(game.getCode());
         return bot;
     }
 
@@ -115,49 +125,49 @@ public class GameService {
     public Game startGame(String gameCode, String playerId) {
         Game game = getGame(gameCode);
         game.start(playerId);
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), playerId, game.getPlayers().size());
+        scheduleAutoPlay(game.getCode());
         return game;
     }
 
     public Game attack(String gameCode, String playerId, Card card) {
         Game game = getGame(gameCode);
         game.attack(playerId, card);
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=attack playerId={} card={} tableSize={}",
                 game.getCode(), playerId, card.code(), game.getTable().size());
+        scheduleAutoPlay(game.getCode());
         return game;
     }
 
     public Game defend(String gameCode, String playerId, Card attackCard, Card defendCard) {
         Game game = getGame(gameCode);
         game.defend(playerId, attackCard, defendCard);
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=defend playerId={} attackCard={} defenseCard={} tableSize={}",
                 game.getCode(), playerId, attackCard.code(), defendCard.code(), game.getTable().size());
+        scheduleAutoPlay(game.getCode());
         return game;
     }
 
     public Game transfer(String gameCode, String playerId, Card card) {
         Game game = getGame(gameCode);
         game.transfer(playerId, card);
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=transfer playerId={} card={} defenderPlayerId={} tableSize={}",
                 game.getCode(), playerId, card.code(), game.getDefenderPlayerId(), game.getTable().size());
+        scheduleAutoPlay(game.getCode());
         return game;
     }
 
     public Game takeCards(String gameCode, String playerId) {
         Game game = getGame(gameCode);
         game.takeCards(playerId);
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=take_cards playerId={} takeLimit={} tableSize={}",
                 game.getCode(), playerId, game.getTakeLimit(), game.getTable().size());
+        scheduleAutoPlay(game.getCode());
         return game;
     }
 
@@ -165,13 +175,13 @@ public class GameService {
         Game game = getGame(gameCode);
         GameStatus before = game.getStatus();
         game.endRound(playerId);
-        runAutoPlayLoop(game);
         gameStore.save(game);
         log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
                 game.getCode(), playerId, before, game.getStatus(), game.getTable().size());
         if (before != GameStatus.FINISHED && game.getStatus() == GameStatus.FINISHED) {
             log.info("game_ended code={} loserPlayerId={}", game.getCode(), game.getLoserPlayerId());
         }
+        scheduleAutoPlay(game.getCode());
         return game;
     }
 
@@ -266,10 +276,40 @@ public class GameService {
         return code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
     }
 
-    private void runAutoPlayLoop(Game game) {
+    private void scheduleAutoPlay(String gameCode) {
+        String normalizedCode = normalizeCode(gameCode);
+        if (normalizedCode.isBlank() || !autoPlayRunning.add(normalizedCode)) {
+            return;
+        }
+        CompletableFuture.runAsync(() -> {
+            boolean continueLater = false;
+            try {
+                Game game = getGame(normalizedCode);
+                AutoPlayRunResult result = runAutoPlayLoop(game);
+                continueLater = result.continueLater();
+                if (result.changed()) {
+                    gameStore.save(game);
+                    GameWebSocketHandler.broadcastGameUpdated(game.getCode(), game.getVersion());
+                }
+            } catch (NoSuchElementException ignored) {
+                // Room may have been closed before the background bot turn started.
+            } catch (RuntimeException ex) {
+                log.warn("autoplay_background_failed code={} message={}", normalizedCode, ex.getMessage());
+            } finally {
+                autoPlayRunning.remove(normalizedCode);
+            }
+            if (continueLater) {
+                CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS)
+                        .execute(() -> scheduleAutoPlay(normalizedCode));
+            }
+        });
+    }
+
+    private AutoPlayRunResult runAutoPlayLoop(Game game) {
+        boolean changed = false;
         for (int i = 0; i < 48; i++) {
             if (game.getStatus() != GameStatus.IN_PROGRESS) {
-                return;
+                return new AutoPlayRunResult(changed, false);
             }
             boolean advanced = false;
             for (Player player : game.getPlayers()) {
@@ -277,12 +317,53 @@ public class GameService {
                     continue;
                 }
                 ViewerLegalMoves legalMoves = game.computeViewerLegalMoves(player.getId());
-                AutoPlayAction action = autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
+                if (!hasAnyPlayableMove(legalMoves)) {
+                    log.info("autoplay_skip code={} playerId={} playerName={} reason=no_legal_moves",
+                            game.getCode(), player.getId(), player.getName());
+                    continue;
+                }
+                if (shouldWaitForDefender(game, legalMoves)) {
+                    log.info("autoplay_skip code={} playerId={} playerName={} reason=waiting_for_defender",
+                            game.getCode(), player.getId(), player.getName());
+                    continue;
+                }
+                log.info("autoplay_consider code={} playerId={} playerName={} canAttack={} canDefend={} canTransfer={} canTake={} canEndRound={}",
+                        game.getCode(),
+                        player.getId(),
+                        player.getName(),
+                        legalMoves.canAttack(),
+                        legalMoves.canDefend(),
+                        legalMoves.canTransfer(),
+                        legalMoves.canTake(),
+                        legalMoves.canEndRound());
+                String thinkingMessage = thinkingMessage(game, legalMoves);
+                GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), true, thinkingMessage);
+                AutoPlayAction action;
+                try {
+                    action = forcedLocalAction(legalMoves);
+                    if (action == null) {
+                        action = autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
+                    } else {
+                        log.info("autoplay_local_forced_action code={} playerId={} playerName={} action={}",
+                                game.getCode(), player.getId(), player.getName(), action);
+                        simulateThinkingPause();
+                    }
+                } finally {
+                    GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), false);
+                }
                 if (!isLegal(action, legalMoves)) {
+                    log.info("autoplay_skip code={} playerId={} playerName={} reason=illegal_or_empty_action action={}",
+                            game.getCode(), player.getId(), player.getName(), action);
                     continue;
                 }
                 try {
                     applyAction(game, player.getId(), action);
+                    log.info("autoplay_applied code={} playerId={} playerName={} action={}",
+                            game.getCode(), player.getId(), player.getName(), action);
+                    changed = true;
+                    if (action.type() == AutoPlayAction.Type.END_ROUND) {
+                        return new AutoPlayRunResult(true, true);
+                    }
                     advanced = true;
                     break;
                 } catch (RuntimeException ignored) {
@@ -290,9 +371,71 @@ public class GameService {
                 }
             }
             if (!advanced) {
-                return;
+                return new AutoPlayRunResult(changed, false);
             }
         }
+        return new AutoPlayRunResult(changed, false);
+    }
+
+    private AutoPlayAction forcedLocalAction(ViewerLegalMoves legalMoves) {
+        boolean canMoveCard = legalMoves.canAttack() || legalMoves.canDefend() || legalMoves.canTransfer();
+        if (canMoveCard) {
+            return null;
+        }
+        if (legalMoves.canTake() && !legalMoves.canEndRound()) {
+            return AutoPlayAction.take();
+        }
+        if (legalMoves.canEndRound() && !legalMoves.canTake()) {
+            return AutoPlayAction.endRound();
+        }
+        return null;
+    }
+
+    private void simulateThinkingPause() {
+        long delayMs = 2000L + random.nextInt(1001);
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private String thinkingMessage(Game game, ViewerLegalMoves legalMoves) {
+        if (legalMoves.canDefend() || legalMoves.canTransfer() || legalMoves.canTake()) {
+            return "planning defence...";
+        }
+        if (legalMoves.canAttack()) {
+            return game.isTakingCardsInProgress() ? "planning throw-in..." : "planning attack...";
+        }
+        if (legalMoves.canEndRound()) {
+            return game.isTakingCardsInProgress() ? "planning end round..." : "planning attack...";
+        }
+        return "thinking...";
+    }
+
+    private boolean shouldWaitForDefender(Game game, ViewerLegalMoves legalMoves) {
+        if (game.isTakingCardsInProgress()) {
+            return false;
+        }
+        long undefended = game.getTable().stream()
+                .filter(entry -> !entry.isDefended())
+                .count();
+        if (undefended == 0) {
+            return false;
+        }
+        /*
+         * Pace bot attacks like a human table: once an attack is unanswered, attackers
+         * wait for the defender to beat, transfer, or take before throwing in again.
+         */
+        return legalMoves.canAttack() && !legalMoves.canDefend() && !legalMoves.canTransfer() && !legalMoves.canTake();
+    }
+
+    private boolean hasAnyPlayableMove(ViewerLegalMoves legalMoves) {
+        return legalMoves.canAttack()
+                || legalMoves.canDefend()
+                || legalMoves.canTransfer()
+                || legalMoves.canTake()
+                || legalMoves.canEndRound();
     }
 
     private boolean isLegal(AutoPlayAction action, ViewerLegalMoves legalMoves) {

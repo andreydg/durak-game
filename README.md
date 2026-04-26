@@ -14,17 +14,25 @@ If your Firestore database id is not `(default)`, set:
 
 Games written to Firestore include an `expireAt` timestamp set to 24 hours after game creation. Configure Firestore TTL policy on `expireAt` to let Firestore delete stale game documents automatically.
 
-## Auto-play (Qwen3.5-Omni-flash)
+## Auto-play (Gemini)
 
 The host can add bot players in the lobby. Bots use an LLM to choose moves, but every move is validated server-side; when the model is unavailable or returns invalid output, the game falls back to a deterministic heuristic move.
 
 Environment variables:
 
+- `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback)
+- `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
+- `AUTOPLAY_GEMINI_MODEL` (`gemini-3-flash-preview` by default)
+- `AUTOPLAY_GEMINI_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta` by default)
+- `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default)
+- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`3500` by default)
+
+Legacy Qwen configuration is still available but is no longer the primary decision engine:
+
 - `AUTOPLAY_QWEN_ENABLED` (`false` by default)
 - `AUTOPLAY_QWEN_API_KEY` (empty by default)
 - `AUTOPLAY_QWEN_MODEL` (`qwen3.5-omni-flash` by default)
 - `AUTOPLAY_QWEN_BASE_URL` (`https://dashscope-intl.aliyuncs.com/compatible-mode/v1` by default)
-- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`3500` by default)
 
 API endpoint:
 

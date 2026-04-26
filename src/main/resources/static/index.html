@@ -302,6 +302,28 @@
             font-weight: 600;
             white-space: nowrap;
         }
+        .bot-thinking-inline {
+            margin-left: 0.4rem;
+            opacity: 0.78;
+            font-size: 0.78rem;
+            font-weight: 500;
+            font-style: italic;
+            white-space: nowrap;
+            vertical-align: baseline;
+        }
+        .bot-thinking-dots::after {
+            content: "";
+            display: inline-block;
+            width: 1.2em;
+            text-align: left;
+            animation: thinkingDots 1.15s steps(4, end) infinite;
+        }
+        @keyframes thinkingDots {
+            0% { content: ""; }
+            25% { content: "."; }
+            50% { content: ".."; }
+            75%, 100% { content: "..."; }
+        }
         .ai-badge {
             margin-left: 0.35rem;
             padding: 0.08rem 0.38rem;
@@ -976,7 +998,8 @@
         wsConnected: false,
         leaveNotified: false,
         suppressWsRefreshUntilMs: 0,
-        lastWsHealthRefreshMs: 0
+        lastWsHealthRefreshMs: 0,
+        botThinking: {}
     };
 
     const lobbyView = document.getElementById("lobbyView");
@@ -1263,8 +1286,10 @@
             ? ` seat-title--team${player.team}` : "";
         const tags = roleTags(player, game);
         const aiBadge = player.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
+        const thinking = state.botThinking[player.id]
+            ? `<span class="bot-thinking-inline">${escapeHtml(state.botThinking[player.id]).replace(/\\.\\.\\.$/, "")}<span class="bot-thinking-dots"></span></span>` : "";
         const tagHtml = tags ? `<span class="seat-role-inline">${escapeHtml(tags)}</span>` : "";
-        el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}${tagHtml}</div>
+        el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}${tagHtml}${thinking}</div>
             <div class="${fanClass}">${backs}</div>`;
     }
 
@@ -1745,17 +1770,28 @@
         state.ws = ws;
         ws.onopen = () => { state.wsConnected = true; log("Realtime connected."); };
         ws.onmessage = async (event) => {
-            if (Date.now() < state.suppressWsRefreshUntilMs) {
-                return;
-            }
             let msgVersion = null;
+            let type = "";
             try {
                 const data = JSON.parse(event.data || "{}");
+                type = data.type || "";
+                if (type === "BOT_THINKING" && data.playerId) {
+                    if (data.thinking) {
+                        state.botThinking[data.playerId] = data.message || "thinking...";
+                    } else {
+                        delete state.botThinking[data.playerId];
+                    }
+                    render();
+                    return;
+                }
                 if (typeof data.version === "number" && Number.isFinite(data.version)) {
                     msgVersion = data.version;
                 }
             } catch (_) {
                 msgVersion = null;
+            }
+            if (Date.now() < state.suppressWsRefreshUntilMs) {
+                return;
             }
             const localVersion = Number(state.game?.version || 0);
             if (msgVersion !== null && msgVersion <= localVersion) {

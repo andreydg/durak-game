@@ -39,13 +39,28 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     public static void broadcastGameUpdated(String gameCode, Long version) {
+        broadcast(normalizeCode(gameCode), version == null
+                ? "{\"type\":\"GAME_UPDATED\"}"
+                : "{\"type\":\"GAME_UPDATED\",\"version\":" + version + "}");
+    }
+
+    public static void broadcastBotThinking(String gameCode, String playerId, boolean thinking) {
+        broadcastBotThinking(gameCode, playerId, thinking, thinking ? "thinking..." : "");
+    }
+
+    public static void broadcastBotThinking(String gameCode, String playerId, boolean thinking, String message) {
+        String safePlayerId = playerId == null ? "" : playerId.replace("\\", "\\\\").replace("\"", "\\\"");
+        String safeMessage = message == null ? "" : message.replace("\\", "\\\\").replace("\"", "\\\"");
+        broadcast(normalizeCode(gameCode),
+                "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId + "\",\"thinking\":" + thinking
+                        + ",\"message\":\"" + safeMessage + "\"}");
+    }
+
+    private static void broadcast(String gameCode, String payload) {
         Set<WebSocketSession> sessions = GAME_SESSIONS.get(normalizeCode(gameCode));
         if (sessions == null) {
             return;
         }
-        String payload = version == null
-                ? "{\"type\":\"GAME_UPDATED\"}"
-                : "{\"type\":\"GAME_UPDATED\",\"version\":" + version + "}";
         TextMessage message = new TextMessage(payload);
         sessions.removeIf(session -> !session.isOpen());
         for (WebSocketSession session : sessions) {
