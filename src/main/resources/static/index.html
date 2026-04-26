@@ -35,6 +35,91 @@
         }
         button { cursor: pointer; background: #f7ecd6; }
         button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn {
+            border-radius: 999px;
+            padding: 0.48rem 0.82rem;
+            font-weight: 700;
+            border: 1px solid rgba(84, 61, 39, 0.35);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+            transition: transform 0.08s ease, filter 0.12s ease, box-shadow 0.12s ease;
+        }
+        .btn:hover:not(:disabled) {
+            filter: brightness(1.04);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.16);
+        }
+        .btn:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+        .btn-accent {
+            background: linear-gradient(180deg, #3a8a55, #2f7646);
+            border-color: #2d5a3d;
+            color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.22);
+        }
+        .btn-secondary {
+            background: linear-gradient(180deg, #fff8ec, #f2e2c7);
+            color: #3d3022;
+        }
+        .btn-danger {
+            background: linear-gradient(180deg, #fff4e7, #f4dcc0);
+            color: #4b2a16;
+            border-color: rgba(124, 90, 58, 0.48);
+        }
+        .room-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 0.85rem;
+            align-items: start;
+        }
+        .room-title-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.55rem;
+        }
+        .room-title {
+            margin: 0;
+            font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+            line-height: 1.15;
+        }
+        .room-code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            letter-spacing: 0.04em;
+        }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 0.18rem 0.55rem;
+            font-size: 0.78rem;
+            font-weight: 800;
+            color: #28543a;
+            background: rgba(58, 138, 85, 0.12);
+            border: 1px solid rgba(58, 138, 85, 0.28);
+            white-space: nowrap;
+        }
+        .room-meta {
+            margin-top: 0.25rem;
+            line-height: 1.35;
+        }
+        .room-header > .room-waiting,
+        .room-header > .game-open-tables {
+            grid-column: 1 / -1;
+        }
+        .room-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 0.45rem;
+        }
+        @media (max-width: 640px) {
+            .room-header {
+                grid-template-columns: 1fr;
+            }
+            .room-actions {
+                justify-content: flex-start;
+            }
+        }
         .pill {
             border-radius: 999px;
             border: 1px solid rgba(255,255,255,0.4);
@@ -902,15 +987,19 @@
             </div>
         </div>
     </header>
-    <div class="panel">
-        <div class="row">
-            <h2 style="margin:0;">Game <span id="gameCodeLabel"></span></h2>
-            <span>Status: <strong id="statusLabel"></strong></span>
-            <button id="startBtn">Start</button>
-            <button id="addBotBtn">Add bot</button>
-            <button id="leaveBtn">Leave</button>
+    <div class="panel room-header">
+        <div>
+            <div class="room-title-row">
+                <h2 class="room-title">Game <span id="gameCodeLabel" class="room-code"></span></h2>
+                <span id="statusLabel" class="status-pill"></span>
+            </div>
+            <div class="muted room-meta" id="roleLabel"></div>
         </div>
-        <div class="muted" id="roleLabel"></div>
+        <div class="room-actions">
+            <button id="startBtn" class="btn btn-accent">Start</button>
+            <button id="addBotBtn" class="btn btn-secondary">Add bot</button>
+            <button id="leaveBtn" class="btn btn-danger">Leave</button>
+        </div>
         <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. The game starts automatically when 4 players are seated.</div>
         <div id="gameOpenTablesWrap" class="game-open-tables panel hidden">
             <h3 class="game-open-tables-title">Open tables on this server</h3>
@@ -1470,6 +1559,22 @@
         }
     }
 
+    function displayStatus(rawStatus) {
+        switch (rawStatus) {
+            case "LOBBY":
+                return "Lobby";
+            case "IN_PROGRESS":
+                return "In progress";
+            case "FINISHED":
+                return "Finished";
+            default:
+                return String(rawStatus || "")
+                    .toLowerCase()
+                    .replace(/_/g, " ")
+                    .replace(/\b\w/g, ch => ch.toUpperCase());
+        }
+    }
+
     /**
      * Drag card to battle: transfer first, then attack, then defend.
      * For defend, optional preferredAttackCard comes from the .battle-pair you dropped on.
@@ -1562,7 +1667,7 @@
         const defender = game.players.find(p => p.id === game.defenderPlayerId);
 
         gameCodeLabel.textContent = game.code;
-        statusLabel.textContent = game.status;
+        statusLabel.textContent = displayStatus(game.status);
         if (game.status === "IN_PROGRESS" && game.trumpCard) {
             const talonCount = Math.max(0, Number(game.talonSize) || 0);
             if (talonCount > 0) {
@@ -1601,18 +1706,21 @@
             trumpSuitHud.classList.add("hidden");
         }
         const host = game.players.find(p => p.id === game.hostPlayerId);
-        const othersList = game.players
-            .filter(p => p.id !== game.hostPlayerId)
-            .map(p => p.name)
+        const playersList = game.players
+            .map(p => p.id === game.hostPlayerId ? `${p.name} (host)` : p.name)
             .join(", ");
-        roleLabel.textContent = `Host: ${host ? host.name : "—"} | Players: ${othersList || "—"}`;
+        roleLabel.textContent = `Players: ${playersList || "—"}`;
+        const canStart = Boolean(me && game.status === "LOBBY" && game.hostPlayerId === state.playerId);
+        if (startBtn) {
+            startBtn.classList.toggle("hidden", !canStart);
+        }
         if (addBotBtn) {
+            const isHostLobby = Boolean(me && game.status === "LOBBY" && game.hostPlayerId === state.playerId);
             const canAddBot = Boolean(
-                me &&
-                game.status === "LOBBY" &&
-                game.hostPlayerId === state.playerId &&
+                isHostLobby &&
                 game.playerCount < game.maxPlayers
             );
+            addBotBtn.classList.toggle("hidden", !isHostLobby);
             addBotBtn.disabled = !canAddBot;
         }
 

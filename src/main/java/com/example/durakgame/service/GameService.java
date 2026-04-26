@@ -341,6 +341,7 @@ public class GameService {
                         legalMoves.canEndRound());
                 String thinkingMessage = thinkingMessage(game, legalMoves);
                 GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), true, thinkingMessage);
+                long thinkingStartedAtMs = System.currentTimeMillis();
                 AutoPlayAction action;
                 try {
                     action = forcedLocalAction(game, legalMoves);
@@ -352,6 +353,7 @@ public class GameService {
                         simulateThinkingPause();
                     }
                 } finally {
+                    ensureMinimumThinkingPause(thinkingStartedAtMs);
                     GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), false);
                 }
                 if (!isLegal(action, legalMoves)) {
@@ -443,6 +445,20 @@ public class GameService {
         long delayMs = 2000L + random.nextInt(1001);
         try {
             Thread.sleep(delayMs);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void ensureMinimumThinkingPause(long startedAtMs) {
+        long minDelayMs = 2000L + random.nextInt(1001);
+        long elapsedMs = System.currentTimeMillis() - startedAtMs;
+        long remainingMs = minDelayMs - elapsedMs;
+        if (remainingMs <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(remainingMs);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
