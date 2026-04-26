@@ -1945,11 +1945,6 @@
     });
 
     window.addEventListener("pagehide", notifyLeaveOnUnload);
-    document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "hidden") {
-            notifyLeaveOnUnload();
-        }
-    });
     window.addEventListener("beforeunload", notifyLeaveOnUnload);
 
     (async function init() {
