@@ -15,9 +15,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
@@ -340,7 +343,7 @@ public class GameService {
                 GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), true, thinkingMessage);
                 AutoPlayAction action;
                 try {
-                    action = forcedLocalAction(legalMoves);
+                    action = forcedLocalAction(game, legalMoves);
                     if (action == null) {
                         action = autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
                     } else {
@@ -377,7 +380,11 @@ public class GameService {
         return new AutoPlayRunResult(changed, false);
     }
 
-    private AutoPlayAction forcedLocalAction(ViewerLegalMoves legalMoves) {
+    private AutoPlayAction forcedLocalAction(Game game, ViewerLegalMoves legalMoves) {
+        AutoPlayAction defenseDiscipline = forcedDefenseDisciplineAction(game, legalMoves);
+        if (defenseDiscipline != null) {
+            return defenseDiscipline;
+        }
         boolean canMoveCard = legalMoves.canAttack() || legalMoves.canDefend() || legalMoves.canTransfer();
         if (canMoveCard) {
             return null;
@@ -389,6 +396,47 @@ public class GameService {
             return AutoPlayAction.endRound();
         }
         return null;
+    }
+
+    private AutoPlayAction forcedDefenseDisciplineAction(Game game, ViewerLegalMoves legalMoves) {
+        if (game.isTakingCardsInProgress() || !legalMoves.canTake()) {
+            return null;
+        }
+        boolean hasDefendedCardOnTable = game.getTable().stream().anyMatch(entry -> entry.getDefenseCard() != null);
+        if (!hasDefendedCardOnTable && legalMoves.canDefend()
+                && !canDefendAllCurrentAttacks(legalMoves.defensesByAttackCard())) {
+            return AutoPlayAction.take();
+        }
+        return null;
+    }
+
+    private boolean canDefendAllCurrentAttacks(Map<String, List<String>> defensesByAttackCard) {
+        if (defensesByAttackCard.isEmpty()) {
+            return false;
+        }
+        List<Map.Entry<String, List<String>>> attacks = defensesByAttackCard.entrySet().stream()
+                .sorted(Comparator
+                        .comparingInt((Map.Entry<String, List<String>> entry) -> entry.getValue().size())
+                        .thenComparing(Map.Entry::getKey))
+                .toList();
+        return canAssignDefenses(attacks, 0, new HashSet<>());
+    }
+
+    private boolean canAssignDefenses(List<Map.Entry<String, List<String>>> attacks, int index, Set<String> usedDefenses) {
+        if (index >= attacks.size()) {
+            return true;
+        }
+        List<String> defenseOptions = new ArrayList<>(attacks.get(index).getValue());
+        defenseOptions.sort(String::compareTo);
+        for (String defense : defenseOptions) {
+            if (usedDefenses.add(defense)) {
+                if (canAssignDefenses(attacks, index + 1, usedDefenses)) {
+                    return true;
+                }
+                usedDefenses.remove(defense);
+            }
+        }
+        return false;
     }
 
     private void simulateThinkingPause() {

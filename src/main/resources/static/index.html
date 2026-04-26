@@ -1191,6 +1191,14 @@
         if (document.visibilityState === "visible" && shouldPollOpenTables()) {
             refreshLobbyLists();
         }
+        if (document.visibilityState === "visible" && state.gameCode) {
+            const socketOpen = state.ws && state.ws.readyState === WebSocket.OPEN;
+            const socketConnecting = state.ws && state.ws.readyState === WebSocket.CONNECTING;
+            if (!socketOpen && !socketConnecting) {
+                connectWebSocket();
+            }
+            refreshGame(false);
+        }
     });
 
     async function performJoin(roomCode) {

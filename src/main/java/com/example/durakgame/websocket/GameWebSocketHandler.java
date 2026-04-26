@@ -13,12 +13,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class GameWebSocketHandler extends TextWebSocketHandler {
     private static final Map<String, Set<WebSocketSession>> GAME_SESSIONS = new ConcurrentHashMap<>();
+    private static final Map<String, Map<String, String>> BOT_THINKING = new ConcurrentHashMap<>();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         String gameCode = gameCodeFromSession(session);
         GAME_SESSIONS.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet())
                 .add(session);
+        replayBotThinking(gameCode, session);
     }
 
     @Override
@@ -49,11 +51,43 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     public static void broadcastBotThinking(String gameCode, String playerId, boolean thinking, String message) {
+        String normalizedCode = normalizeCode(gameCode);
+        String resolvedPlayerId = playerId == null ? "" : playerId;
+        if (thinking) {
+            BOT_THINKING.computeIfAbsent(normalizedCode, ignored -> new ConcurrentHashMap<>())
+                    .put(resolvedPlayerId, message == null || message.isBlank() ? "thinking..." : message);
+        } else {
+            Map<String, String> gameThinking = BOT_THINKING.get(normalizedCode);
+            if (gameThinking != null) {
+                gameThinking.remove(resolvedPlayerId);
+                if (gameThinking.isEmpty()) {
+                    BOT_THINKING.remove(normalizedCode);
+                }
+            }
+        }
         String safePlayerId = playerId == null ? "" : playerId.replace("\\", "\\\\").replace("\"", "\\\"");
         String safeMessage = message == null ? "" : message.replace("\\", "\\\\").replace("\"", "\\\"");
-        broadcast(normalizeCode(gameCode),
+        broadcast(normalizedCode,
                 "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId + "\",\"thinking\":" + thinking
                         + ",\"message\":\"" + safeMessage + "\"}");
+    }
+
+    private static void replayBotThinking(String gameCode, WebSocketSession session) {
+        Map<String, String> gameThinking = BOT_THINKING.get(normalizeCode(gameCode));
+        if (gameThinking == null || gameThinking.isEmpty() || !session.isOpen()) {
+            return;
+        }
+        for (Map.Entry<String, String> entry : gameThinking.entrySet()) {
+            String safePlayerId = entry.getKey().replace("\\", "\\\\").replace("\"", "\\\"");
+            String safeMessage = entry.getValue().replace("\\", "\\\\").replace("\"", "\\\"");
+            try {
+                session.sendMessage(new TextMessage(
+                        "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId
+                                + "\",\"thinking\":true,\"message\":\"" + safeMessage + "\"}"));
+            } catch (IOException ignored) {
+                return;
+            }
+        }
     }
 
     private static void broadcast(String gameCode, String payload) {
