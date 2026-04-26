@@ -1088,7 +1088,8 @@
         leaveNotified: false,
         suppressWsRefreshUntilMs: 0,
         lastWsHealthRefreshMs: 0,
-        botThinking: {}
+        botThinking: {},
+        botThinkingEventAt: {}
     };
 
     const lobbyView = document.getElementById("lobbyView");
@@ -1716,11 +1717,13 @@
         }
         if (addBotBtn) {
             const isHostLobby = Boolean(me && game.status === "LOBBY" && game.hostPlayerId === state.playerId);
+            const hasBot = game.players.some(p => p.bot);
             const canAddBot = Boolean(
                 isHostLobby &&
+                !hasBot &&
                 game.playerCount < game.maxPlayers
             );
-            addBotBtn.classList.toggle("hidden", !isHostLobby);
+            addBotBtn.classList.toggle("hidden", !isHostLobby || hasBot);
             addBotBtn.disabled = !canAddBot;
         }
 
@@ -1823,6 +1826,7 @@
         try {
             const query = new URLSearchParams({viewerPlayerId: state.playerId}).toString();
             state.game = await api(`/api/games/${state.gameCode}?${query}`, "GET");
+            syncBotThinkingFromGame(state.game);
             render();
             if (showMessage) log("Game refreshed.");
         } catch (err) {
@@ -1834,9 +1838,23 @@
         }
     }
 
+    function syncBotThinkingFromGame(game) {
+        const active = game?.botThinking || {};
+        const next = {};
+        const nextEventAt = {};
+        const now = Date.now();
+        for (const [playerId, message] of Object.entries(active)) {
+            next[playerId] = message || "thinking...";
+            nextEventAt[playerId] = state.botThinkingEventAt[playerId] || now;
+        }
+        state.botThinking = next;
+        state.botThinkingEventAt = nextEventAt;
+    }
+
     async function runAction(name, fn) {
         try {
             await fn();
+            syncBotThinkingFromGame(state.game);
             render();
             // The action response already carries updated game state.
             // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
@@ -1892,10 +1910,17 @@
                 const data = JSON.parse(event.data || "{}");
                 type = data.type || "";
                 if (type === "BOT_THINKING" && data.playerId) {
+                    const eventAtMs = Number.isFinite(Number(data.eventAtMs)) ? Number(data.eventAtMs) : Date.now();
+                    const currentEventAtMs = state.botThinkingEventAt[data.playerId] || 0;
+                    if (eventAtMs < currentEventAtMs) {
+                        return;
+                    }
+                    state.botThinkingEventAt[data.playerId] = eventAtMs;
                     if (data.thinking) {
                         state.botThinking[data.playerId] = data.message || "thinking...";
                     } else {
                         delete state.botThinking[data.playerId];
+                        delete state.botThinkingEventAt[data.playerId];
                     }
                     render();
                     return;

@@ -53,6 +53,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     public static void broadcastBotThinking(String gameCode, String playerId, boolean thinking, String message) {
         String normalizedCode = normalizeCode(gameCode);
         String resolvedPlayerId = playerId == null ? "" : playerId;
+        long eventAtMs = System.currentTimeMillis();
         if (thinking) {
             BOT_THINKING.computeIfAbsent(normalizedCode, ignored -> new ConcurrentHashMap<>())
                     .put(resolvedPlayerId, message == null || message.isBlank() ? "thinking..." : message);
@@ -69,7 +70,15 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         String safeMessage = message == null ? "" : message.replace("\\", "\\\\").replace("\"", "\\\"");
         broadcast(normalizedCode,
                 "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId + "\",\"thinking\":" + thinking
-                        + ",\"message\":\"" + safeMessage + "\"}");
+                        + ",\"message\":\"" + safeMessage + "\",\"eventAtMs\":" + eventAtMs + "}");
+    }
+
+    public static Map<String, String> botThinkingForGame(String gameCode) {
+        Map<String, String> gameThinking = BOT_THINKING.get(normalizeCode(gameCode));
+        if (gameThinking == null || gameThinking.isEmpty()) {
+            return Map.of();
+        }
+        return Map.copyOf(gameThinking);
     }
 
     private static void replayBotThinking(String gameCode, WebSocketSession session) {
@@ -83,7 +92,8 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             try {
                 session.sendMessage(new TextMessage(
                         "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId
-                                + "\",\"thinking\":true,\"message\":\"" + safeMessage + "\"}"));
+                                + "\",\"thinking\":true,\"message\":\"" + safeMessage
+                                + "\",\"eventAtMs\":" + System.currentTimeMillis() + "}"));
             } catch (IOException ignored) {
                 return;
             }

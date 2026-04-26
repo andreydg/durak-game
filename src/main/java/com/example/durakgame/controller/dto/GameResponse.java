@@ -9,6 +9,7 @@ import com.example.durakgame.model.ViewerLegalMoves;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public record GameResponse(
@@ -30,9 +31,10 @@ public record GameResponse(
         int talonSize,
         List<TableCardPair> table,
         List<PlayerSummary> players,
+        Map<String, String> botThinking,
         ViewerLegalMoves legalMoves
 ) {
-    public static GameResponse from(Game game, int maxPlayers, String viewerPlayerId) {
+    public static GameResponse from(Game game, int maxPlayers, String viewerPlayerId, Map<String, String> botThinking) {
         List<PlayerSummary> summaries = game.getPlayers().stream()
                 .map(player -> PlayerSummary.from(player, viewerPlayerId))
                 .toList();
@@ -59,6 +61,7 @@ public record GameResponse(
                 game.getTalonSize(),
                 table,
                 summaries,
+                botThinking == null ? Map.of() : Map.copyOf(botThinking),
                 game.computeViewerLegalMoves(viewerPlayerId == null ? "" : viewerPlayerId)
         );
     }

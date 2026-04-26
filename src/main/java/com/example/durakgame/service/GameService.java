@@ -84,6 +84,10 @@ public class GameService {
         if (!Objects.equals(game.getHostPlayerId(), hostPlayerId)) {
             throw new IllegalStateException("Only host can add bots");
         }
+        boolean hasBot = game.getPlayers().stream().anyMatch(Player::isBot);
+        if (hasBot) {
+            throw new IllegalStateException("Only one bot is allowed per table");
+        }
         List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
         String resolved;
         if (botName == null || botName.trim().isEmpty()) {
