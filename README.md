@@ -16,16 +16,17 @@ Games written to Firestore include an `expireAt` timestamp set to 24 hours after
 
 ## Auto-play (Gemini)
 
-The host can add bot players in the lobby. Bots use an LLM to choose moves, but every move is validated server-side; when the model is unavailable or returns invalid output, the game falls back to a deterministic heuristic move.
+The host can add bot players in the lobby. Bots use the primary LLM to choose moves, and every move is validated server-side. If the model is unavailable or returns invalid output, bots use a deterministic heuristic fallback.
 
 Environment variables:
 
 - `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback)
 - `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
-- `AUTOPLAY_GEMINI_MODEL` (`gemini-3-flash-preview` by default)
+- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.1-flash-lite-preview` by default)
 - `AUTOPLAY_GEMINI_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta` by default)
 - `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default)
-- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`3500` by default)
+- `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
+- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default)
 
 Legacy Qwen configuration is still available but is no longer the primary decision engine:
 

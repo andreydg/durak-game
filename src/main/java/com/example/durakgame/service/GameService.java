@@ -301,7 +301,7 @@ public class GameService {
             } catch (NoSuchElementException ignored) {
                 // Room may have been closed before the background bot turn started.
             } catch (RuntimeException ex) {
-                log.warn("autoplay_background_failed code={} message={}", normalizedCode, ex.getMessage());
+                log.warn("autoplay_background_failed code={} message={}", normalizedCode, ex.getMessage(), ex);
             } finally {
                 autoPlayRunning.remove(normalizedCode);
             }

@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -38,17 +39,19 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final String baseUrl;
     private final String thinkingLevel;
     private final Duration timeout;
+    private final long reasoningBudgetSeconds;
     private final boolean publicCardMemoryEnabled;
 
     public GeminiAutoPlayDecisionEngine(
             HeuristicAutoPlayDecisionEngine fallback,
             @Value("${autoplay.gemini.enabled:true}") boolean enabled,
             @Value("${autoplay.gemini.api-key:}") String apiKey,
-            @Value("${autoplay.gemini.model:gemini-3-flash-preview}") String model,
+            @Value("${autoplay.gemini.model:gemma-4-26b-a4b-it}") String model,
             @Value("${autoplay.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}") String baseUrl,
             @Value("${autoplay.gemini.thinking-level:HIGH}") String thinkingLevel,
             @Value("${autoplay.gemini.public-card-memory-enabled:true}") boolean publicCardMemoryEnabled,
-            @Value("${autoplay.request-timeout-ms:3500}") long timeoutMs
+            @Value("${autoplay.gemini.reasoning-budget-seconds:30}") long reasoningBudgetSeconds,
+            @Value("${autoplay.request-timeout-ms:30000}") long timeoutMs
     ) {
         this.fallback = fallback;
         this.objectMapper = new ObjectMapper();
@@ -59,6 +62,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         this.baseUrl = baseUrl;
         this.thinkingLevel = thinkingLevel;
         this.timeout = Duration.ofMillis(timeoutMs);
+        this.reasoningBudgetSeconds = Math.max(1L, reasoningBudgetSeconds);
         this.publicCardMemoryEnabled = publicCardMemoryEnabled;
     }
 
@@ -69,63 +73,106 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                     game.getCode(), playerId);
             return fallback.choose(game, playerId, legalMoves);
         }
+        AutoPlayAction fromPrimary = chooseWithModel(game, playerId, legalMoves, model, timeout);
+        if (fromPrimary != null) {
+            return fromPrimary;
+        }
+        log.info("autoplay_gemini_fallback code={} playerId={} reason=primary_model_failed",
+                game.getCode(), playerId);
+        return fallback.choose(game, playerId, legalMoves);
+    }
+
+    private AutoPlayAction chooseWithModel(
+            Game game,
+            String playerId,
+            ViewerLegalMoves legalMoves,
+            String requestModel,
+            Duration requestTimeout
+    ) {
         try {
-            log.info("autoplay_gemini_request code={} playerId={} model={}", game.getCode(), playerId, model);
+            log.info("autoplay_gemini_request code={} playerId={} model={} timeoutMs={}",
+                    game.getCode(), playerId, requestModel, requestTimeout.toMillis());
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint()))
-                    .timeout(timeout)
+                    .uri(URI.create(endpoint(requestModel)))
+                    .timeout(requestTimeout)
                     .header("x-goog-api-key", apiKey)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(buildRequest(game, playerId, legalMoves)))
+                    .POST(HttpRequest.BodyPublishers.ofString(buildRequest(game, playerId, legalMoves, requestModel)))
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            log.info("autoplay_gemini_response code={} playerId={} status={} responseBytes={}",
-                    game.getCode(), playerId, response.statusCode(), response.body().length());
+            log.info("autoplay_gemini_response code={} playerId={} model={} status={} responseBytes={}",
+                    game.getCode(), playerId, requestModel, response.statusCode(), response.body().length());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.info("autoplay_gemini_fallback code={} playerId={} reason=http_status status={} body={}",
-                        game.getCode(), playerId, response.statusCode(), humanizeResponseBody(response.body()));
-                return fallback.choose(game, playerId, legalMoves);
+                log.info("autoplay_gemini_failed code={} playerId={} model={} reason=http_status status={} body={}",
+                        game.getCode(), playerId, requestModel, response.statusCode(), humanizeResponseBody(response.body()));
+                return null;
             }
-            AutoPlayAction fromModel = parseResponse(response.body(), game.getCode(), playerId);
+            AutoPlayAction fromModel = parseResponse(response.body(), game.getCode(), playerId, legalMoves);
             if (fromModel == null) {
-                log.info("autoplay_gemini_fallback code={} playerId={} reason=unparseable_response",
-                        game.getCode(), playerId);
-                return fallback.choose(game, playerId, legalMoves);
+                log.info("autoplay_gemini_failed code={} playerId={} model={} reason=unparseable_response",
+                        game.getCode(), playerId, requestModel);
+                return null;
             }
             return fromModel;
         } catch (Exception ex) {
-            log.info("autoplay_gemini_fallback code={} playerId={} reason=exception message={}",
-                    game.getCode(), playerId, ex.getMessage());
-            return fallback.choose(game, playerId, legalMoves);
+            log.info("autoplay_gemini_failed code={} playerId={} model={} reason=exception message={}",
+                    game.getCode(), playerId, requestModel, ex.getMessage());
+            return null;
         }
     }
 
-    private String endpoint() {
-        return baseUrl + "/models/" + model + ":generateContent";
+    private String endpoint(String requestModel) {
+        return baseUrl + "/models/" + requestModel + ":generateContent";
     }
 
-    private String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
-        String prompt = buildPrompt(game, playerId, legalMoves);
+    private String buildRequest(
+            Game game,
+            String playerId,
+            ViewerLegalMoves legalMoves,
+            String requestModel
+    ) throws IOException {
+        String prompt = buildPrompt(game, playerId, legalMoves, requestModel);
         Map<String, Object> generationConfig = new LinkedHashMap<>();
         generationConfig.put("temperature", 0);
-        generationConfig.put("responseMimeType", "application/json");
-        if (!model.startsWith("gemma-")) {
+        if (supportsJsonMode(requestModel)) {
+            generationConfig.put("responseMimeType", "application/json");
+        }
+        if (requestModel.startsWith("gemini-3")) {
             generationConfig.put("thinkingConfig", Map.of("thinkingLevel", thinkingLevel));
         }
-        Map<String, Object> body = Map.of(
-                "systemInstruction", Map.of(
-                        "parts", List.of(Map.of("text", systemInstruction()))
-                ),
-                "contents", List.of(Map.of(
-                        "role", "user",
-                        "parts", List.of(Map.of("text", prompt))
-                )),
-                "generationConfig", generationConfig
-        );
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (supportsSystemInstruction(requestModel)) {
+            body.put("systemInstruction", Map.of(
+                    "parts", List.of(Map.of("text", systemInstruction()))
+            ));
+            body.put("contents", List.of(Map.of(
+                    "role", "user",
+                    "parts", List.of(Map.of("text", prompt))
+            )));
+        } else {
+            body.put("contents", List.of(Map.of(
+                    "role", "user",
+                    "parts", List.of(Map.of("text", systemInstruction() + "\n\n" + prompt))
+            )));
+        }
+        body.put("generationConfig", generationConfig);
         return objectMapper.writeValueAsString(body);
     }
 
-    private String buildPrompt(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
+    private boolean supportsSystemInstruction(String requestModel) {
+        return !requestModel.startsWith("gemma-3-");
+    }
+
+    private boolean supportsJsonMode(String requestModel) {
+        return !requestModel.startsWith("gemma-3-");
+    }
+
+    private String buildPrompt(
+            Game game,
+            String playerId,
+            ViewerLegalMoves legalMoves,
+            String requestModel
+    ) throws IOException {
         Player me = game.getPlayers().stream()
                 .filter(p -> Objects.equals(p.getId(), playerId))
                 .findFirst()
@@ -164,22 +211,31 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             gameState.put("publicCardMemory", publicCardMemory(game));
         }
         gameState.put("legalMoves", legalMoves);
+        String reasoningBudgetInstruction = reasoningBudgetInstruction(requestModel);
         return """
                 Choose the next move for playerId using the game state below.
                 You must choose only from legalMoves.
                 The game state contains only information visible to this bot as a human player:
                 its own hand, seat order, public hand sizes, trump, whether only the visible trump card remains in the talon, table cards, current roles, and legal moves.
                 Do not assume hidden opponent hands or hidden talon cards.
+                %s
                 Return exactly one JSON object and no extra text.
                 JSON schema:
                 {"strategy":"reasoning based on team/FFA and cards remaining","defensePlan":"optional plan for all undefended attacks","action":"Attack|Beat|Transfer|Pass|Take","cards":["6S","10D"],"type":"ATTACK|DEFEND|TRANSFER|TAKE|END_ROUND","cardCode":"optional","attackCardCode":"optional"}
+                The cards field must describe only this response's single machine action. Put multi-card defense plans only in defensePlan, not cards.
 
                 Mapping from strategy terms to JSON:
                 - Attack -> ATTACK with cardCode
                 - Beat -> DEFEND with attackCardCode and cardCode
                 - Transfer -> TRANSFER with cardCode
-                - Take -> TAKE
+                - Take -> TAKE with cards=[]
                 - Pass -> END_ROUND only when canEndRound is true
+                If choosing TAKE, do not reveal cards you could have used to defend in cards, defensePlan, or strategy.
+
+                Role discipline:
+                - If canAttack is false, do not return ATTACK.
+                - If you are the defender and play a same-rank card from transferableCardCodes, that is TRANSFER, not ATTACK.
+                - If you are the defender and play a card from defensesByAttackCard, that is DEFEND with the matching attackCardCode.
 
                 Attack pacing:
                 - Unless takingCardsInProgress is true, choose exactly one ATTACK card per response.
@@ -193,6 +249,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 - Choose this response's single DEFEND action as the next step from that full defense plan.
                 - Include the full plan in defensePlan or strategy.
                 - If the whole set cannot be defended, choose TAKE instead of wasting a good card on a partial defense.
+                - You may still choose TAKE for strategic reasons even if defense is possible, but then reveal no defense cards.
 
                 Use human-like card-counting in strategy:
                 - When publicCardMemory is present, use it as public table history available to all players.
@@ -205,7 +262,16 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
 
                 Current game state:
                 %s
-                """.formatted(objectMapper.writeValueAsString(gameState));
+                """.formatted(reasoningBudgetInstruction, objectMapper.writeValueAsString(gameState));
+    }
+
+    private String reasoningBudgetInstruction(String requestModel) {
+        if (!requestModel.startsWith("gemma-")) {
+            return "";
+        }
+        return "Budgeted reasoning: reason for no more than " + reasoningBudgetSeconds
+                + " seconds. If still uncertain, stop reasoning and return the best legal move immediately."
+                + " Do not spend extra time seeking a perfect move.";
     }
 
     private Map<String, Object> publicCardMemory(Game game) {
@@ -279,7 +345,12 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 """;
     }
 
-    private AutoPlayAction parseResponse(String raw, String gameCode, String playerId) throws IOException {
+    private AutoPlayAction parseResponse(
+            String raw,
+            String gameCode,
+            String playerId,
+            ViewerLegalMoves legalMoves
+    ) throws IOException {
         JsonNode root = objectMapper.readTree(raw);
         JsonNode parts = root.path("candidates").path(0).path("content").path("parts");
         if (!parts.isArray()) {
@@ -310,16 +381,147 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         }
         logModelDecision(gameCode, playerId, action);
         String type = action.path("type").asText("");
+        String actionLabel = action.path("action").asText("");
         String cardCode = action.path("cardCode").asText(null);
         String attackCardCode = action.path("attackCardCode").asText(null);
+        if (type.isBlank()) {
+            type = typeFromActionLabel(actionLabel);
+        }
         if (type.isBlank()) {
             return null;
         }
         try {
-            return new AutoPlayAction(AutoPlayAction.Type.valueOf(type), cardCode, attackCardCode);
+            AutoPlayAction.Type actionType = AutoPlayAction.Type.valueOf(type.trim().toUpperCase(Locale.ROOT));
+            if (actionType == AutoPlayAction.Type.TAKE) {
+                return AutoPlayAction.take();
+            }
+            if ((actionType == AutoPlayAction.Type.ATTACK || actionType == AutoPlayAction.Type.TRANSFER)
+                    && (cardCode == null || cardCode.isBlank())) {
+                cardCode = firstCard(action);
+            }
+            AutoPlayAction normalized = normalizeAgainstLegalMoves(actionType, cardCode, attackCardCode, legalMoves);
+            if (normalized != null) {
+                return normalized;
+            }
+            if (actionType == AutoPlayAction.Type.DEFEND
+                    && (cardCode == null || cardCode.isBlank() || attackCardCode == null || attackCardCode.isBlank())) {
+                AutoPlayAction inferred = inferDefenseAction(action, legalMoves);
+                if (inferred != null) {
+                    return inferred;
+                }
+            }
+            return new AutoPlayAction(actionType, cardCode, attackCardCode);
         } catch (IllegalArgumentException ex) {
             return null;
         }
+    }
+
+    private AutoPlayAction normalizeAgainstLegalMoves(
+            AutoPlayAction.Type actionType,
+            String cardCode,
+            String attackCardCode,
+            ViewerLegalMoves legalMoves
+    ) {
+        if (actionType == AutoPlayAction.Type.ATTACK
+                && !legalMoves.canAttack()
+                && cardCode != null
+                && legalMoves.canTransfer()
+                && legalMoves.transferableCardCodes().contains(cardCode)) {
+            return AutoPlayAction.transfer(cardCode);
+        }
+        if (actionType == AutoPlayAction.Type.TRANSFER
+                && cardCode != null
+                && legalMoves.canTransfer()
+                && legalMoves.transferableCardCodes().contains(cardCode)) {
+            return AutoPlayAction.transfer(cardCode);
+        }
+        if (actionType == AutoPlayAction.Type.ATTACK
+                && cardCode != null
+                && legalMoves.canAttack()
+                && legalMoves.attackableCardCodes().contains(cardCode)) {
+            return AutoPlayAction.attack(cardCode);
+        }
+        if (actionType == AutoPlayAction.Type.DEFEND
+                && cardCode != null
+                && attackCardCode != null
+                && legalMoves.canDefend()
+                && legalMoves.defensesByAttackCard().containsKey(attackCardCode)
+                && legalMoves.defensesByAttackCard().get(attackCardCode).contains(cardCode)) {
+            return AutoPlayAction.defend(attackCardCode, cardCode);
+        }
+        return null;
+    }
+
+    private String firstCard(JsonNode action) {
+        JsonNode cards = action.path("cards");
+        if (!cards.isArray()) {
+            return null;
+        }
+        for (JsonNode card : cards) {
+            if (card.isTextual() && !card.asText().isBlank()) {
+                return card.asText();
+            }
+        }
+        return null;
+    }
+
+    private String typeFromActionLabel(String actionLabel) {
+        return switch (actionLabel == null ? "" : actionLabel.trim().toLowerCase()) {
+            case "attack" -> "ATTACK";
+            case "beat", "defend", "defense" -> "DEFEND";
+            case "transfer" -> "TRANSFER";
+            case "take" -> "TAKE";
+            case "pass", "end round", "end_round" -> "END_ROUND";
+            default -> "";
+        };
+    }
+
+    private AutoPlayAction inferDefenseAction(JsonNode action, ViewerLegalMoves legalMoves) {
+        if (!legalMoves.canDefend()) {
+            return null;
+        }
+        List<String> candidateDefenseCards = new ArrayList<>();
+        JsonNode cards = action.path("cards");
+        if (cards.isArray()) {
+            for (JsonNode card : cards) {
+                if (card.isTextual()) {
+                    candidateDefenseCards.add(card.asText());
+                }
+            }
+        }
+        String explicitCardCode = action.path("cardCode").asText("");
+        if (!explicitCardCode.isBlank()) {
+            candidateDefenseCards.add(0, explicitCardCode);
+        }
+        for (String defenseCard : candidateDefenseCards) {
+            String attackCard = inferAttackForDefense(action, legalMoves, defenseCard);
+            if (attackCard != null) {
+                return AutoPlayAction.defend(attackCard, defenseCard);
+            }
+        }
+        return null;
+    }
+
+    private String inferAttackForDefense(JsonNode action, ViewerLegalMoves legalMoves, String defenseCard) {
+        String planText = (action.path("defensePlan").asText("") + "\n" + action.path("strategy").asText("")).toUpperCase();
+        String normalizedDefense = defenseCard == null ? "" : defenseCard.toUpperCase();
+        for (Map.Entry<String, List<String>> entry : legalMoves.defensesByAttackCard().entrySet()) {
+            String attackCard = entry.getKey();
+            if (!entry.getValue().contains(defenseCard)) {
+                continue;
+            }
+            String normalizedAttack = attackCard.toUpperCase();
+            if (planText.contains(normalizedAttack + " WITH " + normalizedDefense)
+                    || planText.contains(normalizedDefense + " TO BEAT " + normalizedAttack)
+                    || planText.contains("BEAT " + normalizedAttack + " WITH " + normalizedDefense)) {
+                return attackCard;
+            }
+        }
+        return legalMoves.defensesByAttackCard().entrySet().stream()
+                .filter(entry -> entry.getValue().contains(defenseCard))
+                .map(Map.Entry::getKey)
+                .findFirst()
+                .orElse(null);
     }
 
     private void logModelReasoning(String gameCode, String playerId, List<String> thoughtTexts) {
@@ -380,8 +582,10 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         String strategy = action.path("strategy").asText("");
         String defensePlan = action.path("defensePlan").asText("");
         String actionLabel = action.path("action").asText("");
+        boolean taking = "TAKE".equalsIgnoreCase(action.path("type").asText(""))
+                || "TAKE".equalsIgnoreCase(actionLabel);
         JsonNode cardsNode = action.path("cards");
-        String cards = cardsNode.isMissingNode() || cardsNode.isNull()
+        String cards = taking || cardsNode.isMissingNode() || cardsNode.isNull()
                 ? ""
                 : objectMapper.writeValueAsString(cardsNode);
         log.info("""
