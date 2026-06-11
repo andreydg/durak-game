@@ -48,6 +48,8 @@ echo "==> Building container image with Cloud Build"
 gcloud builds submit --tag "${IMAGE}" --project "${PROJECT_ID}"
 
 echo "==> Deploying to Cloud Run"
+# max-instances must stay 1: websocket fan-out, bot-thinking status, and the
+# per-game locks that prevent concurrent-write races all live in instance memory.
 DEPLOY_ARGS=(
   --image "${IMAGE}"
   --platform managed
@@ -69,5 +71,6 @@ gcloud run deploy "${SERVICE}" "${DEPLOY_ARGS[@]}"
 
 echo
 echo "Done."
-echo "Note: game state is currently in-memory. Single instance avoids split rooms,"
-echo "but restarts/scale-to-zero will clear active games."
+echo "Note: the service is pinned to a single instance (--max-instances 1)."
+echo "Websocket sessions and per-game locks are in-memory, so scaling out would"
+echo "split rooms and reintroduce concurrent-write races. Game state persists in Firestore."

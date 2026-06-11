@@ -47,6 +47,11 @@ public class RoutingGameStore implements GameStore {
         return delegate.listAll();
     }
 
+    @Override
+    public Collection<Game> listOpenLobbies() {
+        return delegate.listOpenLobbies();
+    }
+
     private boolean isCloudRun() {
         String kService = System.getenv("K_SERVICE");
         return kService != null && !kService.isBlank();

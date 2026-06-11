@@ -30,6 +30,8 @@ import java.util.Objects;
 public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private static final Logger log = LoggerFactory.getLogger(GeminiAutoPlayDecisionEngine.class);
 
+    private static final long MAX_CONNECT_TIMEOUT_MS = 5000;
+
     private final HeuristicAutoPlayDecisionEngine fallback;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -41,21 +43,31 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final Duration timeout;
     private final long reasoningBudgetSeconds;
     private final boolean publicCardMemoryEnabled;
+    private final boolean jsonModeSupported;
+    private final boolean systemInstructionSupported;
+    private final boolean thinkingConfigSupported;
+    private final boolean promptReasoningBudgetUsed;
 
     public GeminiAutoPlayDecisionEngine(
             HeuristicAutoPlayDecisionEngine fallback,
             @Value("${autoplay.gemini.enabled:true}") boolean enabled,
             @Value("${autoplay.gemini.api-key:}") String apiKey,
-            @Value("${autoplay.gemini.model:gemma-4-26b-a4b-it}") String model,
+            @Value("${autoplay.gemini.model:gemini-3.1-flash-lite-preview}") String model,
             @Value("${autoplay.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}") String baseUrl,
             @Value("${autoplay.gemini.thinking-level:HIGH}") String thinkingLevel,
             @Value("${autoplay.gemini.public-card-memory-enabled:true}") boolean publicCardMemoryEnabled,
             @Value("${autoplay.gemini.reasoning-budget-seconds:30}") long reasoningBudgetSeconds,
+            @Value("${autoplay.gemini.json-mode:auto}") String jsonModeFlag,
+            @Value("${autoplay.gemini.system-instruction:auto}") String systemInstructionFlag,
+            @Value("${autoplay.gemini.thinking-config:auto}") String thinkingConfigFlag,
+            @Value("${autoplay.gemini.prompt-reasoning-budget:auto}") String promptReasoningBudgetFlag,
             @Value("${autoplay.request-timeout-ms:30000}") long timeoutMs
     ) {
         this.fallback = fallback;
         this.objectMapper = new ObjectMapper();
-        this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(timeoutMs)).build();
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(Math.min(MAX_CONNECT_TIMEOUT_MS, timeoutMs)))
+                .build();
         this.enabled = enabled;
         this.apiKey = apiKey == null ? "" : apiKey.trim();
         this.model = model;
@@ -64,6 +76,19 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         this.timeout = Duration.ofMillis(timeoutMs);
         this.reasoningBudgetSeconds = Math.max(1L, reasoningBudgetSeconds);
         this.publicCardMemoryEnabled = publicCardMemoryEnabled;
+        /* Model capabilities: default derived from the model family, overridable per property (auto|true|false). */
+        this.jsonModeSupported = resolveCapability(jsonModeFlag, !model.startsWith("gemma-3-"));
+        this.systemInstructionSupported = resolveCapability(systemInstructionFlag, !model.startsWith("gemma-3-"));
+        this.thinkingConfigSupported = resolveCapability(thinkingConfigFlag, model.startsWith("gemini-3"));
+        this.promptReasoningBudgetUsed = resolveCapability(promptReasoningBudgetFlag, model.startsWith("gemma-"));
+    }
+
+    private static boolean resolveCapability(String flag, boolean autoDefault) {
+        String normalized = flag == null ? "" : flag.trim();
+        if (normalized.isEmpty() || normalized.equalsIgnoreCase("auto")) {
+            return autoDefault;
+        }
+        return Boolean.parseBoolean(normalized);
     }
 
     @Override
@@ -73,7 +98,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                     game.getCode(), playerId);
             return fallback.choose(game, playerId, legalMoves);
         }
-        AutoPlayAction fromPrimary = chooseWithModel(game, playerId, legalMoves, model, timeout);
+        AutoPlayAction fromPrimary = chooseWithModel(game, playerId, legalMoves);
         if (fromPrimary != null) {
             return fromPrimary;
         }
@@ -82,66 +107,55 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         return fallback.choose(game, playerId, legalMoves);
     }
 
-    private AutoPlayAction chooseWithModel(
-            Game game,
-            String playerId,
-            ViewerLegalMoves legalMoves,
-            String requestModel,
-            Duration requestTimeout
-    ) {
+    private AutoPlayAction chooseWithModel(Game game, String playerId, ViewerLegalMoves legalMoves) {
         try {
             log.info("autoplay_gemini_request code={} playerId={} model={} timeoutMs={}",
-                    game.getCode(), playerId, requestModel, requestTimeout.toMillis());
+                    game.getCode(), playerId, model, timeout.toMillis());
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint(requestModel)))
-                    .timeout(requestTimeout)
+                    .uri(URI.create(endpoint()))
+                    .timeout(timeout)
                     .header("x-goog-api-key", apiKey)
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(buildRequest(game, playerId, legalMoves, requestModel)))
+                    .POST(HttpRequest.BodyPublishers.ofString(buildRequest(game, playerId, legalMoves)))
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             log.info("autoplay_gemini_response code={} playerId={} model={} status={} responseBytes={}",
-                    game.getCode(), playerId, requestModel, response.statusCode(), response.body().length());
+                    game.getCode(), playerId, model, response.statusCode(), response.body().length());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 log.info("autoplay_gemini_failed code={} playerId={} model={} reason=http_status status={} body={}",
-                        game.getCode(), playerId, requestModel, response.statusCode(), humanizeResponseBody(response.body()));
+                        game.getCode(), playerId, model, response.statusCode(), humanizeResponseBody(response.body()));
                 return null;
             }
             AutoPlayAction fromModel = parseResponse(response.body(), game.getCode(), playerId, legalMoves);
             if (fromModel == null) {
                 log.info("autoplay_gemini_failed code={} playerId={} model={} reason=unparseable_response",
-                        game.getCode(), playerId, requestModel);
+                        game.getCode(), playerId, model);
                 return null;
             }
             return fromModel;
         } catch (Exception ex) {
             log.info("autoplay_gemini_failed code={} playerId={} model={} reason=exception message={}",
-                    game.getCode(), playerId, requestModel, ex.getMessage());
+                    game.getCode(), playerId, model, ex.getMessage());
             return null;
         }
     }
 
-    private String endpoint(String requestModel) {
-        return baseUrl + "/models/" + requestModel + ":generateContent";
+    private String endpoint() {
+        return baseUrl + "/models/" + model + ":generateContent";
     }
 
-    private String buildRequest(
-            Game game,
-            String playerId,
-            ViewerLegalMoves legalMoves,
-            String requestModel
-    ) throws IOException {
-        String prompt = buildPrompt(game, playerId, legalMoves, requestModel);
+    private String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
+        String prompt = buildPrompt(game, playerId, legalMoves);
         Map<String, Object> generationConfig = new LinkedHashMap<>();
         generationConfig.put("temperature", 0);
-        if (supportsJsonMode(requestModel)) {
+        if (jsonModeSupported) {
             generationConfig.put("responseMimeType", "application/json");
         }
-        if (requestModel.startsWith("gemini-3")) {
+        if (thinkingConfigSupported) {
             generationConfig.put("thinkingConfig", Map.of("thinkingLevel", thinkingLevel));
         }
         Map<String, Object> body = new LinkedHashMap<>();
-        if (supportsSystemInstruction(requestModel)) {
+        if (systemInstructionSupported) {
             body.put("systemInstruction", Map.of(
                     "parts", List.of(Map.of("text", systemInstruction()))
             ));
@@ -159,20 +173,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         return objectMapper.writeValueAsString(body);
     }
 
-    private boolean supportsSystemInstruction(String requestModel) {
-        return !requestModel.startsWith("gemma-3-");
-    }
-
-    private boolean supportsJsonMode(String requestModel) {
-        return !requestModel.startsWith("gemma-3-");
-    }
-
-    private String buildPrompt(
-            Game game,
-            String playerId,
-            ViewerLegalMoves legalMoves,
-            String requestModel
-    ) throws IOException {
+    private String buildPrompt(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
         Player me = game.getPlayers().stream()
                 .filter(p -> Objects.equals(p.getId(), playerId))
                 .findFirst()
@@ -211,7 +212,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             gameState.put("publicCardMemory", publicCardMemory(game));
         }
         gameState.put("legalMoves", legalMoves);
-        String reasoningBudgetInstruction = reasoningBudgetInstruction(requestModel);
+        String reasoningBudgetInstruction = reasoningBudgetInstruction();
         return """
                 Choose the next move for playerId using the game state below.
                 You must choose only from legalMoves.
@@ -265,8 +266,8 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 """.formatted(reasoningBudgetInstruction, objectMapper.writeValueAsString(gameState));
     }
 
-    private String reasoningBudgetInstruction(String requestModel) {
-        if (!requestModel.startsWith("gemma-")) {
+    private String reasoningBudgetInstruction() {
+        if (!promptReasoningBudgetUsed) {
             return "";
         }
         return "Budgeted reasoning: reason for no more than " + reasoningBudgetSeconds
@@ -345,7 +346,8 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 """;
     }
 
-    private AutoPlayAction parseResponse(
+    /** Package-private for tests. */
+    AutoPlayAction parseResponse(
             String raw,
             String gameCode,
             String playerId,

@@ -1,24 +1,30 @@
 package com.example.durakgame.websocket;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
-    private static final Map<String, Set<WebSocketSession>> GAME_SESSIONS = new ConcurrentHashMap<>();
-    private static final Map<String, Map<String, String>> BOT_THINKING = new ConcurrentHashMap<>();
+    private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, String>> botThinking = new ConcurrentHashMap<>();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         String gameCode = gameCodeFromSession(session);
-        GAME_SESSIONS.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet())
+        gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet())
                 .add(session);
         replayBotThinking(gameCode, session);
     }
@@ -26,82 +32,95 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String gameCode = gameCodeFromSession(session);
-        Set<WebSocketSession> sessions = GAME_SESSIONS.get(gameCode);
+        Set<WebSocketSession> sessions = gameSessions.get(gameCode);
         if (sessions == null) {
             return;
         }
         sessions.remove(session);
         if (sessions.isEmpty()) {
-            GAME_SESSIONS.remove(gameCode);
+            gameSessions.remove(gameCode);
         }
     }
 
-    public static void broadcastGameUpdated(String gameCode) {
+    public void broadcastGameUpdated(String gameCode) {
         broadcastGameUpdated(gameCode, null);
     }
 
-    public static void broadcastGameUpdated(String gameCode, Long version) {
-        broadcast(normalizeCode(gameCode), version == null
-                ? "{\"type\":\"GAME_UPDATED\"}"
-                : "{\"type\":\"GAME_UPDATED\",\"version\":" + version + "}");
+    public void broadcastGameUpdated(String gameCode, Long version) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "GAME_UPDATED");
+        if (version != null) {
+            payload.put("version", version);
+        }
+        broadcast(normalizeCode(gameCode), toJson(payload));
     }
 
-    public static void broadcastBotThinking(String gameCode, String playerId, boolean thinking) {
+    public void broadcastBotThinking(String gameCode, String playerId, boolean thinking) {
         broadcastBotThinking(gameCode, playerId, thinking, thinking ? "thinking..." : "");
     }
 
-    public static void broadcastBotThinking(String gameCode, String playerId, boolean thinking, String message) {
+    public void broadcastBotThinking(String gameCode, String playerId, boolean thinking, String message) {
         String normalizedCode = normalizeCode(gameCode);
         String resolvedPlayerId = playerId == null ? "" : playerId;
         long eventAtMs = System.currentTimeMillis();
         if (thinking) {
-            BOT_THINKING.computeIfAbsent(normalizedCode, ignored -> new ConcurrentHashMap<>())
+            botThinking.computeIfAbsent(normalizedCode, ignored -> new ConcurrentHashMap<>())
                     .put(resolvedPlayerId, message == null || message.isBlank() ? "thinking..." : message);
         } else {
-            Map<String, String> gameThinking = BOT_THINKING.get(normalizedCode);
+            Map<String, String> gameThinking = botThinking.get(normalizedCode);
             if (gameThinking != null) {
                 gameThinking.remove(resolvedPlayerId);
                 if (gameThinking.isEmpty()) {
-                    BOT_THINKING.remove(normalizedCode);
+                    botThinking.remove(normalizedCode);
                 }
             }
         }
-        String safePlayerId = playerId == null ? "" : playerId.replace("\\", "\\\\").replace("\"", "\\\"");
-        String safeMessage = message == null ? "" : message.replace("\\", "\\\\").replace("\"", "\\\"");
-        broadcast(normalizedCode,
-                "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId + "\",\"thinking\":" + thinking
-                        + ",\"message\":\"" + safeMessage + "\",\"eventAtMs\":" + eventAtMs + "}");
+        broadcast(normalizedCode, botThinkingJson(resolvedPlayerId, thinking, message == null ? "" : message, eventAtMs));
     }
 
-    public static Map<String, String> botThinkingForGame(String gameCode) {
-        Map<String, String> gameThinking = BOT_THINKING.get(normalizeCode(gameCode));
+    public Map<String, String> botThinkingForGame(String gameCode) {
+        Map<String, String> gameThinking = botThinking.get(normalizeCode(gameCode));
         if (gameThinking == null || gameThinking.isEmpty()) {
             return Map.of();
         }
         return Map.copyOf(gameThinking);
     }
 
-    private static void replayBotThinking(String gameCode, WebSocketSession session) {
-        Map<String, String> gameThinking = BOT_THINKING.get(normalizeCode(gameCode));
+    private void replayBotThinking(String gameCode, WebSocketSession session) {
+        Map<String, String> gameThinking = botThinking.get(normalizeCode(gameCode));
         if (gameThinking == null || gameThinking.isEmpty() || !session.isOpen()) {
             return;
         }
         for (Map.Entry<String, String> entry : gameThinking.entrySet()) {
-            String safePlayerId = entry.getKey().replace("\\", "\\\\").replace("\"", "\\\"");
-            String safeMessage = entry.getValue().replace("\\", "\\\\").replace("\"", "\\\"");
             try {
                 session.sendMessage(new TextMessage(
-                        "{\"type\":\"BOT_THINKING\",\"playerId\":\"" + safePlayerId
-                                + "\",\"thinking\":true,\"message\":\"" + safeMessage
-                                + "\",\"eventAtMs\":" + System.currentTimeMillis() + "}"));
+                        botThinkingJson(entry.getKey(), true, entry.getValue(), System.currentTimeMillis())));
             } catch (IOException ignored) {
                 return;
             }
         }
     }
 
-    private static void broadcast(String gameCode, String payload) {
-        Set<WebSocketSession> sessions = GAME_SESSIONS.get(normalizeCode(gameCode));
+    private String botThinkingJson(String playerId, boolean thinking, String message, long eventAtMs) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "BOT_THINKING");
+        payload.put("playerId", playerId);
+        payload.put("thinking", thinking);
+        payload.put("message", message);
+        payload.put("eventAtMs", eventAtMs);
+        return toJson(payload);
+    }
+
+    private String toJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize websocket payload", ex);
+        }
+    }
+
+    private void broadcast(String gameCode, String payload) {
+        Set<WebSocketSession> sessions = gameSessions.get(normalizeCode(gameCode));
         if (sessions == null) {
             return;
         }
