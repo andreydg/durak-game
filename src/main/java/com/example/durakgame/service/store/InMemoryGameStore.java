@@ -14,7 +14,12 @@ public class InMemoryGameStore implements GameStore {
 
     @Override
     public void save(Game game) {
-        games.put(game.getCode(), game);
+        games.merge(game.getCode(), game, (existing, incoming) -> {
+            if (existing != incoming && existing.getVersion() >= incoming.getVersion()) {
+                throw new StaleGameWriteException(incoming.getCode(), incoming.getVersion(), existing.getVersion());
+            }
+            return incoming;
+        });
     }
 
     @Override

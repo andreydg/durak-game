@@ -26,7 +26,12 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 @Service
 public class GameService {
@@ -34,18 +39,33 @@ public class GameService {
     private static final String CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final int CODE_LENGTH = 6;
     private static final int MAX_PLAYERS = 4;
+    private static final long LOBBY_CACHE_TTL_MS = 3000;
 
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
     private final AutoPlayDecisionEngine autoPlayDecisionEngine;
+    private final GameWebSocketHandler webSocketHandler;
     private final Set<String> autoPlayRunning = ConcurrentHashMap.newKeySet();
+    /*
+     * Serializes load->mutate->save per game code so concurrent actions (human + bot,
+     * two humans) cannot clobber each other through separate decoded copies of the game.
+     */
+    private final ConcurrentHashMap<String, ReentrantLock> gameLocks = new ConcurrentHashMap<>();
+    /* Bot turns block for seconds (LLM call + pacing pauses); virtual threads keep that cheap. */
+    private final ExecutorService autoPlayExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile CachedLobbies cachedLobbies;
 
-    private record AutoPlayRunResult(boolean changed, boolean continueLater) {
+    private record CachedLobbies(long atMs, List<LobbyGameSummary> summaries) {
     }
 
-    public GameService(GameStore gameStore, AutoPlayDecisionEngine autoPlayDecisionEngine) {
+    public GameService(
+            GameStore gameStore,
+            AutoPlayDecisionEngine autoPlayDecisionEngine,
+            GameWebSocketHandler webSocketHandler
+    ) {
         this.gameStore = gameStore;
         this.autoPlayDecisionEngine = autoPlayDecisionEngine;
+        this.webSocketHandler = webSocketHandler;
     }
 
     public Game createGame(String hostName) {
@@ -65,46 +85,56 @@ public class GameService {
     }
 
     public Player joinGame(String gameCode, String playerName) {
-        Game game = getGame(gameCode);
-        List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
-        String resolved = resolveDisplayName(playerName, taken);
-        Player joined = game.addPlayer(resolved, MAX_PLAYERS);
-        if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
-            game.start(game.getHostPlayerId());
-            log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), game.getHostPlayerId(), game.getPlayers().size());
-        }
-        gameStore.save(game);
-        log.info("game_joined code={} playerId={} playerName={} players={}", game.getCode(), joined.getId(), joined.getName(), game.getPlayers().size());
-        scheduleAutoPlay(game.getCode());
+        String normalizedCode = normalizeCode(gameCode);
+        Player joined = withGameLock(normalizedCode, () -> {
+            Game game = getGame(normalizedCode);
+            List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
+            String resolved = resolveDisplayName(playerName, taken);
+            Player player = game.addPlayer(resolved, MAX_PLAYERS);
+            if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
+                game.start(game.getHostPlayerId());
+                log.info("game_started code={} hostPlayerId={} players={}",
+                        game.getCode(), game.getHostPlayerId(), game.getPlayers().size());
+            }
+            gameStore.save(game);
+            log.info("game_joined code={} playerId={} playerName={} players={}",
+                    game.getCode(), player.getId(), player.getName(), game.getPlayers().size());
+            return player;
+        });
+        scheduleAutoPlay(normalizedCode);
         return joined;
     }
 
     public Player addBot(String gameCode, String hostPlayerId, String botName) {
-        Game game = getGame(gameCode);
-        if (!Objects.equals(game.getHostPlayerId(), hostPlayerId)) {
-            throw new IllegalStateException("Only host can add bots");
-        }
-        boolean hasBot = game.getPlayers().stream().anyMatch(Player::isBot);
-        if (hasBot) {
-            throw new IllegalStateException("Only one bot is allowed per table");
-        }
-        List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
-        String resolved;
-        if (botName == null || botName.trim().isEmpty()) {
-            resolved = GuestNameGenerator.randomBotNameDistinctFrom(taken);
-        } else {
-            String base = resolveDisplayName(botName, List.of());
-            String withSuffix = base.endsWith(" Elektronik") ? base : (base + " Elektronik");
-            resolved = resolveDisplayName(withSuffix, taken);
-        }
-        Player bot = game.addPlayer(resolved, MAX_PLAYERS, true);
-        if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
-            game.start(game.getHostPlayerId());
-        }
-        gameStore.save(game);
-        log.info("game_joined code={} playerId={} playerName={} players={}",
-                game.getCode(), bot.getId(), bot.getName(), game.getPlayers().size());
-        scheduleAutoPlay(game.getCode());
+        String normalizedCode = normalizeCode(gameCode);
+        Player bot = withGameLock(normalizedCode, () -> {
+            Game game = getGame(normalizedCode);
+            if (!Objects.equals(game.getHostPlayerId(), hostPlayerId)) {
+                throw new IllegalStateException("Only host can add bots");
+            }
+            boolean hasBot = game.getPlayers().stream().anyMatch(Player::isBot);
+            if (hasBot) {
+                throw new IllegalStateException("Only one bot is allowed per table");
+            }
+            List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
+            String resolved;
+            if (botName == null || botName.trim().isEmpty()) {
+                resolved = GuestNameGenerator.randomBotNameDistinctFrom(taken);
+            } else {
+                String base = resolveDisplayName(botName, List.of());
+                String withSuffix = base.endsWith(" Elektronik") ? base : (base + " Elektronik");
+                resolved = resolveDisplayName(withSuffix, taken);
+            }
+            Player added = game.addPlayer(resolved, MAX_PLAYERS, true);
+            if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
+                game.start(game.getHostPlayerId());
+            }
+            gameStore.save(game);
+            log.info("game_joined code={} playerId={} playerName={} players={}",
+                    game.getCode(), added.getId(), added.getName(), game.getPlayers().size());
+            return added;
+        });
+        scheduleAutoPlay(normalizedCode);
         return bot;
     }
 
@@ -130,18 +160,14 @@ public class GameService {
     }
 
     public Game startGame(String gameCode, String playerId) {
-        Game game = getGame(gameCode);
-        game.start(playerId);
-        gameStore.save(game);
+        Game game = mutateGame(gameCode, g -> g.start(playerId));
         log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), playerId, game.getPlayers().size());
         scheduleAutoPlay(game.getCode());
         return game;
     }
 
     public Game attack(String gameCode, String playerId, Card card) {
-        Game game = getGame(gameCode);
-        game.attack(playerId, card);
-        gameStore.save(game);
+        Game game = mutateGame(gameCode, g -> g.attack(playerId, card));
         log.debug("game_action code={} action=attack playerId={} card={} tableSize={}",
                 game.getCode(), playerId, card.code(), game.getTable().size());
         scheduleAutoPlay(game.getCode());
@@ -149,9 +175,7 @@ public class GameService {
     }
 
     public Game defend(String gameCode, String playerId, Card attackCard, Card defendCard) {
-        Game game = getGame(gameCode);
-        game.defend(playerId, attackCard, defendCard);
-        gameStore.save(game);
+        Game game = mutateGame(gameCode, g -> g.defend(playerId, attackCard, defendCard));
         log.debug("game_action code={} action=defend playerId={} attackCard={} defenseCard={} tableSize={}",
                 game.getCode(), playerId, attackCard.code(), defendCard.code(), game.getTable().size());
         scheduleAutoPlay(game.getCode());
@@ -159,9 +183,7 @@ public class GameService {
     }
 
     public Game transfer(String gameCode, String playerId, Card card) {
-        Game game = getGame(gameCode);
-        game.transfer(playerId, card);
-        gameStore.save(game);
+        Game game = mutateGame(gameCode, g -> g.transfer(playerId, card));
         log.debug("game_action code={} action=transfer playerId={} card={} defenderPlayerId={} tableSize={}",
                 game.getCode(), playerId, card.code(), game.getDefenderPlayerId(), game.getTable().size());
         scheduleAutoPlay(game.getCode());
@@ -169,9 +191,7 @@ public class GameService {
     }
 
     public Game takeCards(String gameCode, String playerId) {
-        Game game = getGame(gameCode);
-        game.takeCards(playerId);
-        gameStore.save(game);
+        Game game = mutateGame(gameCode, g -> g.takeCards(playerId));
         log.debug("game_action code={} action=take_cards playerId={} takeLimit={} tableSize={}",
                 game.getCode(), playerId, game.getTakeLimit(), game.getTable().size());
         scheduleAutoPlay(game.getCode());
@@ -179,16 +199,20 @@ public class GameService {
     }
 
     public Game endRound(String gameCode, String playerId) {
-        Game game = getGame(gameCode);
-        GameStatus before = game.getStatus();
-        game.endRound(playerId);
-        gameStore.save(game);
-        log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
-                game.getCode(), playerId, before, game.getStatus(), game.getTable().size());
-        if (before != GameStatus.FINISHED && game.getStatus() == GameStatus.FINISHED) {
-            log.info("game_ended code={} loserPlayerId={}", game.getCode(), game.getLoserPlayerId());
-        }
-        scheduleAutoPlay(game.getCode());
+        String normalizedCode = normalizeCode(gameCode);
+        Game game = withGameLock(normalizedCode, () -> {
+            Game g = getGame(normalizedCode);
+            GameStatus before = g.getStatus();
+            g.endRound(playerId);
+            gameStore.save(g);
+            log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
+                    g.getCode(), playerId, before, g.getStatus(), g.getTable().size());
+            if (before != GameStatus.FINISHED && g.getStatus() == GameStatus.FINISHED) {
+                log.info("game_ended code={} loserPlayerId={}", g.getCode(), g.getLoserPlayerId());
+            }
+            return g;
+        });
+        scheduleAutoPlay(normalizedCode);
         return game;
     }
 
@@ -200,32 +224,34 @@ public class GameService {
      */
     public boolean leaveGame(String gameCode, String playerId) {
         String normalizedCode = normalizeCode(gameCode);
-        Game game = getGame(normalizedCode);
-        boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
+        return withGameLock(normalizedCode, () -> {
+            Game game = getGame(normalizedCode);
+            boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
 
-        if (game.getStatus() != GameStatus.LOBBY) {
-            if (hostLeaving) {
-                gameStore.deleteByCode(normalizedCode);
-                return true;
+            if (game.getStatus() != GameStatus.LOBBY) {
+                if (hostLeaving) {
+                    gameStore.deleteByCode(normalizedCode);
+                    return true;
+                }
+                boolean removed = game.removePlayerAndResetToLobby(playerId);
+                if (!removed) {
+                    throw new NoSuchElementException("Player not found in this game");
+                }
+                gameStore.save(game);
+                return false;
             }
-            boolean removed = game.removePlayerAndResetToLobby(playerId);
+
+            boolean removed = game.removePlayerFromLobby(playerId);
             if (!removed) {
                 throw new NoSuchElementException("Player not found in this game");
             }
+            if (hostLeaving || game.getPlayers().isEmpty()) {
+                gameStore.deleteByCode(normalizedCode);
+                return true;
+            }
             gameStore.save(game);
             return false;
-        }
-
-        boolean removed = game.removePlayerFromLobby(playerId);
-        if (!removed) {
-            throw new NoSuchElementException("Player not found in this game");
-        }
-        if (hostLeaving || game.getPlayers().isEmpty()) {
-            gameStore.deleteByCode(normalizedCode);
-            return true;
-        }
-        gameStore.save(game);
-        return false;
+        });
     }
 
     public int getMaxPlayers() {
@@ -233,10 +259,16 @@ public class GameService {
     }
 
     /**
-     * Open lobby rooms waiting for players (same server instance only).
+     * Open lobby rooms waiting for players. Cached briefly because every connected
+     * client polls this and each refresh hits the store.
      */
     public List<LobbyGameSummary> listOpenLobbies() {
-        return gameStore.listAll().stream()
+        CachedLobbies cached = cachedLobbies;
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.atMs() < LOBBY_CACHE_TTL_MS) {
+            return cached.summaries();
+        }
+        List<LobbyGameSummary> summaries = gameStore.listOpenLobbies().stream()
                 .filter(g -> g.getStatus() == GameStatus.LOBBY)
                 .filter(g -> g.getPlayers().size() < MAX_PLAYERS)
                 .map(g -> {
@@ -258,6 +290,8 @@ public class GameService {
                 })
                 .sorted(Comparator.comparing(LobbyGameSummary::code))
                 .toList();
+        cachedLobbies = new CachedLobbies(now, summaries);
+        return summaries;
     }
 
     private String generateUniqueCode() {
@@ -283,6 +317,26 @@ public class GameService {
         return code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
     }
 
+    private <T> T withGameLock(String normalizedCode, Supplier<T> action) {
+        ReentrantLock lock = gameLocks.computeIfAbsent(normalizedCode, ignored -> new ReentrantLock());
+        lock.lock();
+        try {
+            return action.get();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private Game mutateGame(String gameCode, Consumer<Game> mutation) {
+        String normalizedCode = normalizeCode(gameCode);
+        return withGameLock(normalizedCode, () -> {
+            Game game = getGame(normalizedCode);
+            mutation.accept(game);
+            gameStore.save(game);
+            return game;
+        });
+    }
+
     private void scheduleAutoPlay(String gameCode) {
         String normalizedCode = normalizeCode(gameCode);
         if (normalizedCode.isBlank() || !autoPlayRunning.add(normalizedCode)) {
@@ -291,32 +345,28 @@ public class GameService {
         CompletableFuture.runAsync(() -> {
             boolean continueLater = false;
             try {
-                Game game = getGame(normalizedCode);
-                AutoPlayRunResult result = runAutoPlayLoop(game);
-                continueLater = result.continueLater();
-                if (result.changed()) {
-                    gameStore.save(game);
-                    GameWebSocketHandler.broadcastGameUpdated(game.getCode(), game.getVersion());
-                }
+                continueLater = runAutoPlayLoop(normalizedCode);
             } catch (NoSuchElementException ignored) {
                 // Room may have been closed before the background bot turn started.
             } catch (RuntimeException ex) {
-                log.warn("autoplay_background_failed code={} message={}", normalizedCode, ex.getMessage());
+                log.warn("autoplay_background_failed code={} message={}", normalizedCode, ex.getMessage(), ex);
             } finally {
                 autoPlayRunning.remove(normalizedCode);
             }
             if (continueLater) {
-                CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS)
+                CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS, autoPlayExecutor)
                         .execute(() -> scheduleAutoPlay(normalizedCode));
             }
-        });
+        }, autoPlayExecutor);
     }
 
-    private AutoPlayRunResult runAutoPlayLoop(Game game) {
-        boolean changed = false;
+    /** Returns true when the loop should be rescheduled after a pause (yield after END_ROUND). */
+    private boolean runAutoPlayLoop(String code) {
         for (int i = 0; i < 48; i++) {
+            /* Fresh load each iteration: humans may act while the bot deliberates. */
+            Game game = getGame(code);
             if (game.getStatus() != GameStatus.IN_PROGRESS) {
-                return new AutoPlayRunResult(changed, false);
+                return false;
             }
             boolean advanced = false;
             for (Player player : game.getPlayers()) {
@@ -344,46 +394,73 @@ public class GameService {
                         legalMoves.canTake(),
                         legalMoves.canEndRound());
                 String thinkingMessage = thinkingMessage(game, legalMoves);
-                GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), true, thinkingMessage);
+                webSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), true, thinkingMessage);
                 long thinkingStartedAtMs = System.currentTimeMillis();
                 AutoPlayAction action;
                 try {
+                    /* The slow part (LLM call) runs without the game lock. */
                     action = forcedLocalAction(game, legalMoves);
                     if (action == null) {
                         action = autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
                     } else {
                         log.info("autoplay_local_forced_action code={} playerId={} playerName={} action={}",
                                 game.getCode(), player.getId(), player.getName(), action);
-                        simulateThinkingPause();
                     }
                 } finally {
                     ensureMinimumThinkingPause(thinkingStartedAtMs);
-                    GameWebSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), false);
+                    webSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), false);
                 }
-                if (!isLegal(action, legalMoves)) {
-                    log.info("autoplay_skip code={} playerId={} playerName={} reason=illegal_or_empty_action action={}",
-                            game.getCode(), player.getId(), player.getName(), action);
+                if (action == null) {
+                    log.info("autoplay_skip code={} playerId={} playerName={} reason=no_action",
+                            game.getCode(), player.getId(), player.getName());
                     continue;
                 }
-                try {
-                    applyAction(game, player.getId(), action);
-                    log.info("autoplay_applied code={} playerId={} playerName={} action={}",
-                            game.getCode(), player.getId(), player.getName(), action);
-                    changed = true;
-                    if (action.type() == AutoPlayAction.Type.END_ROUND) {
-                        return new AutoPlayRunResult(true, true);
-                    }
-                    advanced = true;
-                    break;
-                } catch (RuntimeException ignored) {
-                    // Ignore bad model decisions that became stale between compute and apply.
+                boolean applied = applyAutoPlayAction(code, player, action);
+                if (!applied) {
+                    continue;
                 }
+                log.info("autoplay_applied code={} playerId={} playerName={} action={}",
+                        game.getCode(), player.getId(), player.getName(), action);
+                if (action.type() == AutoPlayAction.Type.END_ROUND) {
+                    return true;
+                }
+                advanced = true;
+                break;
             }
             if (!advanced) {
-                return new AutoPlayRunResult(changed, false);
+                return false;
             }
         }
-        return new AutoPlayRunResult(changed, false);
+        return false;
+    }
+
+    /**
+     * Re-loads the game under the per-code lock and re-validates the action against
+     * fresh state before applying, so a stale LLM decision can't revert human moves.
+     */
+    private boolean applyAutoPlayAction(String code, Player player, AutoPlayAction action) {
+        return withGameLock(code, () -> {
+            Game fresh = getGame(code);
+            if (fresh.getStatus() != GameStatus.IN_PROGRESS) {
+                return false;
+            }
+            ViewerLegalMoves freshMoves = fresh.computeViewerLegalMoves(player.getId());
+            if (!isLegal(action, freshMoves)) {
+                log.info("autoplay_skip code={} playerId={} playerName={} reason=illegal_or_stale_action action={}",
+                        fresh.getCode(), player.getId(), player.getName(), action);
+                return false;
+            }
+            try {
+                applyAction(fresh, player.getId(), action);
+            } catch (RuntimeException ex) {
+                log.info("autoplay_skip code={} playerId={} playerName={} reason=apply_failed action={} message={}",
+                        fresh.getCode(), player.getId(), player.getName(), action, ex.getMessage());
+                return false;
+            }
+            gameStore.save(fresh);
+            webSocketHandler.broadcastGameUpdated(fresh.getCode(), fresh.getVersion());
+            return true;
+        });
     }
 
     private AutoPlayAction forcedLocalAction(Game game, ViewerLegalMoves legalMoves) {
@@ -443,15 +520,6 @@ public class GameService {
             }
         }
         return false;
-    }
-
-    private void simulateThinkingPause() {
-        long delayMs = 2000L + random.nextInt(1001);
-        try {
-            Thread.sleep(delayMs);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     private void ensureMinimumThinkingPause(long startedAtMs) {

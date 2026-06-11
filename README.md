@@ -16,23 +16,24 @@ Games written to Firestore include an `expireAt` timestamp set to 24 hours after
 
 ## Auto-play (Gemini)
 
-The host can add bot players in the lobby. Bots use an LLM to choose moves, but every move is validated server-side; when the model is unavailable or returns invalid output, the game falls back to a deterministic heuristic move.
+The host can add bot players in the lobby. Bots use the primary LLM to choose moves, and every move is validated server-side. If the model is unavailable or returns invalid output, bots use a deterministic heuristic fallback.
 
 Environment variables:
 
 - `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback)
 - `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
-- `AUTOPLAY_GEMINI_MODEL` (`gemini-3-flash-preview` by default)
+- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.1-flash-lite-preview` by default)
 - `AUTOPLAY_GEMINI_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta` by default)
 - `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default)
-- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`3500` by default)
+- `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
+- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default)
 
-Legacy Qwen configuration is still available but is no longer the primary decision engine:
+Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` derives the value from the model name):
 
-- `AUTOPLAY_QWEN_ENABLED` (`false` by default)
-- `AUTOPLAY_QWEN_API_KEY` (empty by default)
-- `AUTOPLAY_QWEN_MODEL` (`qwen3.5-omni-flash` by default)
-- `AUTOPLAY_QWEN_BASE_URL` (`https://dashscope-intl.aliyuncs.com/compatible-mode/v1` by default)
+- `AUTOPLAY_GEMINI_JSON_MODE` (`auto`: enabled except for Gemma 3 models)
+- `AUTOPLAY_GEMINI_SYSTEM_INSTRUCTION` (`auto`: enabled except for Gemma 3 models)
+- `AUTOPLAY_GEMINI_THINKING_CONFIG` (`auto`: enabled for Gemini 3 models)
+- `AUTOPLAY_GEMINI_PROMPT_REASONING_BUDGET` (`auto`: enabled for Gemma models)
 
 API endpoint:
 
@@ -79,11 +80,11 @@ Example:
 PROJECT_ID="my-gcp-project" REGION="europe-west1" SERVICE="durak-prod" TAG="$(git rev-parse --short HEAD)" ./scripts/deploy-cloud-run.sh
 ```
 
-### Notes about current game state storage
+### Single-instance deployment requirement
 
-The app currently stores game rooms in memory. Because of that:
+The deploy script pins the service to one instance (`--max-instances 1`). Keep it that way for now:
 
-- Deploy with a single instance (`--max-instances 1`) to avoid split rooms.
-- If the instance restarts (or scales to zero and wakes up), active rooms are lost.
+- Websocket sessions and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
+- Concurrent-write protection uses in-process per-game locks (plus a stale-version check on every Firestore save as a safety net). Multiple instances would rely on the version check alone and reject racing writes instead of serializing them.
 
-For production-grade persistence, move room/game state to an external store (for example Redis or SQL).
+Game state itself persists in Firestore on Cloud Run, so a restart does not lose active rooms. To scale beyond one instance later, move websocket fan-out and bot status to a shared channel (for example Firestore listeners or Pub/Sub).

@@ -160,7 +160,7 @@ public class Game implements Serializable {
         knownCardsByPlayer.clear();
         initDeckAndDeal();
         chooseFirstAttacker();
-        this.defenderIndex = nextEligibleIndex(attackerIndex);
+        this.defenderIndex = nextEligibleDefenderIndex(attackerIndex);
         this.status = GameStatus.IN_PROGRESS;
         touch();
     }
@@ -253,7 +253,10 @@ public class Game implements Serializable {
             throw new IllegalStateException("Transfer card rank must match current attack");
         }
 
-        int nextDefenderIndex = nextEligibleIndex(defenderIndex);
+        int nextDefenderIndex = nextEligibleDefenderIndex(defenderIndex);
+        if (nextDefenderIndex == defenderIndex) {
+            throw new IllegalStateException("No eligible defender to transfer to");
+        }
         Player nextDefender = players.get(nextDefenderIndex);
         int futureAttackCount = table.size() + 1;
         if (nextDefender.handSize() < futureAttackCount) {
@@ -326,8 +329,11 @@ public class Game implements Serializable {
             discardTableCards();
             clearTable();
             refillHandsAfterRound();
-            attackerIndex = defenderIndex;
-            defenderIndex = nextEligibleIndex(attackerIndex);
+            /* Successful defender leads next; skip them if they just went out of cards. */
+            attackerIndex = isOutOfGame(players.get(defenderIndex))
+                    ? nextEligibleIndex(defenderIndex)
+                    : defenderIndex;
+            defenderIndex = nextEligibleDefenderIndex(attackerIndex);
             updateFinishState();
         }
         touch();
@@ -582,13 +588,15 @@ public class Game implements Serializable {
             boolean anyDefended = table.stream().anyMatch(AttackEntry::isDefended);
             if (!anyDefended) {
                 Rank initialRank = table.getFirst().getAttackCard().rank();
-                int nextDefenderIndex = nextEligibleIndex(defenderIndex);
-                Player nextDefender = players.get(nextDefenderIndex);
-                int futureAttackCount = table.size() + 1;
-                if (nextDefender.handSize() >= futureAttackCount) {
-                    for (Card card : viewer.getHand()) {
-                        if (card.rank() == initialRank) {
-                            transferable.add(card.code());
+                int nextDefenderIndex = nextEligibleDefenderIndex(defenderIndex);
+                if (nextDefenderIndex != defenderIndex) {
+                    Player nextDefender = players.get(nextDefenderIndex);
+                    int futureAttackCount = table.size() + 1;
+                    if (nextDefender.handSize() >= futureAttackCount) {
+                        for (Card card : viewer.getHand()) {
+                            if (card.rank() == initialRank) {
+                                transferable.add(card.code());
+                            }
                         }
                     }
                 }
@@ -751,7 +759,7 @@ public class Game implements Serializable {
         clearTable();
         refillHandsAfterRound();
         attackerIndex = nextEligibleIndex(defenderIndex);
-        defenderIndex = nextEligibleIndex(attackerIndex);
+        defenderIndex = nextEligibleDefenderIndex(attackerIndex);
         updateFinishState();
     }
 
@@ -824,6 +832,18 @@ public class Game implements Serializable {
         if (remaining.size() <= 1) {
             status = GameStatus.FINISHED;
             loserPlayerId = remaining.isEmpty() ? null : remaining.getFirst().getId();
+            return;
+        }
+        /*
+         * Team play: when every player still holding cards is on the same team, the
+         * opposing team has won and play cannot continue (teammates never attack each
+         * other), so the round ends with that team as the losers.
+         */
+        Integer remainingTeam = remaining.getFirst().getTeam();
+        if (remainingTeam != null
+                && remaining.stream().allMatch(player -> Objects.equals(player.getTeam(), remainingTeam))) {
+            status = GameStatus.FINISHED;
+            loserPlayerId = remaining.getFirst().getId();
         }
     }
 
@@ -894,6 +914,27 @@ public class Game implements Serializable {
             }
         }
         return startIndex;
+    }
+
+    /**
+     * Next seat that can defend against {@code attackerSeat}: in play, not the attacker,
+     * and never the attacker's teammate (teammates do not attack each other). Returns
+     * {@code attackerSeat} when no opponent remains; the finish check ends such games.
+     */
+    private int nextEligibleDefenderIndex(int attackerSeat) {
+        int current = attackerSeat;
+        for (int i = 0; i < players.size(); i++) {
+            current = prevSeat(current);
+            if (current == attackerSeat) {
+                continue;
+            }
+            Player candidate = players.get(current);
+            boolean outOfGame = talon.isEmpty() && candidate.handSize() == 0;
+            if (!outOfGame && !isTeammate(attackerSeat, current)) {
+                return current;
+            }
+        }
+        return attackerSeat;
     }
 
     private void touch() {
