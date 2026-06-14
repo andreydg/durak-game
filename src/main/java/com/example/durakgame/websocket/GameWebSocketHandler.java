@@ -19,7 +19,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class GameWebSocketHandler extends TextWebSocketHandler {
     private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
     private final Map<String, Map<String, String>> botThinking = new ConcurrentHashMap<>();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+
+    public GameWebSocketHandler(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {

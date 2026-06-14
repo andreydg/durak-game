@@ -11,6 +11,19 @@
     localStorage.removeItem("durak_player_id");
 })();
 
+/* Pure presentation helpers live in logic.js (loaded first) so they can be unit-tested. */
+const {
+    prettyCard,
+    sortCardCodesByRank,
+    trumpSuitGlyph,
+    displayStatus,
+    escapeHtml,
+    roleTags,
+    playerTeam,
+    onAttackingSide,
+    lobbyRowsHtml
+} = window.DurakLogic;
+
 const state = {
     gameCode: sessionStorage.getItem("durak_game_code") || "",
     playerId: sessionStorage.getItem("durak_player_id") || "",
@@ -130,34 +143,6 @@ function saveSession() {
 
 let lobbyListTimer = null;
 
-function escapeHtml(text) {
-    const d = document.createElement("div");
-    d.textContent = text == null ? "" : String(text);
-    return d.innerHTML;
-}
-
-function lobbyRowsHtml(rows, interactive, currentCode) {
-    const cur = (currentCode || "").toUpperCase();
-    if (!rows.length) return "";
-    return `<ul class="lobby-list">${rows.map(r => {
-        const isYours = cur && String(r.code).toUpperCase() === cur;
-        const rowClass = "lobby-list-item" + (isYours ? " lobby-list-item--yours" : "");
-        const actionCol = interactive
-            ? `<button type="button" class="btn-primary lobby-list-join" data-code="${escapeHtml(r.code)}">Join</button>`
-            : (isYours
-                ? `<span class="lobby-this-room">This room</span>`
-                : `<span class="muted" style="font-size:0.88rem;">In lobby</span>`);
-        return `
-            <li class="${rowClass}">
-                <div class="lobby-list-meta">
-                    <span class="lobby-list-code">${escapeHtml(r.code)}</span>
-                    <span class="muted">${(r.playerNames || []).map(escapeHtml).join(", ")} · ${r.playerCount}/${r.maxPlayers} players</span>
-                </div>
-                ${actionCol}
-            </li>`;
-    }).join("")}</ul>`;
-}
-
 async function refreshLobbyLists() {
     let rows = [];
     try {
@@ -251,52 +236,8 @@ if (lobbyGameList) {
     });
 }
 
-function prettyCard(code) {
-    if (!code) return "-";
-    const s = code.slice(-1);
-    const r = code.slice(0, -1);
-    const map = {S: "♠", H: "♥", D: "♦", C: "♣"};
-    return `${r}${map[s] || s}`;
-}
-
-function sortCardCodesByRank(codes) {
-    const rankOrder = { "6": 0, "7": 1, "8": 2, "9": 3, "10": 4, "J": 5, "Q": 6, "K": 7, "A": 8 };
-    const suitOrder = { C: 0, D: 1, H: 2, S: 3 };
-    return [...(codes || [])].sort((a, b) => {
-        const rankA = String(a || "").slice(0, -1).toUpperCase();
-        const rankB = String(b || "").slice(0, -1).toUpperCase();
-        const suitA = String(a || "").slice(-1).toUpperCase();
-        const suitB = String(b || "").slice(-1).toUpperCase();
-        const rankCmp = (rankOrder[rankA] ?? 999) - (rankOrder[rankB] ?? 999);
-        if (rankCmp !== 0) return rankCmp;
-        return (suitOrder[suitA] ?? 999) - (suitOrder[suitB] ?? 999);
-    });
-}
-
 function cardImage(code) {
     return `/cards/${code}.png`;
-}
-
-function trumpSuitGlyph(suitCode) {
-    const map = { S: "♠", H: "♥", D: "♦", C: "♣" };
-    if (!suitCode) return "";
-    const u = String(suitCode).toUpperCase();
-    if (map[u]) return map[u];
-    const full = { HEARTS: "♥", DIAMONDS: "♦", CLUBS: "♣", SPADES: "♠" };
-    return full[u] || suitCode || "";
-}
-
-function roleTags(player, game) {
-    const t = [];
-    if (game.status === "IN_PROGRESS") {
-        if (player.id === game.attackerPlayerId) t.push("⚔️");
-        if (player.id === game.defenderPlayerId) t.push("🛡️");
-        if (game.takingCardsInProgress && player.id === game.takingPlayerId) t.push("⇩");
-    } else if (game.status === "FINISHED" && player.id === game.loserPlayerId) {
-        t.push("🤡");
-    }
-    if (player.team !== null && player.team !== undefined) t.push(`team ${player.team}`);
-    return t.join(" + ");
 }
 
 function renderSeat(el, player, game) {
@@ -391,23 +332,6 @@ function renderMyHand(game, me) {
     }
 }
 
-function playerTeam(game, playerId) {
-    const p = game?.players?.find(x => x.id === playerId);
-    if (!p || p.team === undefined || p.team === null) return null;
-    return p.team;
-}
-
-/** In 4p teams, attacking side is opposite team; otherwise all non-defenders. */
-function onAttackingSide(game, viewerId) {
-    const defId = game?.defenderPlayerId;
-    if (!game || !defId || !viewerId) return false;
-    if (viewerId === defId) return false;
-    if (game.players?.length !== 4) return true;
-    const dt = playerTeam(game, defId);
-    const vt = playerTeam(game, viewerId);
-    return dt != null && vt != null && vt !== dt;
-}
-
 function renderActionState(game) {
     const lm = game.legalMoves || {};
     const selected = state.selectedHandCard;
@@ -492,22 +416,6 @@ function renderActionState(game) {
         } else {
             actionHint.textContent = `${selected}: no legal move right now`;
         }
-    }
-}
-
-function displayStatus(rawStatus) {
-    switch (rawStatus) {
-        case "LOBBY":
-            return "Lobby";
-        case "IN_PROGRESS":
-            return "In progress";
-        case "FINISHED":
-            return "Finished";
-        default:
-            return String(rawStatus || "")
-                .toLowerCase()
-                .replace(/_/g, " ")
-                .replace(/\b\w/g, ch => ch.toUpperCase());
     }
 }
 

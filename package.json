@@ -1,0 +1,18 @@
+{
+  "name": "durak-game-frontend-tests",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Frontend unit (Vitest) and end-to-end (Playwright) tests for the Durak game UI.",
+  "scripts": {
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "jsdom": "^25.0.1",
+    "vitest": "^2.1.8"
+  }
+}

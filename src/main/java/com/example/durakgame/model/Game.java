@@ -764,8 +764,9 @@ public class Game implements Serializable {
     }
 
     private void discardTableCards() {
+        Set<Card> alreadyDiscarded = new HashSet<>(discardedCards);
         for (Card card : tableCards()) {
-            if (!discardedCards.contains(card)) {
+            if (alreadyDiscarded.add(card)) {
                 discardedCards.add(card);
             }
         }

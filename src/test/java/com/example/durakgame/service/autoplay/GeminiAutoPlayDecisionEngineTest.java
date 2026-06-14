@@ -16,6 +16,7 @@ class GeminiAutoPlayDecisionEngineTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final GeminiAutoPlayDecisionEngine engine = new GeminiAutoPlayDecisionEngine(
             new HeuristicAutoPlayDecisionEngine(),
+            objectMapper,
             false,
             "",
             "gemini-test",
