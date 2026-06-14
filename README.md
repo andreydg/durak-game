@@ -2,6 +2,25 @@
 
 Spring Boot multiplayer Durak game with a browser UI and websocket updates.
 
+## Testing
+
+Three layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:
+
+| Layer | Tool | Command | Covers |
+| --- | --- | --- | --- |
+| Backend | JUnit / Maven | `./mvnw test` | Game rules, `GameService` orchestration & autoplay, controllers + exception mapping, stores |
+| Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js) |
+| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby, add bot, start, play) |
+
+First-time frontend setup:
+
+```bash
+npm ci
+npx playwright install --with-deps chromium   # only needed for E2E
+```
+
+The Playwright config boots the packaged jar itself (in-memory store, offline heuristic bot — no API keys needed), so run `./mvnw -DskipTests package` once before `npm run test:e2e`.
+
 ## Game state storage
 
 By default (local development), game state is stored in-memory.

@@ -1,5 +1,6 @@
 package com.example.durakgame.controller;
 
+import com.example.durakgame.service.store.StaleGameWriteException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -19,6 +20,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<Map<String, Object>> handleNotFound(NoSuchElementException ex) {
         return buildError(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(StaleGameWriteException.class)
+    public ResponseEntity<Map<String, Object>> handleStaleWrite(StaleGameWriteException ex) {
+        return buildError(HttpStatus.CONFLICT, "Game state changed — please retry your move.");
     }
 
     @ExceptionHandler(IllegalStateException.class)

@@ -9,6 +9,7 @@ import com.example.durakgame.model.ViewerLegalMoves;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
+import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +41,15 @@ public class GameService {
     private static final int CODE_LENGTH = 6;
     private static final int MAX_PLAYERS = 4;
     private static final long LOBBY_CACHE_TTL_MS = 3000;
+    /* Max bot moves applied per scheduled loop before yielding the virtual thread back. */
+    private static final int AUTO_PLAY_MAX_ITERATIONS = 48;
+    /* Pause before the loop reschedules itself after a bout-ending move, so clients can render it. */
+    private static final long AUTO_PLAY_RESCHEDULE_DELAY_MS = 250;
+    /* Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. */
+    private static final long AUTO_PLAY_MIN_THINK_MS = 2000;
+    private static final int AUTO_PLAY_THINK_JITTER_MS = 1001;
+    /* One retry covers a cross-instance lost-update race; the per-code lock prevents same-JVM races. */
+    private static final int MUTATE_RETRY_ATTEMPTS = 2;
 
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
@@ -327,13 +337,28 @@ public class GameService {
         }
     }
 
+    /**
+     * Loads, mutates, and saves a game under the per-code lock. Retries once on a
+     * {@link StaleGameWriteException} so a cross-instance lost-update race re-reads
+     * fresh state and re-applies the move instead of surfacing a conflict to the player.
+     */
     private Game mutateGame(String gameCode, Consumer<Game> mutation) {
         String normalizedCode = normalizeCode(gameCode);
         return withGameLock(normalizedCode, () -> {
-            Game game = getGame(normalizedCode);
-            mutation.accept(game);
-            gameStore.save(game);
-            return game;
+            StaleGameWriteException lastStale = null;
+            for (int attempt = 0; attempt < MUTATE_RETRY_ATTEMPTS; attempt++) {
+                Game game = getGame(normalizedCode);
+                mutation.accept(game);
+                try {
+                    gameStore.save(game);
+                    return game;
+                } catch (StaleGameWriteException stale) {
+                    lastStale = stale;
+                    log.info("mutate_stale_write_retry code={} attempt={} message={}",
+                            normalizedCode, attempt, stale.getMessage());
+                }
+            }
+            throw lastStale;
         });
     }
 
@@ -354,7 +379,7 @@ public class GameService {
                 autoPlayRunning.remove(normalizedCode);
             }
             if (continueLater) {
-                CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS, autoPlayExecutor)
+                CompletableFuture.delayedExecutor(AUTO_PLAY_RESCHEDULE_DELAY_MS, TimeUnit.MILLISECONDS, autoPlayExecutor)
                         .execute(() -> scheduleAutoPlay(normalizedCode));
             }
         }, autoPlayExecutor);
@@ -362,7 +387,7 @@ public class GameService {
 
     /** Returns true when the loop should be rescheduled after a pause (yield after END_ROUND). */
     private boolean runAutoPlayLoop(String code) {
-        for (int i = 0; i < 48; i++) {
+        for (int i = 0; i < AUTO_PLAY_MAX_ITERATIONS; i++) {
             /* Fresh load each iteration: humans may act while the bot deliberates. */
             Game game = getGame(code);
             if (game.getStatus() != GameStatus.IN_PROGRESS) {
@@ -523,7 +548,7 @@ public class GameService {
     }
 
     private void ensureMinimumThinkingPause(long startedAtMs) {
-        long minDelayMs = 2000L + random.nextInt(1001);
+        long minDelayMs = AUTO_PLAY_MIN_THINK_MS + random.nextInt(AUTO_PLAY_THINK_JITTER_MS);
         long elapsedMs = System.currentTimeMillis() - startedAtMs;
         long remainingMs = minDelayMs - elapsedMs;
         if (remainingMs <= 0) {

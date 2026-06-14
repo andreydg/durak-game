@@ -50,6 +50,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
 
     public GeminiAutoPlayDecisionEngine(
             HeuristicAutoPlayDecisionEngine fallback,
+            ObjectMapper objectMapper,
             @Value("${autoplay.gemini.enabled:true}") boolean enabled,
             @Value("${autoplay.gemini.api-key:}") String apiKey,
             @Value("${autoplay.gemini.model:gemini-3.1-flash-lite-preview}") String model,
@@ -64,7 +65,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             @Value("${autoplay.request-timeout-ms:30000}") long timeoutMs
     ) {
         this.fallback = fallback;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.min(MAX_CONNECT_TIMEOUT_MS, timeoutMs)))
                 .build();

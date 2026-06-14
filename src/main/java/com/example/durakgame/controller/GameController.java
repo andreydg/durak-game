@@ -61,7 +61,7 @@ public class GameController {
     public GameResponse addBot(@PathVariable String code, @Valid @RequestBody AddBotRequest request) {
         gameService.addBot(code, request.playerId(), request.botName());
         Game game = gameService.getGame(code);
-        webSocketHandler.broadcastGameUpdated(code);
+        webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
