@@ -122,6 +122,6 @@ class HeuristicAutoPlayDecisionEngineTest {
 
     private static Game.PlayerSnapshot player(String id, String... cardCodes) {
         List<Card> hand = Arrays.stream(cardCodes).map(Card::fromCode).toList();
-        return new Game.PlayerSnapshot(id, id, 0L, false, null, hand);
+        return new Game.PlayerSnapshot(id, id, 0L, false, null, hand, "");
     }
 }

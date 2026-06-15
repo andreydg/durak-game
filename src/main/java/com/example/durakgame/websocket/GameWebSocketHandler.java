@@ -17,6 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
+    /** Bounds connection resources per room (well above any legitimate player/spectator count). */
+    private static final int MAX_SESSIONS_PER_GAME = 50;
+
     private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
     private final Map<String, Map<String, String>> botThinking = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper;
@@ -26,10 +29,14 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) {
+    public void afterConnectionEstablished(WebSocketSession session) throws IOException {
         String gameCode = gameCodeFromSession(session);
-        gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet())
-                .add(session);
+        Set<WebSocketSession> sessions = gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet());
+        if (sessions.size() >= MAX_SESSIONS_PER_GAME) {
+            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections for this game"));
+            return;
+        }
+        sessions.add(session);
         replayBotThinking(gameCode, session);
     }
 
