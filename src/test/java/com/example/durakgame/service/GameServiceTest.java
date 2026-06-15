@@ -103,6 +103,46 @@ class GameServiceTest {
         assertThrows(NoSuchElementException.class, () -> service.getGame("NOPE12"));
     }
 
+    // --- authorization ----------------------------------------------------
+
+    @Test
+    void isAuthorizedRequiresMatchingSecretToken() {
+        GameService service = newService(new InMemoryGameStore());
+        Game game = service.createGame("Host");
+        Player host = game.getPlayers().getFirst();
+
+        assertTrue(service.isAuthorized(game, host.getId(), host.getSecret()));
+        assertFalse(service.isAuthorized(game, host.getId(), "wrong-token"));
+        // The public id is NOT a valid token once a real secret exists (no impersonation).
+        assertFalse(service.isAuthorized(game, host.getId(), host.getId()));
+        assertFalse(service.isAuthorized(game, "ghost", host.getSecret()));
+        assertFalse(service.isAuthorized(game, host.getId(), null));
+    }
+
+    @Test
+    void isAuthorizedAcceptsPlayerIdForLegacyBlankSecret() {
+        // Games persisted before tokens decode with a blank secret; the id acts as the token.
+        Game legacy = inProgress(
+                List.of(playerSnapshot("h", false, "9H"), playerSnapshot("b", false, "7D")),
+                Suit.SPADES, cards("8D"), 0, 1);
+        GameService service = newService(new InMemoryGameStore());
+
+        assertTrue(service.isAuthorized(legacy, "h", "h"));
+        assertFalse(service.isAuthorized(legacy, "h", "not-h"));
+    }
+
+    @Test
+    void requireAuthorizedThrowsOnBadToken() {
+        SnapshotGameStore store = new SnapshotGameStore();
+        GameService service = newService(store);
+        store.put(twoPlayerBoutOnEmptyTable());
+
+        assertThrows(UnauthorizedActionException.class,
+                () -> service.requireAuthorized("TEST01", "h", "bad-token"));
+        // Legacy fixture: the id is accepted, so this must not throw.
+        service.requireAuthorized("TEST01", "h", "h");
+    }
+
     // --- joinGame ---------------------------------------------------------
 
     @Test
@@ -451,7 +491,7 @@ class GameServiceTest {
     }
 
     private static Game.PlayerSnapshot playerSnapshot(String id, boolean bot, String... cardCodes) {
-        return new Game.PlayerSnapshot(id, id, 0L, bot, null, cards(cardCodes));
+        return new Game.PlayerSnapshot(id, id, 0L, bot, null, cards(cardCodes), "");
     }
 
     private static List<Card> cards(String... codes) {

@@ -20,6 +20,7 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,6 +29,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/games")
 public class GameController {
+    /** Header carrying the per-player secret token that proves ownership for reads and actions. */
+    private static final String TOKEN_HEADER = "X-Durak-Token";
+
     private final GameService gameService;
     private final GameWebSocketHandler webSocketHandler;
 
@@ -42,7 +46,8 @@ public class GameController {
         Player host = game.getPlayers().getFirst();
         return new CreateGameResponse(
                 toResponse(game, host.getId()),
-                host.getId()
+                host.getId(),
+                host.getSecret()
         );
     }
 
@@ -53,12 +58,17 @@ public class GameController {
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return new JoinGameResponse(
                 toResponse(game, joined.getId()),
-                joined.getId()
+                joined.getId(),
+                joined.getSecret()
         );
     }
 
     @PostMapping("/{code}/bots")
-    public GameResponse addBot(@PathVariable String code, @Valid @RequestBody AddBotRequest request) {
+    public GameResponse addBot(
+            @PathVariable String code,
+            @Valid @RequestBody AddBotRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         gameService.addBot(code, request.playerId(), request.botName());
         Game game = gameService.getGame(code);
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
@@ -66,26 +76,44 @@ public class GameController {
     }
 
     @GetMapping("/{code}")
-    public GameResponse getGame(@PathVariable String code, @RequestParam(required = false) String viewerPlayerId) {
-        return toResponse(gameService.getGame(code), viewerPlayerId);
+    public GameResponse getGame(
+            @PathVariable String code,
+            @RequestParam(required = false) String viewerPlayerId,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        Game game = gameService.getGame(code);
+        // Reveal the viewer's hand and legal moves only when the token proves ownership.
+        String authorizedViewer = gameService.isAuthorized(game, viewerPlayerId, token) ? viewerPlayerId : null;
+        return toResponse(game, authorizedViewer);
     }
 
     @PostMapping("/{code}/start")
-    public GameResponse startGame(@PathVariable String code, @Valid @RequestBody StartGameRequest request) {
+    public GameResponse startGame(
+            @PathVariable String code,
+            @Valid @RequestBody StartGameRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         Game game = gameService.startGame(code, request.playerId());
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
     @PostMapping("/{code}/attack")
-    public GameResponse attack(@PathVariable String code, @Valid @RequestBody AttackRequest request) {
+    public GameResponse attack(
+            @PathVariable String code,
+            @Valid @RequestBody AttackRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         Game game = gameService.attack(code, request.playerId(), Card.fromCode(request.card()));
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
     @PostMapping("/{code}/defend")
-    public GameResponse defend(@PathVariable String code, @Valid @RequestBody DefendRequest request) {
+    public GameResponse defend(
+            @PathVariable String code,
+            @Valid @RequestBody DefendRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         Game game = gameService.defend(
                 code,
                 request.playerId(),
@@ -97,28 +125,46 @@ public class GameController {
     }
 
     @PostMapping("/{code}/transfer")
-    public GameResponse transfer(@PathVariable String code, @Valid @RequestBody TransferRequest request) {
+    public GameResponse transfer(
+            @PathVariable String code,
+            @Valid @RequestBody TransferRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         Game game = gameService.transfer(code, request.playerId(), Card.fromCode(request.card()));
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
     @PostMapping("/{code}/take")
-    public GameResponse take(@PathVariable String code, @Valid @RequestBody PlayerActionRequest request) {
+    public GameResponse take(
+            @PathVariable String code,
+            @Valid @RequestBody PlayerActionRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         Game game = gameService.takeCards(code, request.playerId());
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
     @PostMapping("/{code}/end-round")
-    public GameResponse endRound(@PathVariable String code, @Valid @RequestBody PlayerActionRequest request) {
+    public GameResponse endRound(
+            @PathVariable String code,
+            @Valid @RequestBody PlayerActionRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
         Game game = gameService.endRound(code, request.playerId());
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
     @PostMapping("/{code}/leave")
-    public void leaveGame(@PathVariable String code, @Valid @RequestBody PlayerActionRequest request) {
+    public void leaveGame(
+            @PathVariable String code,
+            @Valid @RequestBody PlayerActionRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        // The leave-beacon cannot set headers, so fall back to a token carried in the body.
+        String effectiveToken = token != null ? token : request.token();
+        gameService.requireAuthorized(code, request.playerId(), effectiveToken);
         gameService.leaveGame(code, request.playerId());
         webSocketHandler.broadcastGameUpdated(code);
     }

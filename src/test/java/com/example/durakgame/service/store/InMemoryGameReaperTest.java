@@ -64,7 +64,7 @@ class InMemoryGameReaperTest {
     /** A LOBBY game whose createdAt is {@code minutesAgo} in the past, via snapshot reconstruction. */
     private static Game agedLobby(String code, long minutesAgo) {
         long createdAtMs = Instant.now().minus(minutesAgo, ChronoUnit.MINUTES).toEpochMilli();
-        Game.PlayerSnapshot host = new Game.PlayerSnapshot("host", "Host", createdAtMs, false, null, List.of());
+        Game.PlayerSnapshot host = new Game.PlayerSnapshot("host", "Host", createdAtMs, false, null, List.of(), "");
         return Game.fromSnapshot(new Game.Snapshot(
                 code, createdAtMs, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,

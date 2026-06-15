@@ -106,6 +106,37 @@ public class GameService {
                 .orElseThrow(() -> new NoSuchElementException("Game not found"));
     }
 
+    /**
+     * True when {@code token} proves ownership of {@code playerId} in {@code game}. For games
+     * persisted before per-player tokens existed (blank stored secret), the player id itself is
+     * accepted as the token, so sessions and rooms in flight across the upgrade keep working.
+     */
+    public boolean isAuthorized(Game game, String playerId, String token) {
+        if (playerId == null || token == null || token.isBlank()) {
+            return false;
+        }
+        Player player = game.getPlayers().stream()
+                .filter(p -> p.getId().equals(playerId))
+                .findFirst()
+                .orElse(null);
+        if (player == null) {
+            return false;
+        }
+        String secret = player.getSecret();
+        if (secret == null || secret.isBlank()) {
+            return token.equals(playerId);
+        }
+        return token.equals(secret);
+    }
+
+    /** Loads the game and rejects the request unless {@code token} proves ownership of {@code playerId}. */
+    public void requireAuthorized(String gameCode, String playerId, String token) {
+        Game game = getGame(gameCode);
+        if (!isAuthorized(game, playerId, token)) {
+            throw new UnauthorizedActionException();
+        }
+    }
+
     public Player joinGame(String gameCode, String playerName) {
         String normalizedCode = normalizeCode(gameCode);
         Player joined = withGameLockRetryingStale(normalizedCode, () -> {

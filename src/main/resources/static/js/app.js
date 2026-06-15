@@ -27,6 +27,7 @@ const {
 const state = {
     gameCode: sessionStorage.getItem("durak_game_code") || "",
     playerId: sessionStorage.getItem("durak_player_id") || "",
+    playerToken: sessionStorage.getItem("durak_player_token") || "",
     game: null,
     selectedHandCard: null,
     showGameplayHelp: false,
@@ -94,10 +95,20 @@ function log(message) {
     messages.textContent = `[${now}] ${message}`;
 }
 
+/* Capability token proving we own state.playerId; falls back to the id for legacy sessions/games. */
+function effectivePlayerToken() {
+    return state.playerToken || state.playerId || "";
+}
+
+function authHeaders() {
+    const token = effectivePlayerToken();
+    return token ? {"X-Durak-Token": token} : {};
+}
+
 async function api(path, method, body) {
     const res = await fetch(path, {
         method,
-        headers: {"Content-Type": "application/json"},
+        headers: {"Content-Type": "application/json", ...authHeaders()},
         body: body ? JSON.stringify(body) : undefined
     });
     const payload = await res.json();
@@ -112,7 +123,8 @@ function notifyLeaveOnUnload() {
     const code = state.gameCode;
     const playerId = state.playerId;
     if (!code || !playerId) return;
-    const payload = JSON.stringify({ playerId });
+    // Beacons can't set headers, so carry the token in the body; the server accepts either.
+    const payload = JSON.stringify({ playerId, token: effectivePlayerToken() });
     try {
         const blob = new Blob([payload], { type: "application/json" });
         const sent = navigator.sendBeacon(`/api/games/${code}/leave`, blob);
@@ -126,7 +138,7 @@ function notifyLeaveOnUnload() {
     try {
         fetch(`/api/games/${code}/leave`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...authHeaders() },
             body: payload,
             keepalive: true
         });
@@ -139,6 +151,7 @@ function notifyLeaveOnUnload() {
 function saveSession() {
     sessionStorage.setItem("durak_game_code", state.gameCode || "");
     sessionStorage.setItem("durak_player_id", state.playerId || "");
+    sessionStorage.setItem("durak_player_token", state.playerToken || "");
 }
 
 let lobbyListTimer = null;
@@ -220,6 +233,7 @@ async function performJoin(roomCode) {
     const joined = await api(`/api/games/${code}/join`, "POST", {playerName: playerNameInput.value.trim()});
     state.gameCode = joined.game.code;
     state.playerId = joined.playerId;
+    state.playerToken = joined.playerToken || "";
     state.game = joined.game;
     state.selectedHandCard = null;
     saveSession();
@@ -790,6 +804,7 @@ function connectWebSocket() {
 function clearSession() {
     state.gameCode = "";
     state.playerId = "";
+    state.playerToken = "";
     state.game = null;
     state.selectedHandCard = null;
     state.leaveNotified = false;
@@ -805,6 +820,7 @@ document.getElementById("createBtn").addEventListener("click", async () => {
         const created = await api("/api/games", "POST", {hostName: hostNameInput.value.trim()});
         state.gameCode = created.game.code;
         state.playerId = created.hostPlayerId;
+        state.playerToken = created.playerToken || "";
         state.game = created.game;
         state.selectedHandCard = null;
         saveSession();

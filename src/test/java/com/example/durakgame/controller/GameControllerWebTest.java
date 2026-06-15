@@ -5,6 +5,7 @@ import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.Player;
 import com.example.durakgame.service.GameService;
+import com.example.durakgame.service.UnauthorizedActionException;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import java.util.NoSuchElementException;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -107,6 +109,40 @@ class GameControllerWebTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"playerId\":\"\",\"card\":\"9H\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void actionWithBadTokenReturns403() throws Exception {
+        doThrow(new UnauthorizedActionException())
+                .when(gameService).requireAuthorized("ABC123", "p1", "bad-token");
+
+        mockMvc.perform(post("/api/games/ABC123/attack")
+                        .header("X-Durak-Token", "bad-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"playerId\":\"p1\",\"card\":\"9H\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void revealsHandOnlyToAuthorizedViewer() throws Exception {
+        Game game = new Game("ABC123", new Player("Alice"));
+        game.addPlayer("Bob", 4);
+        game.start(game.getHostPlayerId());
+        String viewerId = game.getPlayers().getFirst().getId();
+        when(gameService.getGame("ABC123")).thenReturn(game);
+
+        // Unauthorized viewer (default isAuthorized=false): hand is hidden.
+        mockMvc.perform(get("/api/games/ABC123").param("viewerPlayerId", viewerId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.players[0].hand", org.hamcrest.Matchers.hasSize(0)));
+
+        // Authorized viewer: their six cards are revealed.
+        when(gameService.isAuthorized(game, viewerId, "good-token")).thenReturn(true);
+        mockMvc.perform(get("/api/games/ABC123")
+                        .param("viewerPlayerId", viewerId)
+                        .header("X-Durak-Token", "good-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.players[0].hand", org.hamcrest.Matchers.hasSize(6)));
     }
 
     @Test

@@ -18,7 +18,11 @@ import java.util.Set;
 
 final class GameBinaryCodec {
     private static final byte[] MAGIC = new byte[]{'D', 'G', '1'};
-    private static final int VERSION = 3;
+    private static final int VERSION = 4;
+    /** Oldest format this decoder can still read, so a version bump never destroys in-flight games. */
+    private static final int MIN_SUPPORTED_VERSION = 3;
+    /** Player secret field was introduced in this version; older payloads decode with a blank secret. */
+    private static final int VERSION_WITH_PLAYER_SECRET = 4;
 
     byte[] encode(Game game) {
         Game.Snapshot snapshot = game.toSnapshot();
@@ -54,6 +58,7 @@ final class GameBinaryCodec {
                 out.writeUTF(player.name());
                 out.writeLong(player.joinedAtEpochMs());
                 out.writeBoolean(player.bot());
+                out.writeUTF(player.secret() == null ? "" : player.secret());
                 out.writeBoolean(player.team() != null);
                 if (player.team() != null) {
                     out.writeInt(player.team());
@@ -114,7 +119,7 @@ final class GameBinaryCodec {
                 throw new IllegalStateException("Unknown payload format");
             }
             int formatVersion = in.readUnsignedByte();
-            if (formatVersion != VERSION) {
+            if (formatVersion < MIN_SUPPORTED_VERSION || formatVersion > VERSION) {
                 throw new IllegalStateException("Unsupported payload version: " + formatVersion);
             }
 
@@ -138,13 +143,14 @@ final class GameBinaryCodec {
                 String name = in.readUTF();
                 long joinedAt = in.readLong();
                 boolean bot = in.readBoolean();
+                String secret = formatVersion >= VERSION_WITH_PLAYER_SECRET ? in.readUTF() : "";
                 Integer team = in.readBoolean() ? in.readInt() : null;
                 int handCount = in.readInt();
                 List<Card> hand = new ArrayList<>(handCount);
                 for (int j = 0; j < handCount; j++) {
                     hand.add(idToCard(in.readUnsignedByte()));
                 }
-                players.add(new Game.PlayerSnapshot(id, name, joinedAt, bot, team, hand));
+                players.add(new Game.PlayerSnapshot(id, name, joinedAt, bot, team, hand, secret));
             }
 
             int talonCount = in.readInt();

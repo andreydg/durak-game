@@ -372,7 +372,7 @@ class GameTest {
     }
 
     private static Game.PlayerSnapshot player(String id, Integer team, String... cardCodes) {
-        return new Game.PlayerSnapshot(id, id, 0L, false, team, cards(cardCodes));
+        return new Game.PlayerSnapshot(id, id, 0L, false, team, cards(cardCodes), "");
     }
 
     private static List<Card> cards(String... codes) {

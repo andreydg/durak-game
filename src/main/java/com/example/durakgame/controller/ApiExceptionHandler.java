@@ -1,5 +1,6 @@
 package com.example.durakgame.controller;
 
+import com.example.durakgame.service.UnauthorizedActionException;
 import com.example.durakgame.service.store.GameStoreException;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import org.springframework.http.HttpStatus;
@@ -41,6 +42,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
         return buildError(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
+    @ExceptionHandler(UnauthorizedActionException.class)
+    public ResponseEntity<Map<String, Object>> handleUnauthorized(UnauthorizedActionException ex) {
+        return buildError(HttpStatus.FORBIDDEN, ex.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

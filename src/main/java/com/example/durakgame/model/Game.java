@@ -67,7 +67,8 @@ public class Game implements Serializable {
             long joinedAtEpochMs,
             boolean bot,
             Integer team,
-            List<Card> hand
+            List<Card> hand,
+            String secret
     ) {
     }
 
@@ -415,7 +416,8 @@ public class Game implements Serializable {
                         player.getJoinedAt().toEpochMilli(),
                         player.isBot(),
                         player.getTeam(),
-                        player.getHand()
+                        player.getHand(),
+                        player.getSecret()
                 ))
                 .toList();
         List<AttackSnapshot> tableSnapshots = table.stream()
@@ -459,7 +461,8 @@ public class Game implements Serializable {
                 hostSnapshot.id(),
                 hostSnapshot.name(),
                 Instant.ofEpochMilli(hostSnapshot.joinedAtEpochMs()),
-                hostSnapshot.bot()
+                hostSnapshot.bot(),
+                hostSnapshot.secret()
         );
         host.setTeam(hostSnapshot.team());
         host.addCards(hostSnapshot.hand());
@@ -467,7 +470,8 @@ public class Game implements Serializable {
         Game game = new Game(snapshot.code(), host, Instant.ofEpochMilli(snapshot.createdAtEpochMs()));
         game.players.clear();
         for (PlayerSnapshot ps : snapshot.players()) {
-            Player player = new Player(ps.id(), ps.name(), Instant.ofEpochMilli(ps.joinedAtEpochMs()), ps.bot());
+            Player player = new Player(
+                    ps.id(), ps.name(), Instant.ofEpochMilli(ps.joinedAtEpochMs()), ps.bot(), ps.secret());
             player.setTeam(ps.team());
             player.addCards(ps.hand());
             game.players.add(player);
