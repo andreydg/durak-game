@@ -16,8 +16,12 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component("gameStore")
 public class GameStoreHealthIndicator implements HealthIndicator {
     private static final long CACHE_TTL_MS = 10_000;
-    /* A code that is never allocated, so the probe is a cheap negative lookup. */
-    private static final String PROBE_CODE = "__healthprobe__";
+    /*
+     * A code never allocated as a real game (those are 6 uppercase alphanumerics), so the probe is
+     * a cheap negative lookup. Must avoid Firestore's reserved "__.*__" document-id pattern, which
+     * is rejected on read — hence the hyphen rather than wrapping underscores.
+     */
+    private static final String PROBE_CODE = "health-probe";
 
     private final GameStore gameStore;
     private final AtomicReference<CachedHealth> cached = new AtomicReference<>();

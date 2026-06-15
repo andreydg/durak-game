@@ -1,9 +1,11 @@
 package com.example.durakgame.service.store;
 
+import com.example.durakgame.health.GameStoreHealthIndicator;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.Player;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.boot.health.contributor.Status;
 
 import java.util.List;
 import java.util.UUID;
@@ -80,6 +82,13 @@ class FirestoreGameStoreEmulatorTest {
         } finally {
             store.deleteByCode(code);
         }
+    }
+
+    @Test
+    void healthIndicatorReportsUpAgainstRealFirestore() {
+        // Guards against using a reserved "__.*__" probe id, which Firestore rejects on read.
+        GameStoreHealthIndicator indicator = new GameStoreHealthIndicator(store);
+        assertEquals(Status.UP, indicator.health().getStatus());
     }
 
     @Test
