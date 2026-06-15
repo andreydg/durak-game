@@ -1,5 +1,6 @@
 package com.example.durakgame.controller;
 
+import com.example.durakgame.service.store.GameStoreException;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(StaleGameWriteException.class)
     public ResponseEntity<Map<String, Object>> handleStaleWrite(StaleGameWriteException ex) {
         return buildError(HttpStatus.CONFLICT, "Game state changed — please retry your move.");
+    }
+
+    @ExceptionHandler(GameStoreException.class)
+    public ResponseEntity<Map<String, Object>> handleStoreFailure(GameStoreException ex) {
+        return buildError(HttpStatus.SERVICE_UNAVAILABLE, "Game storage is temporarily unavailable — please try again.");
     }
 
     @ExceptionHandler(IllegalStateException.class)

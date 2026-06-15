@@ -1,5 +1,6 @@
 package com.example.durakgame.controller;
 
+import com.example.durakgame.service.store.GameStoreException;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -45,6 +46,14 @@ class ApiExceptionHandlerTest {
                 handler.handleStaleWrite(new StaleGameWriteException("ABC123", 1, 2));
         assertEquals(HttpStatus.CONFLICT, res.getStatusCode());
         assertEquals("Game state changed — please retry your move.", body(res).get("message"));
+    }
+
+    @Test
+    void storeFailureMapsTo503NotConflict() {
+        ResponseEntity<Map<String, Object>> res =
+                handler.handleStoreFailure(new GameStoreException("Firestore down", new RuntimeException()));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, res.getStatusCode());
+        assertEquals(503, body(res).get("status"));
     }
 
     private static Map<String, Object> body(ResponseEntity<Map<String, Object>> res) {

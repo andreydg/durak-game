@@ -9,7 +9,7 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /
+    healthCheckPath: /actuator/health
     autoDeploy: true
     envVars:
       - key: JAVA_OPTS

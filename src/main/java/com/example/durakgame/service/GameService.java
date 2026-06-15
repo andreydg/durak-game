@@ -59,8 +59,20 @@ public class GameService {
     /*
      * Serializes load->mutate->save per game code so concurrent actions (human + bot,
      * two humans) cannot clobber each other through separate decoded copies of the game.
+     * Striped (fixed array, code-hash indexed) so the lock table stays bounded no matter
+     * how many game codes are ever allocated; distinct codes may share a stripe, which only
+     * adds rare, harmless contention.
      */
-    private final ConcurrentHashMap<String, ReentrantLock> gameLocks = new ConcurrentHashMap<>();
+    private static final int LOCK_STRIPES = 64;
+    private final ReentrantLock[] gameLocks = createStripes(LOCK_STRIPES);
+
+    private static ReentrantLock[] createStripes(int count) {
+        ReentrantLock[] locks = new ReentrantLock[count];
+        for (int i = 0; i < count; i++) {
+            locks[i] = new ReentrantLock();
+        }
+        return locks;
+    }
     /* Bot turns block for seconds (LLM call + pacing pauses); virtual threads keep that cheap. */
     private final ExecutorService autoPlayExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile CachedLobbies cachedLobbies;
@@ -96,7 +108,7 @@ public class GameService {
 
     public Player joinGame(String gameCode, String playerName) {
         String normalizedCode = normalizeCode(gameCode);
-        Player joined = withGameLock(normalizedCode, () -> {
+        Player joined = withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
             List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
             String resolved = resolveDisplayName(playerName, taken);
@@ -117,7 +129,7 @@ public class GameService {
 
     public Player addBot(String gameCode, String hostPlayerId, String botName) {
         String normalizedCode = normalizeCode(gameCode);
-        Player bot = withGameLock(normalizedCode, () -> {
+        Player bot = withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
             if (!Objects.equals(game.getHostPlayerId(), hostPlayerId)) {
                 throw new IllegalStateException("Only host can add bots");
@@ -210,7 +222,7 @@ public class GameService {
 
     public Game endRound(String gameCode, String playerId) {
         String normalizedCode = normalizeCode(gameCode);
-        Game game = withGameLock(normalizedCode, () -> {
+        Game game = withGameLockRetryingStale(normalizedCode, () -> {
             Game g = getGame(normalizedCode);
             GameStatus before = g.getStatus();
             g.endRound(playerId);
@@ -234,7 +246,7 @@ public class GameService {
      */
     public boolean leaveGame(String gameCode, String playerId) {
         String normalizedCode = normalizeCode(gameCode);
-        return withGameLock(normalizedCode, () -> {
+        return withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
             boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
 
@@ -328,7 +340,7 @@ public class GameService {
     }
 
     private <T> T withGameLock(String normalizedCode, Supplier<T> action) {
-        ReentrantLock lock = gameLocks.computeIfAbsent(normalizedCode, ignored -> new ReentrantLock());
+        ReentrantLock lock = gameLocks[Math.floorMod(normalizedCode.hashCode(), gameLocks.length)];
         lock.lock();
         try {
             return action.get();
@@ -338,20 +350,17 @@ public class GameService {
     }
 
     /**
-     * Loads, mutates, and saves a game under the per-code lock. Retries once on a
-     * {@link StaleGameWriteException} so a cross-instance lost-update race re-reads
-     * fresh state and re-applies the move instead of surfacing a conflict to the player.
+     * Runs a load->mutate->save body under the per-code lock, retrying on a
+     * {@link StaleGameWriteException} so a cross-instance lost-update race re-reads fresh
+     * state and re-applies instead of surfacing a conflict to the player. The body must be
+     * idempotent across retries (it re-loads the game each attempt).
      */
-    private Game mutateGame(String gameCode, Consumer<Game> mutation) {
-        String normalizedCode = normalizeCode(gameCode);
+    private <T> T withGameLockRetryingStale(String normalizedCode, Supplier<T> body) {
         return withGameLock(normalizedCode, () -> {
             StaleGameWriteException lastStale = null;
             for (int attempt = 0; attempt < MUTATE_RETRY_ATTEMPTS; attempt++) {
-                Game game = getGame(normalizedCode);
-                mutation.accept(game);
                 try {
-                    gameStore.save(game);
-                    return game;
+                    return body.get();
                 } catch (StaleGameWriteException stale) {
                     lastStale = stale;
                     log.info("mutate_stale_write_retry code={} attempt={} message={}",
@@ -359,6 +368,16 @@ public class GameService {
                 }
             }
             throw lastStale;
+        });
+    }
+
+    private Game mutateGame(String gameCode, Consumer<Game> mutation) {
+        String normalizedCode = normalizeCode(gameCode);
+        return withGameLockRetryingStale(normalizedCode, () -> {
+            Game game = getGame(normalizedCode);
+            mutation.accept(game);
+            gameStore.save(game);
+            return game;
         });
     }
 

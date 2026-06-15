@@ -72,9 +72,9 @@ public class FirestoreGameStore implements GameStore {
             if (ex.getCause() instanceof StaleGameWriteException stale) {
                 throw stale;
             }
-            throw new IllegalStateException("Failed to save game to Firestore", ex);
+            throw new GameStoreException("Failed to save game to Firestore", ex);
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to save game to Firestore", ex);
+            throw new GameStoreException("Failed to save game to Firestore", ex);
         }
     }
 
@@ -89,7 +89,7 @@ public class FirestoreGameStore implements GameStore {
             Blob payload = snapshot.getBlob(FIELD_PAYLOAD);
             return Optional.of(decode(payload == null ? null : payload.toBytes()));
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to read game from Firestore", ex);
+            throw new GameStoreException("Failed to read game from Firestore", ex);
         }
     }
 
@@ -99,7 +99,7 @@ public class FirestoreGameStore implements GameStore {
             log.debug("firestore_write code={} op=delete", code);
             collection().document(code).delete().get();
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to delete game from Firestore", ex);
+            throw new GameStoreException("Failed to delete game from Firestore", ex);
         }
     }
 
@@ -109,7 +109,7 @@ public class FirestoreGameStore implements GameStore {
             log.debug("firestore_read code={} op=existsByCode", code);
             return collection().document(code).get().get().exists();
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to check game existence in Firestore", ex);
+            throw new GameStoreException("Failed to check game existence in Firestore", ex);
         }
     }
 
@@ -119,7 +119,7 @@ public class FirestoreGameStore implements GameStore {
             log.debug("firestore_read op=listAll");
             return decodeAll(collection().get().get().getDocuments());
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to list games from Firestore", ex);
+            throw new GameStoreException("Failed to list games from Firestore", ex);
         }
     }
 
@@ -131,7 +131,7 @@ public class FirestoreGameStore implements GameStore {
                     .whereEqualTo(FIELD_STATUS, GameStatus.LOBBY.name())
                     .get().get().getDocuments());
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to list lobby games from Firestore", ex);
+            throw new GameStoreException("Failed to list lobby games from Firestore", ex);
         }
     }
 
@@ -168,10 +168,10 @@ public class FirestoreGameStore implements GameStore {
 
     private Game decode(byte[] payload) {
         if (payload == null || payload.length == 0) {
-            throw new IllegalStateException("Missing persisted payload");
+            throw new GameStoreException("Missing persisted payload");
         }
         if (!codec.isCodecPayload(payload)) {
-            throw new IllegalStateException("Unsupported payload format");
+            throw new GameStoreException("Unsupported payload format");
         }
         return codec.decode(payload);
     }
