@@ -60,6 +60,22 @@ class InMemoryGameStoreTest {
     }
 
     @Test
+    void lobbySummariesCarryHostNameAndPlayerNames() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        Game game = new Game("LOBBY1", new Player("Alice"));
+        game.addPlayer("Bob", 4);
+        store.save(game);
+
+        List<LobbyProjection> summaries = store.listOpenLobbySummaries();
+        assertEquals(1, summaries.size());
+        LobbyProjection p = summaries.getFirst();
+        assertEquals("LOBBY1", p.code());
+        assertEquals("Alice", p.hostName());
+        assertEquals(2, p.playerCount());
+        assertTrue(p.playerNames().containsAll(List.of("Alice", "Bob")));
+    }
+
+    @Test
     void listOpenLobbiesFiltersByLobbyStatus() {
         InMemoryGameStore store = new InMemoryGameStore();
         store.save(new Game("LOBBY1", new Player("Host")));

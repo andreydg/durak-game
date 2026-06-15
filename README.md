@@ -4,13 +4,14 @@ Spring Boot multiplayer Durak game with a browser UI and websocket updates.
 
 ## Testing
 
-Three layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:
+Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:
 
 | Layer | Tool | Command | Covers |
 | --- | --- | --- | --- |
-| Backend | JUnit / Maven | `./mvnw test` | Game rules, `GameService` orchestration & autoplay, controllers + exception mapping, stores |
+| Backend | JUnit / Maven | `./mvnw test` | Game rules, `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, stores |
+| Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
 | Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js) |
-| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby, add bot, start, play) |
+| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby, add bot, play, hand-privacy / anti-cheat) |
 
 First-time frontend setup:
 
@@ -20,6 +21,14 @@ npx playwright install --with-deps chromium   # only needed for E2E
 ```
 
 The Playwright config boots the packaged jar itself (in-memory store, offline heuristic bot — no API keys needed), so run `./mvnw -DskipTests package` once before `npm run test:e2e`.
+
+The Firestore emulator tests run automatically in CI (against the emulator Docker image). Locally they only run when an emulator is reachable — e.g. `gcloud beta emulators firestore start --host-port=localhost:8085` then `FIRESTORE_EMULATOR_HOST=localhost:8085 ./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` (needs a JDK the emulator supports).
+
+## Security & limits
+
+- **Per-player tokens.** Create/join returns a secret token (sent back via the `X-Durak-Token` header). The server reveals a player's hand and accepts their moves only with a matching token, so the room code alone can't read hands or spoof opponents. Games persisted before tokens fall back to accepting the player id.
+- **Rate limiting.** Per-IP token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; the WebSocket handler caps sessions per room. Defaults are generous enough for players behind a shared NAT.
+- **Health.** `/actuator/health` reports `DOWN` when the game store is unreachable; it's the platform health-check path.
 
 ## Game state storage
 

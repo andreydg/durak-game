@@ -321,26 +321,15 @@ public class GameService {
         if (cached != null && now - cached.atMs() < LOBBY_CACHE_TTL_MS) {
             return cached.summaries();
         }
-        List<LobbyGameSummary> summaries = gameStore.listOpenLobbies().stream()
-                .filter(g -> g.getStatus() == GameStatus.LOBBY)
-                .filter(g -> g.getPlayers().size() < MAX_PLAYERS)
-                .map(g -> {
-                    String hostName = g.getPlayers().stream()
-                            .filter(p -> p.getId().equals(g.getHostPlayerId()))
-                            .map(Player::getName)
-                            .findFirst()
-                            .orElse("?");
-                    List<String> playerNames = g.getPlayers().stream()
-                            .map(Player::getName)
-                            .toList();
-                    return new LobbyGameSummary(
-                            g.getCode(),
-                            hostName,
-                            playerNames,
-                            g.getPlayers().size(),
-                            MAX_PLAYERS
-                    );
-                })
+        List<LobbyGameSummary> summaries = gameStore.listOpenLobbySummaries().stream()
+                .filter(p -> p.playerCount() < MAX_PLAYERS)
+                .map(p -> new LobbyGameSummary(
+                        p.code(),
+                        p.hostName(),
+                        p.playerNames(),
+                        p.playerCount(),
+                        MAX_PLAYERS
+                ))
                 .sorted(Comparator.comparing(LobbyGameSummary::code))
                 .toList();
         cachedLobbies = new CachedLobbies(now, summaries);
