@@ -1,0 +1,248 @@
+/* ============================================================
+   theme.css — shared "terminal" design system
+   Source aesthetic: andreyg.com (light, monospace, gold accent)
+
+   Default palette is LIGHT (matches andreyg.com). A project that
+   wants a dark skin (e.g. solar-system) overrides the palette
+   tokens in its own :root block loaded after this file — no need
+   to fork this file.
+
+   Keep identical copies in:
+     - andreyg-com/public/theme.css
+     - lang-detect-web/src/main/resources/static/theme.css
+     - solar-system/src/styles/theme.css
+     - durak-game/src/main/resources/static/css/theme.css
+   ============================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- palette (light) ---- */
+  --bg: #f4f4f4;
+  /* signature andreyg.com backdrop: near-white, a hair grayer toward the top */
+  --bg-gradient: linear-gradient(to top, #ffffff 0%, #111111 900%);
+  --surface: rgba(255, 255, 255, 0.6);
+  --surface-strong: rgba(255, 255, 255, 0.85);
+  --surface-sunken: rgba(0, 0, 0, 0.035);
+  --border: rgba(40, 33, 20, 0.14);
+  --border-strong: rgba(40, 33, 20, 0.3);
+
+  --text: #2b2620;
+  --text-soft: #6b6359;
+  --text-dim: #9a9183;
+  /* the ghostly oversized andreyg.com title */
+  --text-ghost: #dcdcdc;
+
+  /* gold — the andreyg.com group-label color */
+  --accent: #b9863a;
+  /* deeper gold for hover/links so it stays legible on near-white */
+  --accent-bright: #9c6c25;
+  --accent-soft: rgba(185, 134, 58, 0.14);
+  --accent-line: rgba(185, 134, 58, 0.45);
+
+  --danger: #b4502f;
+  --danger-soft: rgba(180, 80, 47, 0.1);
+  --success: #3a7d4f;
+  --success-soft: rgba(58, 125, 79, 0.12);
+
+  /* ---- type ---- */
+  --font-mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Monaco,
+    "Cascadia Code", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+
+  /* ---- shape & depth ---- */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+  --shadow: 0 10px 30px rgba(40, 33, 20, 0.12);
+  --shadow-soft: 0 3px 12px rgba(40, 33, 20, 0.08);
+
+  /* ---- motion ---- */
+  --t-fast: 120ms ease;
+  --t-med: 160ms ease;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--bg-gradient);
+  background-attachment: fixed;
+}
+
+/* ---- typography ---- */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+a {
+  color: var(--accent-bright);
+  text-decoration: none;
+  transition: color var(--t-fast);
+}
+
+a:hover,
+a:focus {
+  color: var(--accent);
+}
+
+/* The signature bracketed label, e.g. [about] / [your text].
+   Use the class and omit the brackets in markup — they are added here. */
+.t-label {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  letter-spacing: 1px;
+  text-transform: lowercase;
+  color: var(--accent);
+}
+
+.t-label::before {
+  content: "[";
+}
+
+.t-label::after {
+  content: "]";
+}
+
+/* ---- surfaces ---- */
+.t-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-soft);
+}
+
+/* ---- form controls (terminal defaults) ---- */
+.t-input,
+.t-field {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+.t-input::placeholder,
+.t-field::placeholder {
+  color: var(--text-dim);
+}
+
+.t-input:focus,
+.t-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* ---- buttons ---- */
+.t-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast),
+    transform var(--t-fast), color var(--t-fast);
+}
+
+.t-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-bright);
+  transform: translateY(-1px);
+}
+
+.t-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.t-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* primary / accent button */
+.t-btn--primary {
+  color: #fffaf0;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.t-btn--primary:hover:not(:disabled) {
+  color: #fffaf0;
+  background: var(--accent-bright);
+  border-color: var(--accent-bright);
+}
+
+/* ---- pill / chip ---- */
+.t-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0.25rem 0.6rem;
+}
+
+/* ---- scrollbar ---- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- accessibility ---- */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
