@@ -19,6 +19,25 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#appAlert")).toHaveAttribute("role", "alert");
     });
 
+    test("error alert is opaque and cannot block controls behind it", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#gameCode", "NOPE12");
+        await page.click("#joinBtn");
+
+        const alert = page.locator("#appAlert");
+        await expect(alert).toBeVisible();
+        const styles = await alert.evaluate(element => {
+            const computed = getComputedStyle(element);
+            return {
+                backgroundColor: computed.backgroundColor,
+                pointerEvents: computed.pointerEvents
+            };
+        });
+        expect(styles.backgroundColor).not.toMatch(/rgba\([^)]*,\s*0(?:\.|\))/);
+        expect(styles.backgroundColor).not.toMatch(/\/\s*0(?:\.|\s|$)/);
+        expect(styles.pointerEvents).toBe("none");
+    });
+
     test("join form submits with Enter", async ({ page }) => {
         await page.goto("/");
         await page.fill("#gameCode", "NOPE12");
@@ -41,6 +60,36 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#statusLabel")).toHaveText("Lobby");
         await expect(page.locator("#roleLabel")).toContainText("Alice");
         await expect(page.locator("#roomWaitingLine")).toBeVisible();
+    });
+
+    test("a successful refresh clears a transient connection error", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#hostName", "Recovery Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
+        const code = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+        expect(code).toMatch(/^[A-Z0-9]{6}$/);
+
+        let rejectNextRead = true;
+        await page.route(`**/api/games/${code}?*`, async route => {
+            if (rejectNextRead && route.request().method() === "GET") {
+                rejectNextRead = false;
+                await route.fulfill({
+                    status: 503,
+                    contentType: "application/json",
+                    body: JSON.stringify({message: "Temporary outage"})
+                });
+                return;
+            }
+            await route.continue();
+        });
+
+        await page.evaluate(() => window.refreshGame(false));
+        await expect(page.locator("#appAlert")).toContainText("Temporary outage");
+
+        await page.evaluate(() => window.refreshGame(false));
+        await expect(page.locator("#appAlert")).toBeHidden();
     });
 
     test("a created table appears in Open tables for another visitor", async ({ page, browser }) => {

@@ -667,6 +667,7 @@ async function refreshGame(showMessage = false) {
         state.game = await api(`/api/games/${state.gameCode}?${query}`, "GET");
         syncBotThinkingFromGame(state.game);
         render();
+        clearError();
         if (showMessage) log("Game refreshed.");
     } catch (err) {
         if (err.message === "Game not found") {
