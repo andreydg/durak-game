@@ -40,8 +40,14 @@ The Firestore emulator tests run automatically in CI (against the emulator Docke
 ## Security & limits
 
 - **Per-player tokens.** Create/join returns a secret token (sent back via the `X-Durak-Token` header). The server reveals a player's hand and accepts their moves only with a matching token, so the room code alone can't read hands or spoof opponents. Games persisted before tokens fall back to accepting the player id.
-- **Rate limiting.** Per-IP token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; the WebSocket handler caps sessions per room. Defaults are generous enough for players behind a shared NAT.
+- **Rate limiting.** Per-IP token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; game and lobby WebSocket handlers cap their connection sets. Defaults are generous enough for players behind a shared NAT.
 - **Health.** `/actuator/health` reports `DOWN` when the game store is unreachable; it's the platform health-check path.
+
+## Realtime updates and fallback reads
+
+Game changes arrive over `/ws/games/{code}` and public-table invalidations arrive over `/ws/lobbies`. Lobby events carry only a monotonic revision; clients then read the authoritative `/api/lobbies` projection. A healthy connection reduces game health reads to once every 30 seconds and lobby health reads to once every 60 seconds, instead of fixed three-/four-second polling.
+
+Both channels reconnect with bounded exponential backoff and jitter. If a socket is unavailable, HTTP fallback refreshes continue (with backoff after lobby read failures). Hidden tabs close sockets and pause refresh/heartbeat work, then reconnect and reconcile immediately when visible again.
 
 ## Game state storage
 
@@ -127,7 +133,7 @@ PROJECT_ID="my-gcp-project" REGION="europe-west1" SERVICE="durak-prod" TAG="$(gi
 
 The deploy script pins the service to one instance (`--max-instances 1`). Keep it that way for now:
 
-- Websocket sessions and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
+- Websocket sessions, lobby invalidation revisions, and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
 - Concurrent-write protection uses in-process per-game locks (plus a stale-version check on every Firestore save as a safety net). Multiple instances would rely on the version check alone and reject racing writes instead of serializing them.
 
 Game state itself persists in Firestore on Cloud Run, so a restart does not lose active rooms. To scale beyond one instance later, move websocket fan-out and bot status to a shared channel (for example Firestore listeners or Pub/Sub).

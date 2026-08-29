@@ -20,6 +20,9 @@ const {
     roomCodeFromSearch,
     buildInviteUrl,
     searchWithoutRoomParam,
+    reconnectDelayMs,
+    gameRefreshDelayMs,
+    lobbyRefreshDelayMs,
     escapeHtml,
     roleTags,
     playerTeam,
@@ -39,8 +42,25 @@ const state = {
     heartbeatTimer: null,
     ws: null,
     wsConnected: false,
+    wsReconnectTimer: null,
+    wsReconnectAttempt: 0,
+    wsStableTimer: null,
     suppressWsRefreshUntilMs: 0,
-    lastWsHealthRefreshMs: 0,
+    gameRefreshInFlight: null,
+    gameRefreshQueued: false,
+    lobbyWs: null,
+    lobbyWsConnected: false,
+    lobbyWsReconnectTimer: null,
+    lobbyWsReconnectAttempt: 0,
+    lobbyListTimer: null,
+    lobbyListDueAt: 0,
+    lobbyEventTimer: null,
+    lobbyUpdatesActive: false,
+    lobbyFetchInFlight: null,
+    lobbyRefreshQueued: false,
+    lobbyFetchFailures: 0,
+    lobbyStreamId: "",
+    lobbyRevision: -1,
     botThinking: {},
     botThinkingEventAt: {}
 };
@@ -170,73 +190,225 @@ function clearConsumedInvite() {
     }
 }
 
-let lobbyListTimer = null;
-
 async function refreshLobbyLists() {
-    let rows = [];
-    try {
-        const res = await fetch("/api/lobbies", {cache: "no-store"});
-        if (!res.ok) throw new Error("bad");
-        rows = await res.json();
-    } catch {
-        const err = "<p class=\"lobby-list-empty muted\">Could not load open tables. Try refreshing the page.</p>";
-        if (lobbyGameList) lobbyGameList.innerHTML = err;
-        if (gameLobbyGameList) gameLobbyGameList.innerHTML = err;
-        return;
+    if (state.lobbyFetchInFlight) {
+        state.lobbyRefreshQueued = true;
+        return state.lobbyFetchInFlight;
     }
 
-    const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet. Create one above or enter a code.</p>";
-    const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned. Try Refresh or wait a moment.</p>";
+    const request = (async () => {
+        let rows = [];
+        try {
+            const res = await fetch("/api/lobbies", {cache: "no-store"});
+            if (!res.ok) throw new Error("bad");
+            rows = await res.json();
+        } catch {
+            const err = "<p class=\"lobby-list-empty muted\">Could not load open tables. Try refreshing the page.</p>";
+            if (lobbyGameList) lobbyGameList.innerHTML = err;
+            if (gameLobbyGameList) gameLobbyGameList.innerHTML = err;
+            return false;
+        }
 
-    /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
-    if (lobbyGameList) {
-        lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
+        const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet. Create one above or enter a code.</p>";
+        const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned. Try Refresh or wait a moment.</p>";
+
+        /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
+        if (lobbyGameList) {
+            lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
+        }
+        if (gameLobbyGameList) {
+            const code = state.gameCode || "";
+            const inRoom = gameOpenTablesWrap && !gameOpenTablesWrap.classList.contains("hidden");
+            gameLobbyGameList.innerHTML = rows.length
+                ? lobbyRowsHtml(rows, false, code)
+                : (inRoom ? emptyInRoom : "");
+        }
+        return true;
+    })();
+
+    state.lobbyFetchInFlight = request;
+    const succeeded = await request;
+    state.lobbyFetchInFlight = null;
+    state.lobbyFetchFailures = succeeded ? 0 : Math.min(state.lobbyFetchFailures + 1, 3);
+    scheduleLobbyListPoll(null, true);
+
+    if (state.lobbyRefreshQueued) {
+        state.lobbyRefreshQueued = false;
+        queueLobbyRefresh(0);
     }
-    if (gameLobbyGameList) {
-        const code = state.gameCode || "";
-        const inRoom = gameOpenTablesWrap && !gameOpenTablesWrap.classList.contains("hidden");
-        gameLobbyGameList.innerHTML = rows.length
-            ? lobbyRowsHtml(rows, false, code)
-            : (inRoom ? emptyInRoom : "");
-    }
+    return succeeded;
 }
 
 function shouldPollOpenTables() {
     if (!state.gameCode || !state.playerId || !state.game) {
         return true;
     }
-    return state.game.status === "LOBBY";
+    return state.game.status === "LOBBY" && state.game.publicRoom !== false;
 }
 
 function syncLobbyListPolling() {
-    if (shouldPollOpenTables()) {
-        refreshLobbyLists();
-        if (!lobbyListTimer) {
-            lobbyListTimer = setInterval(refreshLobbyLists, 4000);
+    const shouldRun = shouldPollOpenTables() && document.visibilityState !== "hidden";
+    if (shouldRun) {
+        const becameActive = !state.lobbyUpdatesActive;
+        state.lobbyUpdatesActive = true;
+        connectLobbyWebSocket();
+        if (becameActive) {
+            refreshLobbyLists();
+        } else if (!state.lobbyListTimer && !state.lobbyFetchInFlight) {
+            scheduleLobbyListPoll();
         }
     } else {
         stopLobbyListPolling();
     }
 }
 
+function scheduleLobbyListPoll(delayOverride = null, replaceExisting = false) {
+    if (!state.lobbyUpdatesActive || !shouldPollOpenTables()) return;
+    const delay = delayOverride ?? lobbyRefreshDelayMs(
+        state.lobbyWsConnected,
+        state.lobbyFetchFailures,
+        document.visibilityState
+    );
+    if (delay == null) return;
+    const dueAt = Date.now() + delay;
+    if (state.lobbyListTimer && !replaceExisting && state.lobbyListDueAt <= dueAt) {
+        return;
+    }
+    if (state.lobbyListTimer) {
+        clearTimeout(state.lobbyListTimer);
+    }
+    state.lobbyListDueAt = dueAt;
+    state.lobbyListTimer = window.setTimeout(() => {
+        state.lobbyListTimer = null;
+        state.lobbyListDueAt = 0;
+        refreshLobbyLists();
+    }, delay);
+}
+
+function queueLobbyRefresh(delay = 75) {
+    if (!state.lobbyUpdatesActive || document.visibilityState === "hidden") return;
+    if (state.lobbyEventTimer) clearTimeout(state.lobbyEventTimer);
+    state.lobbyEventTimer = window.setTimeout(() => {
+        state.lobbyEventTimer = null;
+        refreshLobbyLists();
+    }, delay);
+}
+
 function stopLobbyListPolling() {
-    if (lobbyListTimer) {
-        clearInterval(lobbyListTimer);
-        lobbyListTimer = null;
+    state.lobbyUpdatesActive = false;
+    state.lobbyRefreshQueued = false;
+    if (state.lobbyListTimer) {
+        clearTimeout(state.lobbyListTimer);
+        state.lobbyListTimer = null;
+        state.lobbyListDueAt = 0;
+    }
+    if (state.lobbyEventTimer) {
+        clearTimeout(state.lobbyEventTimer);
+        state.lobbyEventTimer = null;
+    }
+    closeLobbyWebSocket();
+}
+
+function closeLobbyWebSocket() {
+    if (state.lobbyWsReconnectTimer) {
+        clearTimeout(state.lobbyWsReconnectTimer);
+        state.lobbyWsReconnectTimer = null;
+    }
+    const ws = state.lobbyWs;
+    state.lobbyWs = null;
+    state.lobbyWsConnected = false;
+    state.lobbyWsReconnectAttempt = 0;
+    if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close();
+        }
     }
 }
 
-document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && shouldPollOpenTables()) {
-        refreshLobbyLists();
+function scheduleLobbyWebSocketReconnect() {
+    if (state.lobbyWsReconnectTimer || !state.lobbyUpdatesActive || document.visibilityState === "hidden") {
+        return;
     }
-    if (document.visibilityState === "visible" && state.gameCode) {
-        sendHeartbeat();
-        const socketOpen = state.ws && state.ws.readyState === WebSocket.OPEN;
-        const socketConnecting = state.ws && state.ws.readyState === WebSocket.CONNECTING;
-        if (!socketOpen && !socketConnecting) {
-            connectWebSocket();
+    const delay = reconnectDelayMs(state.lobbyWsReconnectAttempt++);
+    state.lobbyWsReconnectTimer = window.setTimeout(() => {
+        state.lobbyWsReconnectTimer = null;
+        connectLobbyWebSocket();
+    }, delay);
+}
+
+function connectLobbyWebSocket() {
+    if (!state.lobbyUpdatesActive || document.visibilityState === "hidden" || state.lobbyWsReconnectTimer) {
+        return;
+    }
+    const current = state.lobbyWs;
+    if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/lobbies`);
+    state.lobbyWs = ws;
+    ws.onopen = () => {
+        if (state.lobbyWs !== ws) return;
+        log("Open tables realtime transport connected.");
+    };
+    ws.onmessage = (event) => {
+        if (state.lobbyWs !== ws) return;
+        try {
+            const data = JSON.parse(event.data || "{}");
+            if (data.type !== "LOBBIES_READY" && data.type !== "LOBBIES_CHANGED") return;
+            const streamId = String(data.streamId || "");
+            if (streamId && streamId !== state.lobbyStreamId) {
+                state.lobbyStreamId = streamId;
+                state.lobbyRevision = -1;
+            }
+            const revision = Number(data.revision);
+            let hasNewRevision = true;
+            if (Number.isFinite(revision)) {
+                hasNewRevision = revision > state.lobbyRevision;
+                if (hasNewRevision) state.lobbyRevision = revision;
+            }
+            state.lobbyWsConnected = true;
+            state.lobbyWsReconnectAttempt = 0;
+            scheduleLobbyListPoll(null, true);
+            log("Open tables realtime connected.");
+            if (!hasNewRevision) return;
+            queueLobbyRefresh(data.type === "LOBBIES_READY" ? 0 : 75);
+        } catch (_) {
+            // Ignore malformed invalidations; the health refresh remains authoritative.
         }
+    };
+    ws.onclose = () => {
+        if (state.lobbyWs !== ws) return;
+        state.lobbyWs = null;
+        state.lobbyWsConnected = false;
+        scheduleLobbyListPoll();
+        scheduleLobbyWebSocketReconnect();
+    };
+    ws.onerror = () => {
+        if (state.lobbyWs !== ws) return;
+        state.lobbyWsConnected = false;
+        scheduleLobbyListPoll();
+        log("Open tables realtime lost; using fallback refreshes.");
+        try { ws.close(); } catch (_) { /* close callback will schedule reconnect when possible */ }
+    };
+}
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+        stopLobbyListPolling();
+        pauseGameUpdates();
+        return;
+    }
+    syncLobbyListPolling();
+    if (state.gameCode) {
+        beginPolling();
+        sendHeartbeat();
+        connectWebSocket();
         refreshGame(false);
     }
 });
@@ -740,29 +912,59 @@ function render() {
 }
 
 async function refreshGame(showMessage = false) {
-    if (!state.gameCode) return;
+    if (!state.gameCode) return false;
+    if (state.gameRefreshInFlight) {
+        state.gameRefreshQueued = true;
+        return state.gameRefreshInFlight;
+    }
+
+    const requestedGameCode = state.gameCode;
+    const requestedPlayerId = state.playerId;
+    const request = (async () => {
+        try {
+            const query = new URLSearchParams({viewerPlayerId: requestedPlayerId}).toString();
+            const refreshed = await api(`/api/games/${requestedGameCode}?${query}`, "GET");
+            if (state.gameCode !== requestedGameCode || state.playerId !== requestedPlayerId) {
+                return false;
+            }
+            const previousStatus = state.game?.status;
+            if (previousStatus && previousStatus !== refreshed.status) {
+                state.selectedHandCard = null;
+            }
+            state.game = refreshed;
+            syncBotThinkingFromGame(state.game);
+            render();
+            clearError("connection");
+            if (showMessage) log("Game refreshed.");
+            return true;
+        } catch (err) {
+            if (state.gameCode !== requestedGameCode || state.playerId !== requestedPlayerId) {
+                return false;
+            }
+            if (err.message === "Game not found" || err.message.startsWith("Room expired")) {
+                clearSession();
+                showError(err.message === "Game not found" ? "This room no longer exists." : err.message, "session");
+                return false;
+            }
+            showError(`Connection problem: ${err.message}`, "connection");
+            log(`Refresh failed: ${err.message}`);
+            return false;
+        }
+    })();
+
+    state.gameRefreshInFlight = request;
     try {
-        const query = new URLSearchParams({viewerPlayerId: state.playerId}).toString();
-        const previousStatus = state.game?.status;
-        const refreshedGame = await api(`/api/games/${state.gameCode}?${query}`, "GET");
-        if (previousStatus && previousStatus !== refreshedGame.status) {
-            state.selectedHandCard = null;
+        return await request;
+    } finally {
+        if (state.gameRefreshInFlight === request) {
+            state.gameRefreshInFlight = null;
         }
-        state.game = refreshedGame;
-        syncBotThinkingFromGame(state.game);
-        render();
-        // A healthy read resolves connection failures, but it must not erase a
-        // gameplay/action error that the player is still trying to understand.
-        clearError("connection");
-        if (showMessage) log("Game refreshed.");
-    } catch (err) {
-        if (err.message === "Game not found" || err.message.startsWith("Room expired")) {
-            clearSession();
-            showError(err.message === "Game not found" ? "This room no longer exists." : err.message, "session");
-            return;
+        if (state.gameRefreshQueued && state.gameCode && document.visibilityState !== "hidden") {
+            state.gameRefreshQueued = false;
+            window.setTimeout(() => refreshGame(false), 0);
+        } else {
+            scheduleGameRefresh();
         }
-        showError(`Connection problem: ${err.message}`, "connection");
-        log(`Refresh failed: ${err.message}`);
     }
 }
 
@@ -794,6 +996,7 @@ async function runAction(name, fn, trigger = null) {
         // The action response already carries updated game state.
         // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
         state.suppressWsRefreshUntilMs = Date.now() + 1200;
+        scheduleGameRefresh();
         log(`${name} success.`);
         return true;
     } catch (err) {
@@ -810,35 +1013,35 @@ async function runAction(name, fn, trigger = null) {
 }
 
 function beginPolling() {
-    if (state.pollTimer) clearInterval(state.pollTimer);
-    state.pollTimer = setInterval(() => {
-        if (!state.wsConnected) {
-            refreshGame(false);
-            return;
-        }
-        const inProgress = state.game && state.game.status === "IN_PROGRESS";
-        if (!inProgress) {
-            refreshGame(false);
-            return;
-        }
-        const now = Date.now();
-        if (now - state.lastWsHealthRefreshMs >= 20000) {
-            state.lastWsHealthRefreshMs = now;
-            refreshGame(false);
-        }
-    }, 3000);
+    scheduleGameRefresh();
     beginHeartbeat();
 }
 
+function scheduleGameRefresh(delayOverride = null) {
+    if (state.pollTimer) {
+        clearTimeout(state.pollTimer);
+        state.pollTimer = null;
+    }
+    if (!state.gameCode || !state.playerId) return;
+    const delay = delayOverride ?? gameRefreshDelayMs(state.wsConnected, document.visibilityState);
+    if (delay == null) return;
+    state.pollTimer = window.setTimeout(() => {
+        state.pollTimer = null;
+        refreshGame(false);
+    }, delay);
+}
+
 function stopPolling() {
-    if (state.pollTimer) clearInterval(state.pollTimer);
+    if (state.pollTimer) clearTimeout(state.pollTimer);
     state.pollTimer = null;
+    state.gameRefreshQueued = false;
     if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
     state.heartbeatTimer = null;
 }
 
 async function sendHeartbeat() {
-    if (!state.gameCode || !state.playerId || state.game?.status === "FINISHED") return;
+    if (document.visibilityState === "hidden"
+        || !state.gameCode || !state.playerId || state.game?.status === "FINISHED") return;
     try {
         await fetch(`/api/games/${state.gameCode}/heartbeat`, {
             method: "POST",
@@ -855,20 +1058,70 @@ function beginHeartbeat() {
     state.heartbeatTimer = setInterval(sendHeartbeat, 5 * 60 * 1000);
 }
 
+function pauseGameUpdates() {
+    stopPolling();
+    closeWebSocket();
+}
+
 function closeWebSocket() {
-    if (state.ws) state.ws.close();
+    if (state.wsReconnectTimer) {
+        clearTimeout(state.wsReconnectTimer);
+        state.wsReconnectTimer = null;
+    }
+    if (state.wsStableTimer) {
+        clearTimeout(state.wsStableTimer);
+        state.wsStableTimer = null;
+    }
+    const ws = state.ws;
     state.ws = null;
     state.wsConnected = false;
+    state.wsReconnectAttempt = 0;
+    if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.close();
+        }
+    }
+}
+
+function scheduleWebSocketReconnect() {
+    if (state.wsReconnectTimer || !state.gameCode || document.visibilityState === "hidden") return;
+    const delay = reconnectDelayMs(state.wsReconnectAttempt++);
+    state.wsReconnectTimer = window.setTimeout(() => {
+        state.wsReconnectTimer = null;
+        connectWebSocket();
+    }, delay);
 }
 
 function connectWebSocket() {
-    closeWebSocket();
-    if (!state.gameCode) return;
+    if (!state.gameCode || document.visibilityState === "hidden" || state.wsReconnectTimer) return;
+    const current = state.ws;
+    if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${state.gameCode}`);
+    const gameCode = state.gameCode;
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${gameCode}`);
     state.ws = ws;
-    ws.onopen = () => { state.wsConnected = true; log("Realtime connected."); };
+    ws.onopen = () => {
+        if (state.ws !== ws || state.gameCode !== gameCode) return;
+        state.wsConnected = true;
+        if (state.wsStableTimer) clearTimeout(state.wsStableTimer);
+        state.wsStableTimer = window.setTimeout(() => {
+            state.wsStableTimer = null;
+            if (state.ws === ws && ws.readyState === WebSocket.OPEN) {
+                state.wsReconnectAttempt = 0;
+            }
+        }, 5_000);
+        scheduleGameRefresh();
+        log("Realtime connected.");
+    };
     ws.onmessage = async (event) => {
+        if (state.ws !== ws || state.gameCode !== gameCode) return;
+        state.wsReconnectAttempt = 0;
         let msgVersion = null;
         let type = "";
         try {
@@ -905,8 +1158,24 @@ function connectWebSocket() {
         }
         await refreshGame(false);
     };
-    ws.onclose = () => { state.wsConnected = false; };
-    ws.onerror = () => { state.wsConnected = false; log("Realtime lost, fallback to polling."); };
+    ws.onclose = () => {
+        if (state.ws !== ws) return;
+        if (state.wsStableTimer) {
+            clearTimeout(state.wsStableTimer);
+            state.wsStableTimer = null;
+        }
+        state.ws = null;
+        state.wsConnected = false;
+        scheduleGameRefresh(0);
+        scheduleWebSocketReconnect();
+    };
+    ws.onerror = () => {
+        if (state.ws !== ws) return;
+        state.wsConnected = false;
+        scheduleGameRefresh(0);
+        log("Realtime lost, fallback to polling.");
+        try { ws.close(); } catch (_) { /* close callback schedules reconnect */ }
+    };
 }
 
 function clearSession() {

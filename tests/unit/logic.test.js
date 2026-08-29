@@ -338,3 +338,44 @@ describe("lobbyRowsHtml", () => {
         expect(html).toContain("&lt;img");
     });
 });
+
+describe("realtime fallback timing", () => {
+    it("uses exponential reconnect backoff and caps it at 30 seconds", () => {
+        expect(L.reconnectDelayMs(0, 0.5)).toBe(1_000);
+        expect(L.reconnectDelayMs(1, 0.5)).toBe(2_000);
+        expect(L.reconnectDelayMs(4, 0.5)).toBe(16_000);
+        expect(L.reconnectDelayMs(20, 1)).toBe(30_000);
+    });
+
+    it("adds bounded jitter without allowing negative delays", () => {
+        expect(L.reconnectDelayMs(0, 0)).toBe(800);
+        expect(L.reconnectDelayMs(0, 1)).toBe(1_200);
+        expect(L.reconnectDelayMs(-5, -1)).toBe(800);
+    });
+
+    it("backs game HTTP refreshes off when the websocket is healthy", () => {
+        expect(L.gameRefreshDelayMs(false, "visible")).toBe(3_000);
+        expect(L.gameRefreshDelayMs(true, "visible")).toBe(30_000);
+    });
+
+    it("pauses game refreshes in hidden tabs", () => {
+        expect(L.gameRefreshDelayMs(false, "hidden")).toBeNull();
+        expect(L.gameRefreshDelayMs(true, "hidden")).toBeNull();
+    });
+
+    it("uses a long lobby health interval when invalidations are connected", () => {
+        expect(L.lobbyRefreshDelayMs(true, 0, "visible")).toBe(60_000);
+    });
+
+    it("backs failed lobby fallback reads off and caps them", () => {
+        expect(L.lobbyRefreshDelayMs(false, 0, "visible")).toBe(4_000);
+        expect(L.lobbyRefreshDelayMs(false, 1, "visible")).toBe(8_000);
+        expect(L.lobbyRefreshDelayMs(false, 2, "visible")).toBe(16_000);
+        expect(L.lobbyRefreshDelayMs(false, 99, "visible")).toBe(30_000);
+    });
+
+    it("pauses lobby health reads in hidden tabs", () => {
+        expect(L.lobbyRefreshDelayMs(false, 0, "hidden")).toBeNull();
+        expect(L.lobbyRefreshDelayMs(true, 0, "hidden")).toBeNull();
+    });
+});

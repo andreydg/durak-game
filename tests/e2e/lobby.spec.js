@@ -256,4 +256,115 @@ test.describe("Lobby & room creation", () => {
         await expect(otherPage.locator("#lobbyGameList")).toContainText(code, { timeout: 15_000 });
         await otherContext.close();
     });
+
+    test("an already-open visitor receives create and leave invalidations immediately", async ({ page, browser }) => {
+        const observerContext = await browser.newContext();
+        const observer = await observerContext.newPage();
+        const observerSocket = observer.waitForEvent(
+            "websocket",
+            socket => socket.url().endsWith("/ws/lobbies")
+        );
+        await observer.goto("/");
+        await observerSocket;
+
+        await page.goto("/");
+        await page.fill("#hostName", "Realtime Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
+        const code = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+
+        await expect(observer.locator("#lobbyGameList")).toContainText(code, { timeout: 2_500 });
+        await page.click("#leaveBtn");
+        await expect(observer.locator("#lobbyGameList")).not.toContainText(code, { timeout: 2_500 });
+        await observerContext.close();
+    });
+
+    test("healthy lobby websocket eliminates fixed-interval lobby reads", async ({ page }) => {
+        let lobbyGets = 0;
+        page.on("request", request => {
+            if (request.method() === "GET" && new URL(request.url()).pathname === "/api/lobbies") {
+                lobbyGets++;
+            }
+        });
+        const socketOpened = page.waitForEvent(
+            "websocket",
+            socket => socket.url().endsWith("/ws/lobbies")
+        );
+
+        await page.goto("/");
+        await socketOpened;
+        await page.waitForTimeout(750); // allow initial read + revision handshake read to settle
+        lobbyGets = 0;
+        await page.waitForTimeout(4_500);
+
+        expect(lobbyGets).toBe(0);
+    });
+
+    test("lobby HTTP fallback remains active when its websocket closes", async ({ page }) => {
+        await page.routeWebSocket("**/ws/lobbies", socket => {
+            setTimeout(() => socket.close({
+                code: 1011,
+                reason: "test disconnect"
+            }), 100);
+        });
+        let lobbyGets = 0;
+        page.on("request", request => {
+            if (request.method() === "GET" && new URL(request.url()).pathname === "/api/lobbies") {
+                lobbyGets++;
+            }
+        });
+
+        await page.goto("/");
+        await page.waitForTimeout(500);
+        lobbyGets = 0;
+        await page.waitForTimeout(4_200);
+
+        expect(lobbyGets).toBeGreaterThanOrEqual(1);
+    });
+
+    test("healthy game websocket eliminates three-second lobby-state game reads", async ({ page }) => {
+        let gameGets = 0;
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === "GET" && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                gameGets++;
+            }
+        });
+        await page.goto("/");
+        const socketOpened = page.waitForEvent(
+            "websocket",
+            socket => socket.url().includes("/ws/games/")
+        );
+        await page.fill("#hostName", "Efficient Host");
+        await page.click("#createBtn");
+        await socketOpened;
+        await page.waitForTimeout(500);
+        gameGets = 0;
+        await page.waitForTimeout(3_500);
+
+        expect(gameGets).toBe(0);
+    });
+
+    test("game HTTP fallback remains active when its websocket closes", async ({ page }) => {
+        await page.routeWebSocket("**/ws/games/*", socket => socket.close({
+            code: 1011,
+            reason: "test disconnect"
+        }));
+        let gameGets = 0;
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === "GET" && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                gameGets++;
+            }
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Fallback Host");
+        await page.click("#createBtn");
+        await page.waitForTimeout(500);
+        gameGets = 0;
+        await page.waitForTimeout(3_500);
+
+        expect(gameGets).toBeGreaterThanOrEqual(1);
+    });
 });
