@@ -413,6 +413,38 @@ test.describe("Lobby & room creation", () => {
         expect(gameGets).toBeGreaterThanOrEqual(1);
     });
 
+    test("a reconnected game websocket triggers an immediate catch-up read", async ({ page }) => {
+        let connections = 0;
+        let secondConnectionSeen = false;
+        let readsAfterSecondConnection = 0;
+        await page.routeWebSocket("**/ws/games/*", socket => {
+            connections++;
+            if (connections === 1) {
+                setTimeout(() => socket.close({
+                    code: 1011,
+                    reason: "force reconnect"
+                }), 75);
+            } else {
+                secondConnectionSeen = true;
+            }
+        });
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (secondConnectionSeen
+                && request.method() === "GET"
+                && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                readsAfterSecondConnection++;
+            }
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Reconnect Catch-up Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect.poll(() => connections, {timeout: 5_000}).toBeGreaterThanOrEqual(2);
+        await expect.poll(() => readsAfterSecondConnection, {timeout: 1_500}).toBeGreaterThanOrEqual(1);
+    });
+
     test("a game update suppressed by an action gets a prompt catch-up read", async ({ page }) => {
         let gameSocket = null;
         await page.routeWebSocket("**/ws/games/*", socket => {

@@ -103,6 +103,15 @@
         return webSocketConnected ? 30_000 : 3_000;
     }
 
+    /** Prevent a delayed read from replacing newer state returned by an action. */
+    function shouldAcceptGameVersion(currentVersion, incomingVersion) {
+        if (currentVersion == null || incomingVersion == null) return true;
+        const current = Number(currentVersion);
+        const incoming = Number(incomingVersion);
+        if (!Number.isFinite(current) || !Number.isFinite(incoming)) return true;
+        return incoming >= current;
+    }
+
     /** Preserve a pending prompt refresh unless the new deadline is earlier or explicitly replaces it. */
     function shouldReplaceRefreshTimer(existingDueAt, requestedDueAt, replaceExisting = false) {
         if (replaceExisting) return true;
@@ -247,6 +256,7 @@
         searchWithoutRoomParam,
         reconnectDelayMs,
         gameRefreshDelayMs,
+        shouldAcceptGameVersion,
         shouldReplaceRefreshTimer,
         lobbyRefreshDelayMs,
         escapeHtml,

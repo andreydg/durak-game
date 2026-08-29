@@ -22,6 +22,7 @@ const {
     searchWithoutRoomParam,
     reconnectDelayMs,
     gameRefreshDelayMs,
+    shouldAcceptGameVersion,
     shouldReplaceRefreshTimer,
     lobbyRefreshDelayMs,
     escapeHtml,
@@ -954,6 +955,11 @@ async function refreshGame(showMessage = false) {
             if (state.gameCode !== requestedGameCode || state.playerId !== requestedPlayerId) {
                 return false;
             }
+            if (!shouldAcceptGameVersion(state.game?.version, refreshed?.version)) {
+                clearError("connection");
+                log(`Ignored stale game refresh version ${refreshed?.version}; current version is ${state.game?.version}.`);
+                return true;
+            }
             const previousStatus = state.game?.status;
             if (previousStatus && previousStatus !== refreshed.status) {
                 state.selectedHandCard = null;
@@ -1158,7 +1164,7 @@ function connectWebSocket() {
                 state.wsReconnectAttempt = 0;
             }
         }, 5_000);
-        scheduleGameRefresh(null, true);
+        scheduleGameRefresh(0, true);
         log("Realtime connected.");
     };
     ws.onmessage = async (event) => {

@@ -104,6 +104,22 @@ describe("shouldReplaceRefreshTimer", () => {
     });
 });
 
+describe("shouldAcceptGameVersion", () => {
+    it("rejects a delayed snapshot older than current action state", () => {
+        expect(L.shouldAcceptGameVersion(10, 9)).toBe(false);
+    });
+
+    it("accepts equal and newer snapshots", () => {
+        expect(L.shouldAcceptGameVersion(10, 10)).toBe(true);
+        expect(L.shouldAcceptGameVersion(10, 11)).toBe(true);
+    });
+
+    it("accepts snapshots when either version is unavailable", () => {
+        expect(L.shouldAcceptGameVersion(undefined, 1)).toBe(true);
+        expect(L.shouldAcceptGameVersion(1, undefined)).toBe(true);
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
         expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");
