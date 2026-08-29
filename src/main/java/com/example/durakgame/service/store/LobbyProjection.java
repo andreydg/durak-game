@@ -12,6 +12,7 @@ public record LobbyProjection(
         String hostName,
         List<String> playerNames,
         int playerCount,
-        Instant lastActivityAt
+        Instant lastActivityAt,
+        Instant lobbyStartedAt
 ) {
 }

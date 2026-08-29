@@ -355,7 +355,8 @@ public class GameService {
         List<LobbyGameSummary> summaries = gameStore.listOpenLobbySummaries().stream()
                 .filter(p -> p.playerCount() < MAX_PLAYERS)
                 .filter(p -> {
-                    if (!expiryPolicy.isExpired(GameStatus.LOBBY, p.lastActivityAt(), instantNow)) {
+                    if (!expiryPolicy.isExpired(
+                            GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt(), instantNow)) {
                         return true;
                     }
                     gameStore.deleteByCode(p.code());
@@ -369,7 +370,7 @@ public class GameService {
                         p.playerCount(),
                         MAX_PLAYERS,
                         p.lastActivityAt(),
-                        expiryPolicy.expiresAt(GameStatus.LOBBY, p.lastActivityAt())
+                        expiryPolicy.expiresAt(GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt())
                 ))
                 .sorted(Comparator.comparingInt(LobbyGameSummary::playerCount).reversed()
                         .thenComparing(LobbyGameSummary::code))

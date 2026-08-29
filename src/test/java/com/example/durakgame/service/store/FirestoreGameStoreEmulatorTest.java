@@ -83,6 +83,7 @@ class FirestoreGameStoreEmulatorTest {
             assertEquals(2, summary.playerCount());
             assertTrue(summary.playerNames().containsAll(List.of("Alice", "Bob")));
             assertEquals(game.getLastActivityAt().toEpochMilli(), summary.lastActivityAt().toEpochMilli());
+            assertEquals(game.getLobbyStartedAt().toEpochMilli(), summary.lobbyStartedAt().toEpochMilli());
         } finally {
             store.deleteByCode(code);
         }

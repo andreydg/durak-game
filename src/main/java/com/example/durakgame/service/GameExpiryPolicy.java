@@ -49,18 +49,23 @@ public class GameExpiryPolicy {
     }
 
     public Instant expiresAt(Game game) {
-        Instant activityDeadline = expiresAt(game.getStatus(), game.getLastActivityAt());
-        if (game.getStatus() != GameStatus.LOBBY) {
-            return activityDeadline;
-        }
-        Instant createdAt = game.getCreatedAt() == null ? game.getLastActivityAt() : game.getCreatedAt();
-        Instant maximumAgeDeadline = (createdAt == null ? Instant.EPOCH : createdAt).plus(lobbyMaxAge);
-        return activityDeadline.isBefore(maximumAgeDeadline) ? activityDeadline : maximumAgeDeadline;
+        return expiresAt(game.getStatus(), game.getLastActivityAt(), game.getLobbyStartedAt());
     }
 
     public Instant expiresAt(GameStatus status, Instant lastActivityAt) {
         Instant base = lastActivityAt == null ? Instant.EPOCH : lastActivityAt;
         return base.plus(timeoutFor(status));
+    }
+
+    /** Applies the absolute wait ceiling to the current lobby phase, not the room's lifetime. */
+    public Instant expiresAt(GameStatus status, Instant lastActivityAt, Instant lobbyStartedAt) {
+        Instant activityDeadline = expiresAt(status, lastActivityAt);
+        if (status != GameStatus.LOBBY) {
+            return activityDeadline;
+        }
+        Instant phaseStart = lobbyStartedAt == null ? lastActivityAt : lobbyStartedAt;
+        Instant maximumAgeDeadline = (phaseStart == null ? Instant.EPOCH : phaseStart).plus(lobbyMaxAge);
+        return activityDeadline.isBefore(maximumAgeDeadline) ? activityDeadline : maximumAgeDeadline;
     }
 
     public boolean isExpired(Game game, Instant now) {
@@ -69,6 +74,15 @@ public class GameExpiryPolicy {
 
     public boolean isExpired(GameStatus status, Instant lastActivityAt, Instant now) {
         return !expiresAt(status, lastActivityAt).isAfter(now);
+    }
+
+    public boolean isExpired(
+            GameStatus status,
+            Instant lastActivityAt,
+            Instant lobbyStartedAt,
+            Instant now
+    ) {
+        return !expiresAt(status, lastActivityAt, lobbyStartedAt).isAfter(now);
     }
 
     private Duration timeoutFor(GameStatus status) {

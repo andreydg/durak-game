@@ -408,6 +408,19 @@ class GameServiceTest {
         assertFalse(store.existsByCode("OLD001"));
     }
 
+    @Test
+    void listOpenLobbiesAppliesTheSameLobbyPhaseCeilingAsGameReads() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
+        Instant now = Instant.now();
+        Game overAgeWithRecentHeartbeat = lobbyAt(
+                "MAXAGE", now.minus(3, ChronoUnit.HOURS), now.minus(1, ChronoUnit.MINUTES));
+        store.save(overAgeWithRecentHeartbeat);
+
+        assertTrue(service.listOpenLobbies().isEmpty());
+        assertFalse(store.existsByCode("MAXAGE"));
+    }
+
     // --- mutateGame delegation & retry -----------------------------------
 
     @Test
@@ -561,11 +574,16 @@ class GameServiceTest {
     }
 
     private static Game lobbyAt(String code, Instant lastActivityAt) {
-        long timestamp = lastActivityAt.toEpochMilli();
+        return lobbyAt(code, lastActivityAt, lastActivityAt);
+    }
+
+    private static Game lobbyAt(String code, Instant createdAt, Instant lastActivityAt) {
+        long createdTimestamp = createdAt.toEpochMilli();
+        long activityTimestamp = lastActivityAt.toEpochMilli();
         Game.PlayerSnapshot host = new Game.PlayerSnapshot(
-                "host", "Host", timestamp, false, null, List.of(), "secret");
+                "host", "Host", createdTimestamp, false, null, List.of(), "secret");
         return Game.fromSnapshot(new Game.Snapshot(
-                code, timestamp, timestamp, "host", GameStatus.LOBBY,
+                code, createdTimestamp, activityTimestamp, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()
         ));

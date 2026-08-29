@@ -53,7 +53,8 @@ public interface GameStore {
                 hostName,
                 playerNames,
                 game.getPlayers().size(),
-                game.getLastActivityAt()
+                game.getLastActivityAt(),
+                game.getLobbyStartedAt()
         );
     }
 }

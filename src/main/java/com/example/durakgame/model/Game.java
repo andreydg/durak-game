@@ -21,6 +21,7 @@ public class Game implements Serializable {
     private final String code;
     private final Instant createdAt;
     private Instant lastActivityAt;
+    private Instant lobbyStartedAt;
     private final List<Player> players = new ArrayList<>();
     private String hostPlayerId;
     private final Deque<Card> talon = new ArrayDeque<>();
@@ -44,6 +45,7 @@ public class Game implements Serializable {
             String code,
             long createdAtEpochMs,
             long lastActivityAtEpochMs,
+            long lobbyStartedAtEpochMs,
             String hostPlayerId,
             GameStatus status,
             Suit trumpSuit,
@@ -61,6 +63,33 @@ public class Game implements Serializable {
             List<Card> discardedCards,
             List<KnownCardsSnapshot> knownCardsByPlayer
     ) {
+        /** Source-compatible constructor for snapshots written before lobby phases were tracked. */
+        public Snapshot(
+                String code,
+                long createdAtEpochMs,
+                long lastActivityAtEpochMs,
+                String hostPlayerId,
+                GameStatus status,
+                Suit trumpSuit,
+                Card trumpCard,
+                int attackerIndex,
+                int defenderIndex,
+                String loserPlayerId,
+                boolean takingCardsInProgress,
+                int takeLimit,
+                long version,
+                List<PlayerSnapshot> players,
+                List<Card> talon,
+                List<AttackSnapshot> table,
+                Set<String> endRoundApprovals,
+                List<Card> discardedCards,
+                List<KnownCardsSnapshot> knownCardsByPlayer
+        ) {
+            this(code, createdAtEpochMs, lastActivityAtEpochMs, createdAtEpochMs, hostPlayerId, status,
+                    trumpSuit, trumpCard, attackerIndex, defenderIndex, loserPlayerId, takingCardsInProgress,
+                    takeLimit, version, players, talon, table, endRoundApprovals, discardedCards,
+                    knownCardsByPlayer);
+        }
     }
 
     public record PlayerSnapshot(
@@ -95,6 +124,7 @@ public class Game implements Serializable {
         this.code = code;
         this.createdAt = createdAt;
         this.lastActivityAt = createdAt;
+        this.lobbyStartedAt = createdAt;
         this.players.add(host);
         this.hostPlayerId = host.getId();
     }
@@ -417,6 +447,11 @@ public class Game implements Serializable {
         return lastActivityAt;
     }
 
+    /** Start of the current waiting-room phase; unlike creation time, this resets after a played round. */
+    public synchronized Instant getLobbyStartedAt() {
+        return lobbyStartedAt;
+    }
+
     /** Extends inactivity expiry for a connected player without changing gameplay state. */
     public synchronized void markActive() {
         touch();
@@ -444,6 +479,7 @@ public class Game implements Serializable {
                 code,
                 createdAt.toEpochMilli(),
                 lastActivityAt.toEpochMilli(),
+                lobbyStartedAt.toEpochMilli(),
                 hostPlayerId,
                 status,
                 trumpSuit,
@@ -484,6 +520,7 @@ public class Game implements Serializable {
 
         Game game = new Game(snapshot.code(), host, Instant.ofEpochMilli(snapshot.createdAtEpochMs()));
         game.lastActivityAt = Instant.ofEpochMilli(snapshot.lastActivityAtEpochMs());
+        game.lobbyStartedAt = Instant.ofEpochMilli(snapshot.lobbyStartedAtEpochMs());
         game.players.clear();
         for (PlayerSnapshot ps : snapshot.players()) {
             Player player = new Player(
@@ -758,6 +795,7 @@ public class Game implements Serializable {
         discardedCards.clear();
         knownCardsByPlayer.clear();
         status = GameStatus.LOBBY;
+        lobbyStartedAt = Instant.now();
         trumpSuit = null;
         trumpCard = null;
         attackerIndex = -1;

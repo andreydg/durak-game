@@ -40,6 +40,7 @@ public class FirestoreGameStore implements GameStore {
     private static final String FIELD_PLAYER_NAMES = "playerNames";
     private static final String FIELD_PLAYER_COUNT = "playerCount";
     private static final String FIELD_LAST_ACTIVITY_AT = "lastActivityAt";
+    private static final String FIELD_LOBBY_STARTED_AT = "lobbyStartedAt";
     private static final Duration LEGACY_GAME_TTL = Duration.ofHours(24);
     private final Firestore firestore;
     private final GameExpiryPolicy expiryPolicy;
@@ -73,6 +74,9 @@ public class FirestoreGameStore implements GameStore {
             Instant lastActivityAt = game.getLastActivityAt();
             Timestamp lastActivityTs = Timestamp.ofTimeSecondsAndNanos(
                     lastActivityAt.getEpochSecond(), lastActivityAt.getNano());
+            Instant lobbyStartedAt = game.getLobbyStartedAt();
+            Timestamp lobbyStartedTs = Timestamp.ofTimeSecondsAndNanos(
+                    lobbyStartedAt.getEpochSecond(), lobbyStartedAt.getNano());
             log.debug("firestore_write code={} op=save version={}", game.getCode(), attemptedVersion);
             DocumentReference ref = collection().document(game.getCode());
             firestore.runTransaction(tx -> {
@@ -86,6 +90,7 @@ public class FirestoreGameStore implements GameStore {
                         Map.entry(FIELD_PAYLOAD, Blob.fromBytes(encoded)),
                         Map.entry(FIELD_EXPIRE_AT, expireTs),
                         Map.entry(FIELD_LAST_ACTIVITY_AT, lastActivityTs),
+                        Map.entry(FIELD_LOBBY_STARTED_AT, lobbyStartedTs),
                         Map.entry(FIELD_STATUS, game.getStatus().name()),
                         Map.entry(FIELD_VERSION, attemptedVersion),
                         Map.entry(FIELD_CODE, game.getCode()),
@@ -172,7 +177,7 @@ public class FirestoreGameStore implements GameStore {
             for (DocumentSnapshot doc : collection()
                     .whereEqualTo(FIELD_STATUS, GameStatus.LOBBY.name())
                     .select(FIELD_CODE, FIELD_HOST_NAME, FIELD_PLAYER_NAMES, FIELD_PLAYER_COUNT,
-                            FIELD_LAST_ACTIVITY_AT, FIELD_EXPIRE_AT)
+                            FIELD_LAST_ACTIVITY_AT, FIELD_LOBBY_STARTED_AT, FIELD_EXPIRE_AT)
                     .get().get().getDocuments()) {
                 Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
                 if (expireAt != null && !toInstant(expireAt).isAfter(now)) {
@@ -195,16 +200,19 @@ public class FirestoreGameStore implements GameStore {
         List<String> playerNames = (List<String>) doc.get(FIELD_PLAYER_NAMES);
         Long playerCount = doc.getLong(FIELD_PLAYER_COUNT);
         Timestamp lastActivityAt = doc.getTimestamp(FIELD_LAST_ACTIVITY_AT);
+        Timestamp lobbyStartedAt = doc.getTimestamp(FIELD_LOBBY_STARTED_AT);
         Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
         Instant activity = lastActivityAt != null
                 ? toInstant(lastActivityAt)
                 : legacyActivityFromExpiry(expireAt);
+        Instant lobbyStart = lobbyStartedAt != null ? toInstant(lobbyStartedAt) : activity;
         return new LobbyProjection(
                 code != null ? code : doc.getId(),
                 hostName != null ? hostName : "?",
                 playerNames != null ? playerNames : List.of(),
                 playerCount != null ? playerCount.intValue() : (playerNames != null ? playerNames.size() : 0),
-                activity
+                activity,
+                lobbyStart
         );
     }
 

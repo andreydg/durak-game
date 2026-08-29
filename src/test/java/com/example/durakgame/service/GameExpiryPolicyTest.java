@@ -5,6 +5,7 @@ import com.example.durakgame.model.Game;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Set;
 
@@ -50,6 +51,32 @@ class GameExpiryPolicyTest {
 
         assertEquals(Instant.parse("2026-08-28T14:00:00Z"), policy.expiresAt(game));
         assertTrue(policy.isExpired(game, Instant.parse("2026-08-28T14:00:00Z")));
+    }
+
+    @Test
+    void returningToLobbyAfterPlayStartsANewMaximumAgeWindow() {
+        Instant oldCreation = Instant.now().minus(3, ChronoUnit.HOURS);
+        String hostId = "host";
+        String guestId = "guest";
+        Game game = Game.fromSnapshot(new Game.Snapshot(
+                "OLDPLY", oldCreation.toEpochMilli(), oldCreation.toEpochMilli(), hostId,
+                GameStatus.IN_PROGRESS, null, null, 0, 1, null, false, 0, 7L,
+                List.of(
+                        new Game.PlayerSnapshot(hostId, "Host", oldCreation.toEpochMilli(),
+                                false, null, List.of(), "host-secret"),
+                        new Game.PlayerSnapshot(guestId, "Guest", oldCreation.toEpochMilli(),
+                                false, null, List.of(), "guest-secret")
+                ),
+                List.of(), List.of(), Set.of(), List.of(), List.of()
+        ));
+
+        assertTrue(game.removePlayerAndResetToLobby(guestId));
+
+        Instant now = Instant.now();
+        assertEquals(GameStatus.LOBBY, game.getStatus());
+        assertTrue(game.getLobbyStartedAt().isAfter(oldCreation.plus(2, ChronoUnit.HOURS)));
+        assertFalse(policy.isExpired(game, now));
+        assertTrue(policy.expiresAt(game).isAfter(now.plus(29, ChronoUnit.MINUTES)));
     }
 
     @Test
