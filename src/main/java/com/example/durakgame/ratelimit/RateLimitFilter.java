@@ -20,7 +20,8 @@ import java.util.function.Supplier;
 /**
  * Per-IP token-bucket rate limiting for the public API. Two buckets per client: a generous
  * general limit (covers polling + actions for several players behind one NAT) and a stricter
- * game-creation limit (POST /api/games) to blunt create-spam memory growth. Buckets are evicted
+ * game-creation limit (POST /api/games and POST /api/games/quick-play) to blunt create-spam memory
+ * growth. Buckets are evicted
  * once idle so the tracking map stays bounded. Generous by default so legitimate play is never
  * throttled; tune down via {@code app.ratelimit.*} for hostile environments.
  */
@@ -78,7 +79,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private boolean isGameCreation(HttpServletRequest request) {
-        return "POST".equalsIgnoreCase(request.getMethod()) && "/api/games".equals(request.getRequestURI());
+        if (!"POST".equalsIgnoreCase(request.getMethod())) {
+            return false;
+        }
+        String path = request.getRequestURI();
+        return "/api/games".equals(path) || "/api/games/quick-play".equals(path);
     }
 
     private boolean allow(ConcurrentHashMap<String, TokenBucket> buckets, String ip, Supplier<TokenBucket> factory) {

@@ -125,6 +125,22 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#visibilityLabel")).toHaveText("Invite only");
         await expect(page.locator("#roleLabel")).toContainText("Elektronik");
         await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
+        await expect(page.locator("#shareBtn")).toBeHidden();
+    });
+
+    test("an invite link takes precedence over a restored session", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#hostName", "Existing Player");
+        await page.click("#createBtn");
+        const currentCode = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+        const invitedCode = currentCode === "ABC123" ? "XYZ789" : "ABC123";
+
+        await page.goto(`/?room=${invitedCode}`);
+
+        await expect(page.locator("#lobbyView")).toBeVisible();
+        await expect(page.locator("#gameView")).toBeHidden();
+        await expect(page.locator("#gameCode")).toHaveValue(invitedCode);
+        await expect(page.locator("#joinHint")).toContainText(`Invite loaded for room ${invitedCode}`);
     });
 
     test("invite-only room stays out of discovery but its link pre-fills and joins", async ({ page, browser }) => {
@@ -164,7 +180,7 @@ test.describe("Lobby & room creation", () => {
 
         await expect(page.locator("#shareBtn")).toHaveText("Invite copied");
         const copied = await page.evaluate(() => navigator.clipboard.readText());
-        expect(copied).toBe(`http://localhost:8080/?room=${code}`);
+        expect(copied).toBe(new URL(`/?room=${code}`, page.url()).toString());
     });
 
     test("a created table appears in Open tables for another visitor", async ({ page, browser }) => {

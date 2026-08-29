@@ -524,6 +524,9 @@ function render() {
         gameOpenTablesWrap.classList.toggle(
             "hidden", !hasSession || !game || game.status !== "LOBBY" || game.publicRoom === false);
     }
+    if (shareBtn) {
+        shareBtn.classList.toggle("hidden", !hasSession || !game || game.status !== "LOBBY");
+    }
 
     if (!hasSession) {
         syncLobbyListPolling();
@@ -1042,13 +1045,21 @@ battleCards.addEventListener("drop", async (e) => {
 });
 
 (async function init() {
+    const invitedCode = roomCodeFromSearch(window.location.search);
+    if (invitedCode && invitedCode !== state.gameCode) {
+        state.gameCode = "";
+        state.playerId = "";
+        state.playerToken = "";
+        state.game = null;
+        state.selectedHandCard = null;
+        saveSession();
+    }
     if (state.gameCode && state.playerId) {
         beginPolling();
         connectWebSocket();
         await refreshGame();
         log("Session restored.");
     } else {
-        const invitedCode = roomCodeFromSearch(window.location.search);
         if (invitedCode) {
             gameCodeInput.value = invitedCode;
             if (joinHint) {
