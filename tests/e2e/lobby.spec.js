@@ -7,6 +7,10 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#createBtn")).toBeVisible();
         await expect(page.locator("#joinBtn")).toBeVisible();
         await expect(page.locator("#hostName")).toBeVisible();
+        await expect(page.locator("#quickPlayBtn")).toHaveText("Quick Play vs Elektronik");
+        const quickBox = await page.locator("#quickPlayBtn").boundingBox();
+        const createBox = await page.locator("#createBtn").boundingBox();
+        expect(quickBox?.y).toBeLessThan(createBox?.y ?? 0);
     });
 
     test("invalid room code shows an accessible error", async ({ page }) => {
@@ -128,12 +132,24 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#shareBtn")).toBeHidden();
     });
 
-    test("an invite link takes precedence over a restored session", async ({ page }) => {
+    test("a stale invite takes precedence without erasing the restored session", async ({ page }) => {
         await page.goto("/");
         await page.fill("#hostName", "Existing Player");
         await page.click("#createBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
         const currentCode = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
         const invitedCode = currentCode === "ABC123" ? "XYZ789" : "ABC123";
+        const savedSession = await page.evaluate(() => ({
+            gameCode: sessionStorage.getItem("durak_game_code"),
+            playerId: sessionStorage.getItem("durak_player_id"),
+            playerToken: sessionStorage.getItem("durak_player_token")
+        }));
+        await page.route(`**/api/games/${invitedCode}/join`, route => route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            body: JSON.stringify({message: "Game not found"})
+        }));
 
         await page.goto(`/?room=${invitedCode}`);
 
@@ -141,6 +157,17 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#gameView")).toBeHidden();
         await expect(page.locator("#gameCode")).toHaveValue(invitedCode);
         await expect(page.locator("#joinHint")).toContainText(`Invite loaded for room ${invitedCode}`);
+        await page.click("#joinBtn");
+        await expect(page.locator("#appAlert")).toContainText("Game not found");
+        expect(await page.evaluate(() => ({
+            gameCode: sessionStorage.getItem("durak_game_code"),
+            playerId: sessionStorage.getItem("durak_player_id"),
+            playerToken: sessionStorage.getItem("durak_player_token")
+        }))).toEqual(savedSession);
+
+        await page.goto("/");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect(page.locator("#gameCodeLabel")).toHaveText(currentCode);
     });
 
     test("quick play consumes an invite URL so reload restores the new private game", async ({ page }) => {

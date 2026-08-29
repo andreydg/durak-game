@@ -73,6 +73,22 @@
         return url.toString();
     }
 
+    /** Remove only room query parameters while preserving every other raw query byte. */
+    function searchWithoutRoomParam(search) {
+        const raw = String(search || "");
+        const query = raw.startsWith("?") ? raw.slice(1) : raw;
+        if (!query) return "";
+        const kept = query.split("&").filter(part => {
+            const rawKey = part.split("=", 1)[0];
+            try {
+                return decodeURIComponent(rawKey.replace(/\+/g, " ")) !== "room";
+            } catch {
+                return true;
+            }
+        });
+        return kept.length ? `?${kept.join("&")}` : "";
+    }
+
     function escapeHtml(text) {
         const d = document.createElement("div");
         d.textContent = text == null ? "" : String(text);
@@ -138,6 +154,7 @@
         displayStatus,
         roomCodeFromSearch,
         buildInviteUrl,
+        searchWithoutRoomParam,
         escapeHtml,
         roleTags,
         playerTeam,

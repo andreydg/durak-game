@@ -31,16 +31,17 @@
     <div class="lobby-forms">
         <form id="hostForm" class="panel lobby-card">
             <h2>Play or host</h2>
+            <button type="button" class="btn-primary lobby-quick-action" id="quickPlayBtn">Quick Play vs Elektronik</button>
+            <p class="lobby-choice-separator">or create a room</p>
             <div class="lobby-field">
                 <label for="hostName">Your name <span class="lobby-optional">(optional)</span></label>
                 <input id="hostName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
             </div>
             <label class="lobby-privacy-option" for="publicRoom">
                 <input id="publicRoom" type="checkbox" checked>
-                <span><strong>List my room publicly</strong><small>Turn this off for invite-only play. Either way, friends can join with the code.</small></span>
+                <span><strong>List my room publicly</strong><small>Friends can join with the code.</small></span>
             </label>
             <div class="lobby-actions">
-                <button type="button" class="btn-primary" id="quickPlayBtn">Quick play vs bot</button>
                 <button type="submit" class="btn btn-secondary" id="createBtn">Create room</button>
             </div>
         </form>

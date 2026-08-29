@@ -107,6 +107,19 @@ describe("room invite links", () => {
         expect(L.buildInviteUrl("https://durak.example/old/path", "bad"))
             .toBe("");
     });
+
+    it("removes invite state without reserializing unrelated query parameters", () => {
+        expect(L.searchWithoutRoomParam("?room=ABC123&utm_source=invite"))
+            .toBe("?utm_source=invite");
+        expect(L.searchWithoutRoomParam("?utm_source=a%20b&room=ABC123&flag"))
+            .toBe("?utm_source=a%20b&flag");
+        expect(L.searchWithoutRoomParam("?room=ABC123")).toBe("");
+    });
+
+    it("preserves malformed and similarly named query parameters", () => {
+        expect(L.searchWithoutRoomParam("?%E0%A4%A=x&roommate=one&room=ABC123"))
+            .toBe("?%E0%A4%A=x&roommate=one");
+    });
 });
 
 describe("escapeHtml", () => {

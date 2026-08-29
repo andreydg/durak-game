@@ -19,6 +19,7 @@ const {
     displayStatus,
     roomCodeFromSearch,
     buildInviteUrl,
+    searchWithoutRoomParam,
     escapeHtml,
     roleTags,
     playerTeam,
@@ -149,14 +150,17 @@ function saveSession() {
 
 /** An invite is one-shot navigation state; once a game is adopted it must not replay on reload. */
 function clearConsumedInvite() {
-    const url = new URL(window.location.href);
-    if (!url.searchParams.has("room")) return;
-    url.searchParams.delete("room");
-    window.history.replaceState(
-        window.history.state,
-        "",
-        `${url.pathname}${url.search}${url.hash}`
-    );
+    const search = searchWithoutRoomParam(window.location.search);
+    if (search === window.location.search) return;
+    try {
+        window.history.replaceState(
+            window.history.state,
+            "",
+            `${window.location.pathname}${search}${window.location.hash}`
+        );
+    } catch (error) {
+        log(`Could not clear invite URL: ${error?.message || error}`);
+    }
 }
 
 let lobbyListTimer = null;
@@ -1060,15 +1064,8 @@ battleCards.addEventListener("drop", async (e) => {
 
 (async function init() {
     const invitedCode = roomCodeFromSearch(window.location.search);
-    if (invitedCode && invitedCode !== state.gameCode) {
-        state.gameCode = "";
-        state.playerId = "";
-        state.playerToken = "";
-        state.game = null;
-        state.selectedHandCard = null;
-        saveSession();
-    }
-    if (state.gameCode && state.playerId) {
+    const hasDifferentInvite = Boolean(invitedCode && invitedCode !== state.gameCode);
+    if (!hasDifferentInvite && state.gameCode && state.playerId) {
         beginPolling();
         connectWebSocket();
         await refreshGame();

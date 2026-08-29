@@ -836,6 +836,26 @@ pre {
     flex: 1 1 0;
     min-height: 2.6rem;
 }
+.lobby-quick-action {
+    min-height: 2.75rem;
+    margin: 0.15rem 0 0;
+}
+.lobby-choice-separator {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin: 0.7rem 0;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.lobby-choice-separator::before,
+.lobby-choice-separator::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--border);
+}
 .lobby-privacy-option {
     display: grid;
     grid-template-columns: auto 1fr;
