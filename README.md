@@ -9,6 +9,12 @@ Spring Boot multiplayer Durak game with a browser UI and websocket updates.
 - **Invite-only rooms** stay out of discovery but remain joinable through their code or `?room=CODE` invite link.
 - **Rematches** let the host replay a finished table with the same players, room code, and privacy setting.
 
+## Search and language pages
+
+The canonical public origin is `https://durak.andreyg.com`. The home page includes crawlable game/rules copy, FAQ and WebApplication structured data, social metadata, and English/Russian language alternates. Standalone guides live at `/rules.html`, `/ru.html`, and `/rules-ru.html`; `robots.txt` points crawlers to `sitemap.xml`.
+
+Keep canonical URLs, language alternates, and sitemap entries in sync when adding pages. The frontend test suite validates that contract and the 1200×630 social preview.
+
 ## Testing
 
 Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:

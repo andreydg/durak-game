@@ -888,13 +888,6 @@ pre {
     color: var(--accent);
     opacity: 0.85;
 }
-/* The compact sticky room header replaces the large lobby hero during a game. */
-#gameView .lobby-hero--in-game {
-    display: none;
-}
-#gameView .lobby-hero--in-game .lobby-title {
-    margin: 0;
-}
 /* In-game view should use full page width (with body padding as margin). */
 #gameView.stack {
     width: 100%;
