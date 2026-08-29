@@ -95,15 +95,18 @@ function log(message) {
     messages.textContent = `[${now}] ${message}`;
 }
 
-function clearError() {
+function clearError(kind = null) {
     if (!appAlert) return;
+    if (kind && appAlert.dataset.kind !== kind) return;
     appAlert.textContent = "";
+    delete appAlert.dataset.kind;
     appAlert.classList.add("hidden");
 }
 
-function showError(message) {
+function showError(message, kind = "action") {
     if (!appAlert) return;
     appAlert.textContent = message || "Something went wrong. Please try again.";
+    appAlert.dataset.kind = kind;
     appAlert.classList.remove("hidden");
 }
 
@@ -667,15 +670,17 @@ async function refreshGame(showMessage = false) {
         state.game = await api(`/api/games/${state.gameCode}?${query}`, "GET");
         syncBotThinkingFromGame(state.game);
         render();
-        clearError();
+        // A healthy read resolves connection failures, but it must not erase a
+        // gameplay/action error that the player is still trying to understand.
+        clearError("connection");
         if (showMessage) log("Game refreshed.");
     } catch (err) {
         if (err.message === "Game not found") {
             clearSession();
-            showError("This room no longer exists.");
+            showError("This room no longer exists.", "session");
             return;
         }
-        showError(`Connection problem: ${err.message}`);
+        showError(`Connection problem: ${err.message}`, "connection");
         log(`Refresh failed: ${err.message}`);
     }
 }

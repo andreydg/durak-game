@@ -70,6 +70,7 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
         const code = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
         expect(code).toMatch(/^[A-Z0-9]{6}$/);
+        await page.evaluate(() => window.stopPolling());
 
         let rejectNextRead = true;
         await page.route(`**/api/games/${code}?*`, async route => {
@@ -90,6 +91,27 @@ test.describe("Lobby & room creation", () => {
 
         await page.evaluate(() => window.refreshGame(false));
         await expect(page.locator("#appAlert")).toBeHidden();
+    });
+
+    test("a successful background refresh preserves an action error", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#hostName", "Action Error Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await page.evaluate(() => window.stopPolling());
+
+        await page.evaluate(() => window.runAction(
+            "Attack",
+            () => Promise.reject(new Error("Not your turn"))
+        ));
+        const alert = page.locator("#appAlert");
+        await expect(alert).toContainText("Attack: Not your turn");
+        await expect(alert).toHaveAttribute("data-kind", "action");
+
+        await page.evaluate(() => window.refreshGame(false));
+
+        await expect(alert).toContainText("Attack: Not your turn");
+        await expect(alert).toBeVisible();
     });
 
     test("a created table appears in Open tables for another visitor", async ({ page, browser }) => {
