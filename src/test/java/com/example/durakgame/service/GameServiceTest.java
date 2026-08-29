@@ -117,6 +117,20 @@ class GameServiceTest {
         assertFalse(service.listOpenLobbies().stream().anyMatch(lobby -> lobby.code().equals(game.getCode())));
     }
 
+    @Test
+    void rematchPersistsFreshDealForSamePlayers() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        GameService service = newService(store);
+        Game finished = finishedGame("DONE01");
+        store.save(finished);
+
+        Game rematched = service.rematch(finished.getCode(), finished.getHostPlayerId());
+
+        assertEquals(GameStatus.IN_PROGRESS, rematched.getStatus());
+        assertEquals(List.of("host", "guest"), rematched.getPlayers().stream().map(Player::getId).toList());
+        assertEquals(GameStatus.IN_PROGRESS, service.getGame(finished.getCode()).getStatus());
+    }
+
     // --- getGame ----------------------------------------------------------
 
     @Test
@@ -611,6 +625,19 @@ class GameServiceTest {
                 code, createdTimestamp, activityTimestamp, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()
+        ));
+    }
+
+    private static Game finishedGame(String code) {
+        long now = Instant.now().toEpochMilli();
+        return Game.fromSnapshot(new Game.Snapshot(
+                code, now, now, "host", GameStatus.FINISHED,
+                Suit.SPADES, Card.fromCode("6S"), -1, -1, "guest", false, 0, 4L,
+                List.of(
+                        new Game.PlayerSnapshot("host", "Host", now, false, null, List.of(), "host-secret"),
+                        new Game.PlayerSnapshot("guest", "Guest", now, false, null, cards("9C"), "guest-secret")
+                ),
+                List.of(), List.of(), Set.of(), List.of(), List.of()
         ));
     }
 

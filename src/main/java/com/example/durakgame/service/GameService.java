@@ -283,6 +283,14 @@ public class GameService {
         return game;
     }
 
+    public Game rematch(String gameCode, String playerId) {
+        Game game = mutateGame(gameCode, g -> g.rematch(playerId));
+        log.info("game_rematched code={} hostPlayerId={} players={}",
+                game.getCode(), playerId, game.getPlayers().size());
+        scheduleAutoPlay(game.getCode());
+        return game;
+    }
+
     public Game attack(String gameCode, String playerId, Card card) {
         Game game = mutateGame(gameCode, g -> g.attack(playerId, card));
         log.debug("game_action code={} action=attack playerId={} card={} tableSize={}",

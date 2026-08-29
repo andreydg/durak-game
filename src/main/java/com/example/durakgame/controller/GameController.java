@@ -106,6 +106,17 @@ public class GameController {
         return toResponse(game, request.playerId());
     }
 
+    @PostMapping("/{code}/rematch")
+    public GameResponse rematch(
+            @PathVariable String code,
+            @Valid @RequestBody PlayerActionRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
+        Game game = gameService.rematch(code, request.playerId());
+        webSocketHandler.broadcastGameUpdated(code, game.getVersion());
+        return toResponse(game, request.playerId());
+    }
+
     @PostMapping("/{code}/attack")
     public GameResponse attack(
             @PathVariable String code,

@@ -94,6 +94,24 @@ class GameControllerWebTest {
     }
 
     @Test
+    void rematchRequiresTokenAndReturnsFreshState() throws Exception {
+        Game game = new Game("ABC123", new Player("Alice"));
+        String hostId = game.getHostPlayerId();
+        when(gameService.rematch("ABC123", hostId)).thenReturn(game);
+
+        mockMvc.perform(post("/api/games/ABC123/rematch")
+                        .header("X-Durak-Token", "good-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"playerId\":\"" + hostId + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("ABC123"));
+
+        verify(gameService).requireAuthorized("ABC123", hostId, "good-token");
+        verify(gameService).rematch("ABC123", hostId);
+        verify(webSocketHandler).broadcastGameUpdated("ABC123", game.getVersion());
+    }
+
+    @Test
     void createGameRejectsOverlongNameWith400() throws Exception {
         mockMvc.perform(post("/api/games")
                         .contentType(MediaType.APPLICATION_JSON)

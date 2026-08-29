@@ -237,6 +237,18 @@ public class Game implements Serializable {
         touch();
     }
 
+    /** Starts a fresh deal with the same room, seats, teams, and player credentials. */
+    public synchronized void rematch(String playerId) {
+        if (status != GameStatus.FINISHED) {
+            throw new IllegalStateException("Rematch is available after the game finishes");
+        }
+        if (!Objects.equals(hostPlayerId, playerId)) {
+            throw new IllegalStateException("Only host can start a rematch");
+        }
+        resetToLobbyState();
+        start(playerId);
+    }
+
     public synchronized void attack(String playerId, Card card) {
         ensureInProgress();
         endRoundApprovals.clear();

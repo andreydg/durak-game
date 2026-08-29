@@ -24,6 +24,7 @@ const {
     roleTags,
     playerTeam,
     onAttackingSide,
+    gameResult,
     lobbyRowsHtml
 } = window.DurakLogic;
 
@@ -51,6 +52,11 @@ const playingArea = document.getElementById("playingArea");
 const gameplayHintEl = document.getElementById("gameplayHint");
 const helpToggleBtn = document.getElementById("helpToggleBtn");
 const roomWaitingLine = document.getElementById("roomWaitingLine");
+const resultPanel = document.getElementById("resultPanel");
+const resultIcon = document.getElementById("resultIcon");
+const resultTitle = document.getElementById("resultTitle");
+const resultSummary = document.getElementById("resultSummary");
+const rematchWaiting = document.getElementById("rematchWaiting");
 const messagesPanel = document.getElementById("messagesPanel");
 const messages = document.getElementById("messages");
 const debugUi = new URLSearchParams(window.location.search).get("debug") === "1";
@@ -97,6 +103,7 @@ const endRoundBtn = document.getElementById("endRoundBtn");
 const addBotBtn = document.getElementById("addBotBtn");
 const quickPlayBtn = document.getElementById("quickPlayBtn");
 const shareBtn = document.getElementById("shareBtn");
+const rematchBtn = document.getElementById("rematchBtn");
 
 function log(message) {
     if (!debugUi || !messages) return;
@@ -349,6 +356,8 @@ function renderMyHand(game, me) {
         btn.type = "button";
         btn.className = "hand-card-btn" + (state.selectedHandCard === code ? " selected" : "");
         btn.innerHTML = `<img src="${cardImage(code)}" draggable="false" title="${code}" alt="${code}">`;
+        btn.setAttribute("aria-label", `Play ${prettyCard(code)}`);
+        btn.setAttribute("aria-pressed", String(state.selectedHandCard === code));
         btn.draggable = true;
         btn.dataset.cardCode = code;
         btn.addEventListener("click", () => {
@@ -521,9 +530,11 @@ function render() {
     lobbyView.classList.toggle("hidden", hasSession);
     gameView.classList.toggle("hidden", !hasSession);
 
-    const showPlayingArea =
-        hasSession && game && (game.status === "IN_PROGRESS" || game.status === "FINISHED");
+    const showPlayingArea = hasSession && game && game.status === "IN_PROGRESS";
+    const showResult = hasSession && game && game.status === "FINISHED";
+    gameView.classList.toggle("game-view--active", Boolean(showPlayingArea || showResult));
     if (playingArea) playingArea.classList.toggle("hidden", !showPlayingArea);
+    if (resultPanel) resultPanel.classList.toggle("hidden", !showResult);
     if (gameplayHintEl) gameplayHintEl.classList.toggle("hidden", !showPlayingArea || !state.showGameplayHelp);
     if (helpToggleBtn) {
         helpToggleBtn.classList.toggle("hidden", !showPlayingArea);
@@ -555,6 +566,17 @@ function render() {
     const others = game.players.filter(p => p.id !== state.playerId);
     const attacker = game.players.find(p => p.id === game.attackerPlayerId);
     const defender = game.players.find(p => p.id === game.defenderPlayerId);
+
+    if (showResult && resultPanel) {
+        const result = gameResult(game, state.playerId);
+        resultPanel.dataset.outcome = result?.outcome || "draw";
+        resultIcon.textContent = result?.icon || "🃏";
+        resultTitle.textContent = result?.title || "Game finished";
+        resultSummary.textContent = result?.summary || "The game is complete.";
+        const canRematch = game.hostPlayerId === state.playerId;
+        rematchBtn.classList.toggle("hidden", !canRematch);
+        rematchWaiting.classList.toggle("hidden", canRematch);
+    }
 
     gameCodeLabel.textContent = game.code;
     statusLabel.textContent = displayStatus(game.status);
@@ -975,6 +997,13 @@ if (helpToggleBtn) {
 startBtn.addEventListener("click", async () => runAction("Start", async () => {
     state.game = await api(`/api/games/${state.gameCode}/start`, "POST", {playerId: state.playerId});
 }));
+
+if (rematchBtn) {
+    rematchBtn.addEventListener("click", async () => runAction("Play again", async () => {
+        state.game = await api(`/api/games/${state.gameCode}/rematch`, "POST", {playerId: state.playerId});
+        state.selectedHandCard = null;
+    }, rematchBtn));
+}
 
 attackBtn.addEventListener("click", async () => runAction("Attack", async () => {
     if (!state.selectedHandCard) throw new Error("Select a card first.");

@@ -57,13 +57,17 @@ test.describe("Gameplay against a bot", () => {
         await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6, { timeout: 10_000 });
 
         const firstCard = page.locator("#myHand .hand-card-btn").first();
+        await expect(firstCard).toHaveAttribute("aria-label", /Play/);
+        await expect(firstCard).toHaveAttribute("aria-pressed", "false");
         await firstCard.click();
         await expect(firstCard).toHaveClass(/selected/);
+        await expect(firstCard).toHaveAttribute("aria-pressed", "true");
         await expect(page.locator("#actionHint")).not.toBeEmpty();
 
         // Clicking again deselects.
         await firstCard.click();
         await expect(firstCard).not.toHaveClass(/selected/);
+        await expect(firstCard).toHaveAttribute("aria-pressed", "false");
     });
 
     test("a card reaches the table — human leads or the bot opens the attack", async ({ page }) => {

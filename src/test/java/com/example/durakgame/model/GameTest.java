@@ -12,13 +12,49 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class GameTest {
+
+    @Test
+    void hostCanRematchFinishedGameWithoutChangingSeatsOrCredentials() {
+        Game game = Game.fromSnapshot(new Game.Snapshot(
+                "REMAT1", 1L, 2L, "host", GameStatus.FINISHED,
+                Suit.HEARTS, Card.fromCode("6H"), -1, -1, "guest", false, 0, 9L,
+                List.of(
+                        new Game.PlayerSnapshot("host", "Host", 1L, false, null, List.of(), "host-secret"),
+                        new Game.PlayerSnapshot("guest", "Guest", 2L, false, null, cards("9C"), "guest-secret")
+                ),
+                List.of(), List.of(), Set.of(), List.of(), List.of(), false
+        ));
+
+        assertThrows(IllegalStateException.class, () -> game.rematch("guest"));
+
+        game.rematch("host");
+
+        assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
+        assertEquals(List.of("host", "guest"), game.getPlayers().stream().map(Player::getId).toList());
+        assertEquals(List.of("host-secret", "guest-secret"),
+                game.getPlayers().stream().map(Player::getSecret).toList());
+        assertTrue(game.getPlayers().stream().allMatch(player -> player.handSize() == 6));
+        assertEquals(24, game.getTalonSize());
+        assertNull(game.getLoserPlayerId());
+        assertFalse(game.isPublicRoom());
+    }
+
+    @Test
+    void rematchRequiresFinishedGame() {
+        Game game = new Game("REMAT2", new Player("Host"));
+        game.addPlayer("Guest", 4);
+
+        assertThrows(IllegalStateException.class, () -> game.rematch(game.getHostPlayerId()));
+    }
 
     @Test
     void startDealsSixCardsAndAssignsRoles() {

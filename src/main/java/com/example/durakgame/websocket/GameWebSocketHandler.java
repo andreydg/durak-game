@@ -42,14 +42,18 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        String gameCode = gameCodeFromSession(session);
-        Set<WebSocketSession> sessions = gameSessions.get(gameCode);
+        removeSession(gameCodeFromSession(session), session);
+    }
+
+    private void removeSession(String gameCode, WebSocketSession session) {
+        String normalizedCode = normalizeCode(gameCode);
+        Set<WebSocketSession> sessions = gameSessions.get(normalizedCode);
         if (sessions == null) {
             return;
         }
         sessions.remove(session);
         if (sessions.isEmpty()) {
-            gameSessions.remove(gameCode);
+            gameSessions.remove(normalizedCode, sessions);
         }
     }
 
@@ -103,10 +107,10 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         for (Map.Entry<String, String> entry : gameThinking.entrySet()) {
-            try {
-                session.sendMessage(new TextMessage(
-                        botThinkingJson(entry.getKey(), true, entry.getValue(), System.currentTimeMillis())));
-            } catch (IOException ignored) {
+            TextMessage message = new TextMessage(
+                    botThinkingJson(entry.getKey(), true, entry.getValue(), System.currentTimeMillis()));
+            if (!sendSafely(session, message)) {
+                removeSession(gameCode, session);
                 return;
             }
         }
@@ -138,11 +142,28 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         TextMessage message = new TextMessage(payload);
         sessions.removeIf(session -> !session.isOpen());
         for (WebSocketSession session : sessions) {
-            try {
-                session.sendMessage(message);
-            } catch (IOException ignored) {
-                // Failed session will be cleaned by closed check.
+            if (!sendSafely(session, message)) {
+                removeSession(gameCode, session);
             }
+        }
+    }
+
+    /**
+     * Spring websocket sessions do not permit overlapping sends. Bot work and HTTP
+     * actions can broadcast concurrently, so serialize per connection and quarantine
+     * a failed connection instead of allowing its exception to abort game logic.
+     */
+    private boolean sendSafely(WebSocketSession session, TextMessage message) {
+        try {
+            synchronized (session) {
+                if (!session.isOpen()) {
+                    return false;
+                }
+                session.sendMessage(message);
+            }
+            return true;
+        } catch (IOException | RuntimeException ignored) {
+            return false;
         }
     }
 

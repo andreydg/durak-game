@@ -125,6 +125,52 @@
         return dt != null && vt != null && vt !== dt;
     }
 
+    function gameResult(game, viewerId) {
+        if (!game || game.status !== "FINISHED") return null;
+        const loser = (game.players || []).find(player => player.id === game.loserPlayerId) || null;
+        const viewer = (game.players || []).find(player => player.id === viewerId) || null;
+        if (!loser) {
+            return {
+                outcome: "draw",
+                icon: "🤝",
+                title: "Nobody is the durak",
+                summary: "The game ended with no player holding cards."
+            };
+        }
+        const teamGame = (game.players || []).length === 4 && loser.team != null;
+        if (teamGame && viewer?.team != null) {
+            const viewerLost = viewer.team === loser.team;
+            return {
+                outcome: viewerLost ? "loss" : "win",
+                icon: viewerLost ? "🤡" : "🏆",
+                title: viewerLost ? "Your team is the durak" : "Your team won!",
+                summary: `${loser.name}’s team was left holding cards.`
+            };
+        }
+        if (viewer?.id === loser.id) {
+            return {
+                outcome: "loss",
+                icon: "🤡",
+                title: "You’re the durak",
+                summary: "You were the last player holding cards."
+            };
+        }
+        if (viewer) {
+            return {
+                outcome: "win",
+                icon: "🏆",
+                title: "You won!",
+                summary: `${loser.name} was the last player holding cards.`
+            };
+        }
+        return {
+            outcome: "spectator",
+            icon: "🃏",
+            title: `${loser.name} is the durak`,
+            summary: `${loser.name} was the last player holding cards.`
+        };
+    }
+
     function lobbyRowsHtml(rows, interactive, currentCode) {
         const cur = (currentCode || "").toUpperCase();
         if (!rows.length) return "";
@@ -159,6 +205,7 @@
         roleTags,
         playerTeam,
         onAttackingSide,
+        gameResult,
         lobbyRowsHtml
     };
 });
