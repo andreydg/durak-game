@@ -65,7 +65,22 @@ describe("crawlable SEO pages", () => {
         expect(app.url).toBe(`${canonicalOrigin}/`);
         expect(app.isAccessibleForFree).toBe(true);
         expect(app.offers.price).toBe("0");
-        expect(faq.mainEntity).toHaveLength(3);
+        expect(faq.mainEntity).toHaveLength(4);
+
+        const visibleFaq = [...documentFor("index.html").querySelectorAll("#faq details")]
+            .map(details => ({
+                question: details.querySelector("summary").textContent.trim(),
+                answer: details.querySelector("p").textContent.trim()
+            }));
+        const structuredFaq = faq.mainEntity.map(question => ({
+            question: question.name,
+            answer: question.acceptedAnswer.text
+        }));
+        expect(structuredFaq).toEqual(visibleFaq);
+
+        const russianApp = structuredData(documentFor("ru.html"))[0];
+        expect(russianApp["@id"]).toBe(`${canonicalOrigin}/ru.html#game`);
+        expect(russianApp["@id"]).not.toBe(app["@id"]);
 
         for (const file of ["rules.html", "rules-ru.html"]) {
             const howTo = structuredData(documentFor(file))[0];
