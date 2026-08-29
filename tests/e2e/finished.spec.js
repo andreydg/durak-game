@@ -112,6 +112,31 @@ test("non-host loser sees the loss state and waits for the host", async ({ page 
     await expect(page.locator("#rematchWaiting")).toBeVisible();
 });
 
+test("a remotely observed game transition clears stale card selection", async ({ page }) => {
+    await page.addInitScript(() => {
+        sessionStorage.setItem("durak_game_code", "FIN123");
+        sessionStorage.setItem("durak_player_id", "host");
+        sessionStorage.setItem("durak_player_token", "host-secret");
+    });
+    let remoteStatus = "IN_PROGRESS";
+    await page.route("**/api/games/FIN123**", route => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(game(remoteStatus))
+    }));
+
+    await page.goto("/");
+    await page.locator("#myHand .hand-card-btn").first().click();
+    await expect(page.locator("#myHand .hand-card-btn.selected")).toHaveCount(1);
+
+    remoteStatus = "FINISHED";
+    await page.evaluate(() => window.refreshGame(false));
+    remoteStatus = "IN_PROGRESS";
+    await page.evaluate(() => window.refreshGame(false));
+
+    await expect(page.locator("#myHand .hand-card-btn.selected")).toHaveCount(0);
+});
+
 test("mobile gameplay keeps the hand full-width and keyboard-accessible", async ({ page }) => {
     await page.setViewportSize({width: 390, height: 844});
     await page.addInitScript(() => {

@@ -36,6 +36,7 @@ class GameTest {
 
         assertThrows(IllegalStateException.class, () -> game.rematch("guest"));
 
+        long versionBeforeRematch = game.getVersion();
         game.rematch("host");
 
         assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
@@ -46,6 +47,31 @@ class GameTest {
         assertEquals(24, game.getTalonSize());
         assertNull(game.getLoserPlayerId());
         assertFalse(game.isPublicRoom());
+        assertEquals(versionBeforeRematch + 1, game.getVersion());
+    }
+
+    @Test
+    void finishedPlayerDeparturePreservesResultUntilHostRequestsRematch() {
+        Game game = Game.fromSnapshot(new Game.Snapshot(
+                "REMAT3", 1L, 2L, "host", GameStatus.FINISHED,
+                Suit.HEARTS, Card.fromCode("6H"), -1, -1, "guest", false, 0, 9L,
+                List.of(
+                        new Game.PlayerSnapshot("host", "Host", 1L, false, null, List.of(), "host-secret"),
+                        new Game.PlayerSnapshot("guest", "Guest", 2L, false, null, cards("9C"), "guest-secret")
+                ),
+                List.of(), List.of(), Set.of(), List.of(), List.of(), false
+        ));
+
+        assertTrue(game.removePlayerFromFinishedGame("guest"));
+
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertEquals(List.of("host"), game.getPlayers().stream().map(Player::getId).toList());
+        assertEquals(10L, game.getVersion());
+
+        game.rematch("host");
+
+        assertEquals(GameStatus.LOBBY, game.getStatus());
+        assertEquals(11L, game.getVersion());
     }
 
     @Test

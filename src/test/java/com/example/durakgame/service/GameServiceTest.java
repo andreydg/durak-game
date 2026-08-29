@@ -383,6 +383,25 @@ class GameServiceTest {
     }
 
     @Test
+    void leaveFinishedNonHostKeepsResultUntilHostRequestsRematch() {
+        GameStore store = new InMemoryGameStore();
+        GameService service = newService(store);
+        Game finished = finishedGame("DONE02");
+        store.save(finished);
+
+        boolean removed = service.leaveGame(finished.getCode(), "guest");
+
+        assertFalse(removed);
+        Game afterLeave = service.getGame(finished.getCode());
+        assertEquals(GameStatus.FINISHED, afterLeave.getStatus());
+        assertEquals(List.of("host"), afterLeave.getPlayers().stream().map(Player::getId).toList());
+
+        Game rematched = service.rematch(finished.getCode(), "host");
+        assertEquals(GameStatus.LOBBY, rematched.getStatus());
+        assertEquals(List.of("host"), rematched.getPlayers().stream().map(Player::getId).toList());
+    }
+
+    @Test
     void leaveUnknownPlayerThrows() {
         GameService service = newService(new InMemoryGameStore());
         Game game = service.createGame("Host");

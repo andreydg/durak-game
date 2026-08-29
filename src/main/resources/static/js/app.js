@@ -743,7 +743,12 @@ async function refreshGame(showMessage = false) {
     if (!state.gameCode) return;
     try {
         const query = new URLSearchParams({viewerPlayerId: state.playerId}).toString();
-        state.game = await api(`/api/games/${state.gameCode}?${query}`, "GET");
+        const previousStatus = state.game?.status;
+        const refreshedGame = await api(`/api/games/${state.gameCode}?${query}`, "GET");
+        if (previousStatus && previousStatus !== refreshedGame.status) {
+            state.selectedHandCard = null;
+        }
+        state.game = refreshedGame;
         syncBotThinkingFromGame(state.game);
         render();
         // A healthy read resolves connection failures, but it must not erase a

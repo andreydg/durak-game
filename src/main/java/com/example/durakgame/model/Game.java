@@ -218,6 +218,20 @@ public class Game implements Serializable {
         return true;
     }
 
+    /** Removes a player after the result is known without dismissing it for everyone else. */
+    public synchronized boolean removePlayerFromFinishedGame(String playerId) {
+        if (status != GameStatus.FINISHED) {
+            throw new IllegalStateException("Finished-game removal requires a completed game");
+        }
+        boolean removed = players.removeIf(player -> player.getId().equals(playerId));
+        if (removed) {
+            knownCardsByPlayer.remove(playerId);
+            transferHostAfterDeparture(playerId);
+            touch();
+        }
+        return removed;
+    }
+
     public synchronized void start(String playerId) {
         ensureLobby();
         if (!Objects.equals(hostPlayerId, playerId)) {
@@ -246,7 +260,11 @@ public class Game implements Serializable {
             throw new IllegalStateException("Only host can start a rematch");
         }
         resetToLobbyState();
-        start(playerId);
+        if (players.size() >= 2) {
+            start(playerId);
+        } else {
+            touch();
+        }
     }
 
     public synchronized void attack(String playerId, Card card) {
