@@ -22,6 +22,7 @@ const {
     searchWithoutRoomParam,
     reconnectDelayMs,
     gameRefreshDelayMs,
+    shouldReplaceRefreshTimer,
     lobbyRefreshDelayMs,
     escapeHtml,
     roleTags,
@@ -39,6 +40,7 @@ const state = {
     selectedHandCard: null,
     showGameplayHelp: false,
     pollTimer: null,
+    pollDueAt: 0,
     heartbeatTimer: null,
     ws: null,
     wsConnected: false,
@@ -1042,23 +1044,38 @@ function beginPolling() {
     beginHeartbeat();
 }
 
-function scheduleGameRefresh(delayOverride = null) {
-    if (state.pollTimer) {
-        clearTimeout(state.pollTimer);
-        state.pollTimer = null;
+function scheduleGameRefresh(delayOverride = null, replaceExisting = false) {
+    if (!state.gameCode || !state.playerId) {
+        cancelGameRefreshTimer();
+        return;
     }
-    if (!state.gameCode || !state.playerId) return;
     const delay = delayOverride ?? gameRefreshDelayMs(state.wsConnected, document.visibilityState);
-    if (delay == null) return;
-    state.pollTimer = window.setTimeout(() => {
+    if (delay == null) {
+        cancelGameRefreshTimer();
+        return;
+    }
+    const dueAt = Date.now() + Math.max(0, Number(delay) || 0);
+    if (state.pollTimer
+        && !shouldReplaceRefreshTimer(state.pollDueAt, dueAt, replaceExisting)) return;
+    cancelGameRefreshTimer();
+    const timer = window.setTimeout(() => {
+        if (state.pollTimer !== timer) return;
         state.pollTimer = null;
+        state.pollDueAt = 0;
         refreshGame(false);
-    }, delay);
+    }, Math.max(0, dueAt - Date.now()));
+    state.pollTimer = timer;
+    state.pollDueAt = dueAt;
+}
+
+function cancelGameRefreshTimer() {
+    if (state.pollTimer) clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+    state.pollDueAt = 0;
 }
 
 function stopPolling() {
-    if (state.pollTimer) clearTimeout(state.pollTimer);
-    state.pollTimer = null;
+    cancelGameRefreshTimer();
     state.gameRefreshQueued = false;
     if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
     state.heartbeatTimer = null;
@@ -1141,7 +1158,7 @@ function connectWebSocket() {
                 state.wsReconnectAttempt = 0;
             }
         }, 5_000);
-        scheduleGameRefresh();
+        scheduleGameRefresh(null, true);
         log("Realtime connected.");
     };
     ws.onmessage = async (event) => {

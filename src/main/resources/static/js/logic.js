@@ -103,6 +103,14 @@
         return webSocketConnected ? 30_000 : 3_000;
     }
 
+    /** Preserve a pending prompt refresh unless the new deadline is earlier or explicitly replaces it. */
+    function shouldReplaceRefreshTimer(existingDueAt, requestedDueAt, replaceExisting = false) {
+        if (replaceExisting) return true;
+        const existing = Number(existingDueAt) || 0;
+        const requested = Number(requestedDueAt) || 0;
+        return existing <= 0 || requested < existing;
+    }
+
     /** Lobby events drive normal updates; failed fallback reads back off to protect the store. */
     function lobbyRefreshDelayMs(webSocketConnected, failureCount = 0, visibilityState = "visible") {
         if (visibilityState === "hidden") return null;
@@ -239,6 +247,7 @@
         searchWithoutRoomParam,
         reconnectDelayMs,
         gameRefreshDelayMs,
+        shouldReplaceRefreshTimer,
         lobbyRefreshDelayMs,
         escapeHtml,
         roleTags,

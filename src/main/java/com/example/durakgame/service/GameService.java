@@ -182,7 +182,9 @@ public class GameService {
                 game.markActive();
                 gameStore.save(game);
                 if (game.isPublicRoom() && game.getStatus() == GameStatus.LOBBY) {
-                    publishLobbyChange();
+                    // Expiry metadata changed, so bypass this instance's short projection cache.
+                    // The visible lobby roster did not change, so avoid broadcasting to every client.
+                    invalidateLobbyCache();
                 }
             }
             return game;
@@ -475,13 +477,17 @@ public class GameService {
 
     /** Lobby fan-out is best effort and must never turn a successful game mutation into an error. */
     private void publishLobbyChange() {
-        lobbyProjectionRevision.incrementAndGet();
-        cachedLobbies = null;
+        invalidateLobbyCache();
         try {
             lobbyUpdatePublisher.lobbiesChanged();
         } catch (RuntimeException ex) {
             log.warn("lobby_update_publish_failed message={}", ex.getMessage());
         }
+    }
+
+    private void invalidateLobbyCache() {
+        lobbyProjectionRevision.incrementAndGet();
+        cachedLobbies = null;
     }
 
     private String generateUniqueCode() {

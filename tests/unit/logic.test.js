@@ -89,6 +89,21 @@ describe("displayStatus", () => {
     });
 });
 
+describe("shouldReplaceRefreshTimer", () => {
+    it("preserves an earlier catch-up deadline from a later health poll", () => {
+        expect(L.shouldReplaceRefreshTimer(1_200, 30_000)).toBe(false);
+    });
+
+    it("allows prompt fallback work to replace a later health poll", () => {
+        expect(L.shouldReplaceRefreshTimer(30_000, 1_200)).toBe(true);
+    });
+
+    it("allows explicit rescheduling and empty timer slots", () => {
+        expect(L.shouldReplaceRefreshTimer(1_200, 30_000, true)).toBe(true);
+        expect(L.shouldReplaceRefreshTimer(0, 30_000)).toBe(true);
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
         expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");

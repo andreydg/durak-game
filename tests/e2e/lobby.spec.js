@@ -437,4 +437,53 @@ test.describe("Lobby & room creation", () => {
 
         await expect.poll(() => gameGets, {timeout: 2_500}).toBeGreaterThanOrEqual(1);
     });
+
+    test("an in-flight refresh cannot postpone a suppressed update catch-up", async ({ page }) => {
+        let gameSocket = null;
+        await page.routeWebSocket("**/ws/games/*", socket => {
+            gameSocket = socket;
+        });
+
+        let gameGets = 0;
+        let holdNextGameGet = false;
+        let releaseHeldGet;
+        let reportHeldGet;
+        const heldGet = new Promise(resolve => { reportHeldGet = resolve; });
+        const releaseGet = new Promise(resolve => { releaseHeldGet = resolve; });
+        await page.route("**/api/games/*", async route => {
+            const request = route.request();
+            const path = new URL(request.url()).pathname;
+            const isGameGet = request.method() === "GET"
+                && /^\/api\/games\/[A-Z0-9]{6}$/.test(path);
+            if (isGameGet) {
+                gameGets++;
+                if (holdNextGameGet) {
+                    holdNextGameGet = false;
+                    reportHeldGet();
+                    await releaseGet;
+                }
+            }
+            await route.continue();
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Timer Race Host");
+        await page.click("#createBtn");
+        await expect.poll(() => gameSocket !== null).toBe(true);
+        await expect(page.locator("#createBtn")).not.toHaveAttribute("aria-busy", "true");
+        await page.evaluate(() => window.stopPolling());
+
+        holdNextGameGet = true;
+        const inFlightRefresh = page.evaluate(() => window.refreshGame(false));
+        await heldGet;
+        await page.evaluate(() => window.runAction("Synthetic action", async () => {}));
+        gameSocket.send(JSON.stringify({type: "GAME_UPDATED", version: 999}));
+        await page.waitForTimeout(100);
+        releaseHeldGet();
+        await inFlightRefresh;
+
+        const readsAfterInFlightRefresh = gameGets;
+        await expect.poll(() => gameGets, {timeout: 2_500})
+            .toBeGreaterThan(readsAfterInFlightRefresh);
+    });
 });

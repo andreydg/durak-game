@@ -109,7 +109,7 @@ class GameServiceTest {
     }
 
     @Test
-    void publicLobbyMutationsPublishInvalidations() {
+    void onlyVisiblePublicLobbyMutationsPublishInvalidations() {
         AtomicInteger invalidations = new AtomicInteger();
         GameService service = newService(new InMemoryGameStore(), invalidations::incrementAndGet);
 
@@ -120,13 +120,13 @@ class GameServiceTest {
         assertEquals(2, invalidations.get());
 
         service.heartbeat(game.getCode(), game.getHostPlayerId());
-        assertEquals(3, invalidations.get());
+        assertEquals(2, invalidations.get(), "heartbeat changes expiry only, not the visible lobby roster");
 
         service.startGame(game.getCode(), game.getHostPlayerId());
-        assertEquals(4, invalidations.get());
+        assertEquals(3, invalidations.get());
 
         service.leaveGame(game.getCode(), guest.getId());
-        assertEquals(5, invalidations.get());
+        assertEquals(4, invalidations.get());
     }
 
     @Test
