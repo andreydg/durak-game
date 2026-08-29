@@ -270,35 +270,27 @@ public class GameService {
     }
 
     /**
-     * Leave room:
-     * - in lobby: remove player; remove room when host leaves or room becomes empty;
-     * - after start: host leaving removes room, non-host leaving resets game to lobby.
-     * Returns true when the whole game room was removed.
+     * Intentionally leave a room. Browser disconnects do not call this operation: the
+     * player session remains reconnectable. A started game returns to the lobby after a
+     * departure, and ownership transfers when the departing player was the host.
+     * Returns true when no human player remains and the room is removed.
      */
     public boolean leaveGame(String gameCode, String playerId) {
         String normalizedCode = normalizeCode(gameCode);
         return withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
-            boolean hostLeaving = Objects.equals(game.getHostPlayerId(), playerId);
 
             if (game.getStatus() != GameStatus.LOBBY) {
-                if (hostLeaving) {
-                    gameStore.deleteByCode(normalizedCode);
-                    return true;
-                }
                 boolean removed = game.removePlayerAndResetToLobby(playerId);
                 if (!removed) {
                     throw new NoSuchElementException("Player not found in this game");
                 }
-                gameStore.save(game);
-                return false;
-            }
-
-            boolean removed = game.removePlayerFromLobby(playerId);
-            if (!removed) {
+            } else if (!game.removePlayerFromLobby(playerId)) {
                 throw new NoSuchElementException("Player not found in this game");
             }
-            if (hostLeaving || game.getPlayers().isEmpty()) {
+
+            boolean hasHumanPlayer = game.getPlayers().stream().anyMatch(player -> !player.isBot());
+            if (!hasHumanPlayer) {
                 gameStore.deleteByCode(normalizedCode);
                 return true;
             }

@@ -242,16 +242,18 @@ class GameServiceTest {
     }
 
     @Test
-    void leaveLobbyHostDeletesRoom() {
+    void leaveLobbyHostTransfersRoomToGuest() {
         GameStore store = new InMemoryGameStore();
         GameService service = newService(store);
         Game game = service.createGame("Host");
-        service.joinGame(game.getCode(), "Guest");
+        Player guest = service.joinGame(game.getCode(), "Guest");
 
         boolean removed = service.leaveGame(game.getCode(), game.getHostPlayerId());
 
-        assertTrue(removed);
-        assertTrue(store.findByCode(game.getCode()).isEmpty());
+        assertFalse(removed);
+        Game after = service.getGame(game.getCode());
+        assertEquals(guest.getId(), after.getHostPlayerId());
+        assertEquals(1, after.getPlayers().size());
     }
 
     @Test
@@ -267,12 +269,28 @@ class GameServiceTest {
     }
 
     @Test
-    void leaveInProgressHostDeletesRoom() {
+    void leaveInProgressHostTransfersRoomAndResetsToLobby() {
         GameStore store = new InMemoryGameStore();
         GameService service = newService(store);
         Game game = service.createGame("Host");
-        service.joinGame(game.getCode(), "Guest");
+        Player guest = service.joinGame(game.getCode(), "Guest");
         service.startGame(game.getCode(), game.getHostPlayerId());
+
+        boolean removed = service.leaveGame(game.getCode(), game.getHostPlayerId());
+
+        assertFalse(removed);
+        Game after = service.getGame(game.getCode());
+        assertEquals(GameStatus.LOBBY, after.getStatus());
+        assertEquals(guest.getId(), after.getHostPlayerId());
+        assertEquals(1, after.getPlayers().size());
+    }
+
+    @Test
+    void leaveHostWithOnlyBotDeletesRoom() {
+        GameStore store = new InMemoryGameStore();
+        GameService service = newService(store);
+        Game game = service.createGame("Host");
+        service.addBot(game.getCode(), game.getHostPlayerId(), null);
 
         boolean removed = service.leaveGame(game.getCode(), game.getHostPlayerId());
 

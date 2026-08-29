@@ -9,6 +9,24 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#hostName")).toBeVisible();
     });
 
+    test("invalid room code shows an accessible error", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#gameCode", "NOPE12");
+        await page.click("#joinBtn");
+
+        await expect(page.locator("#appAlert")).toBeVisible();
+        await expect(page.locator("#appAlert")).toContainText("Game not found");
+        await expect(page.locator("#appAlert")).toHaveAttribute("role", "alert");
+    });
+
+    test("join form submits with Enter", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#gameCode", "NOPE12");
+        await page.press("#gameCode", "Enter");
+
+        await expect(page.locator("#appAlert")).toContainText("Game not found");
+    });
+
     test("creating a game opens a room with a 6-char code and Lobby status", async ({ page }) => {
         await page.goto("/");
         await page.fill("#hostName", "Alice");

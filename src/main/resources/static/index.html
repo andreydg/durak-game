@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
+<div id="appAlert" class="app-alert hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
 <section id="lobbyView" class="lobby-root">
     <header class="lobby-hero">
         <div class="lobby-brand">
@@ -28,17 +29,17 @@
         </div>
     </header>
     <div class="lobby-forms">
-        <div class="panel lobby-card">
+        <form id="hostForm" class="panel lobby-card">
             <h2>Host a table</h2>
             <div class="lobby-field">
                 <label for="hostName">Your name <span class="lobby-optional">(optional)</span></label>
                 <input id="hostName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
             </div>
             <div class="lobby-actions">
-                <button type="button" class="btn-primary" id="createBtn">Create game</button>
+                <button type="submit" class="btn-primary" id="createBtn">Create game</button>
             </div>
-        </div>
-        <div class="panel lobby-card">
+        </form>
+        <form id="joinForm" class="panel lobby-card">
             <h2>Join with code</h2>
             <div class="lobby-join-grid">
                 <div class="lobby-field" style="margin-bottom:0;">
@@ -52,9 +53,9 @@
             </div>
             <p class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code — you can join with one tap; we’ll assign a guest name if the field is empty.</p>
             <div class="lobby-actions">
-                <button type="button" class="btn-primary" id="joinBtn">Join game</button>
+                <button type="submit" class="btn-primary" id="joinBtn">Join game</button>
             </div>
-        </div>
+        </form>
     </div>
     <div class="lobby-open-tables panel" id="lobbyOpenTables">
         <h2>Open tables</h2>
