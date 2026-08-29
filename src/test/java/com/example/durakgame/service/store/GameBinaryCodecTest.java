@@ -22,6 +22,7 @@ class GameBinaryCodecTest {
         Game.Snapshot original = new Game.Snapshot(
                 "ROUND1",
                 1_700_000_000_000L,
+                1_700_000_123_000L,
                 "host",
                 GameStatus.IN_PROGRESS,
                 Suit.SPADES,
@@ -60,6 +61,7 @@ class GameBinaryCodecTest {
         Game.Snapshot original = new Game.Snapshot(
                 "ROUND2",
                 1_700_000_000_000L,
+                1_700_000_123_000L,
                 "host",
                 GameStatus.FINISHED,
                 Suit.HEARTS,
@@ -102,6 +104,7 @@ class GameBinaryCodecTest {
         assertEquals(GameStatus.LOBBY, decoded.getStatus());
         assertEquals(1, decoded.getPlayers().size());
         assertEquals("", decoded.getPlayers().getFirst().getSecret());
+        assertEquals(decoded.getCreatedAt(), decoded.getLastActivityAt());
     }
 
     /** Hand-writes a minimal version-3 lobby payload (the format before the player-secret field). */

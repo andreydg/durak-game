@@ -1,38 +1,33 @@
 package com.example.durakgame.service.store;
 
 import com.example.durakgame.model.Game;
-import com.example.durakgame.model.GameStatus;
+import com.example.durakgame.service.GameExpiryPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.time.Instant;
 
 /**
  * Periodically evicts stale games from the in-memory store so abandoned lobbies (closed tabs
  * whose leave-beacon never fired) don't leak memory. Operates directly on {@link InMemoryGameStore}:
  * on Cloud Run that store stays empty (Firestore is active and has its own TTL), so this is a no-op
- * there. Active games are protected up to {@code hardMaxAge}; lobbies are reaped sooner.
+ * there. The same activity-based policy is enforced synchronously by the API and lobby list.
  */
 @Component
 public class InMemoryGameReaper {
     private static final Logger log = LoggerFactory.getLogger(InMemoryGameReaper.class);
 
     private final InMemoryGameStore store;
-    private final Duration lobbyMaxAge;
-    private final Duration hardMaxAge;
+    private final GameExpiryPolicy expiryPolicy;
 
     public InMemoryGameReaper(
             InMemoryGameStore store,
-            @Value("${app.reaper.lobby-max-age-minutes:120}") long lobbyMaxAgeMinutes,
-            @Value("${app.reaper.hard-max-age-hours:24}") long hardMaxAgeHours
+            GameExpiryPolicy expiryPolicy
     ) {
         this.store = store;
-        this.lobbyMaxAge = Duration.ofMinutes(lobbyMaxAgeMinutes);
-        this.hardMaxAge = Duration.ofHours(hardMaxAgeHours);
+        this.expiryPolicy = expiryPolicy;
     }
 
     @Scheduled(
@@ -53,12 +48,7 @@ public class InMemoryGameReaper {
         }
     }
 
-    /** Reap a lobby past {@code lobbyMaxAge}, or any game past the {@code hardMaxAge} ceiling. */
     boolean shouldReap(Game game, Instant now) {
-        Duration age = Duration.between(game.getCreatedAt(), now);
-        if (age.compareTo(hardMaxAge) >= 0) {
-            return true;
-        }
-        return game.getStatus() == GameStatus.LOBBY && age.compareTo(lobbyMaxAge) >= 0;
+        return expiryPolicy.isExpired(game, now);
     }
 }

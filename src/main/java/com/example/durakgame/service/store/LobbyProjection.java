@@ -1,6 +1,7 @@
 package com.example.durakgame.service.store;
 
 import java.util.List;
+import java.time.Instant;
 
 /**
  * Lightweight lobby summary the store can return without decoding the full game payload.
@@ -10,6 +11,7 @@ public record LobbyProjection(
         String code,
         String hostName,
         List<String> playerNames,
-        int playerCount
+        int playerCount,
+        Instant lastActivityAt
 ) {
 }

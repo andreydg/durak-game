@@ -32,6 +32,7 @@ const state = {
     selectedHandCard: null,
     showGameplayHelp: false,
     pollTimer: null,
+    heartbeatTimer: null,
     ws: null,
     wsConnected: false,
     suppressWsRefreshUntilMs: 0,
@@ -200,6 +201,7 @@ document.addEventListener("visibilitychange", () => {
         refreshLobbyLists();
     }
     if (document.visibilityState === "visible" && state.gameCode) {
+        sendHeartbeat();
         const socketOpen = state.ws && state.ws.readyState === WebSocket.OPEN;
         const socketConnecting = state.ws && state.ws.readyState === WebSocket.CONNECTING;
         if (!socketOpen && !socketConnecting) {
@@ -675,9 +677,9 @@ async function refreshGame(showMessage = false) {
         clearError("connection");
         if (showMessage) log("Game refreshed.");
     } catch (err) {
-        if (err.message === "Game not found") {
+        if (err.message === "Game not found" || err.message.startsWith("Room expired")) {
             clearSession();
-            showError("This room no longer exists.", "session");
+            showError(err.message === "Game not found" ? "This room no longer exists." : err.message, "session");
             return;
         }
         showError(`Connection problem: ${err.message}`, "connection");
@@ -746,11 +748,32 @@ function beginPolling() {
             refreshGame(false);
         }
     }, 3000);
+    beginHeartbeat();
 }
 
 function stopPolling() {
     if (state.pollTimer) clearInterval(state.pollTimer);
     state.pollTimer = null;
+    if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+    state.heartbeatTimer = null;
+}
+
+async function sendHeartbeat() {
+    if (!state.gameCode || !state.playerId || state.game?.status === "FINISHED") return;
+    try {
+        await fetch(`/api/games/${state.gameCode}/heartbeat`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json", ...authHeaders()},
+            body: JSON.stringify({playerId: state.playerId})
+        });
+    } catch (_) {
+        // Best effort: the normal refresh path reports persistent connection failures.
+    }
+}
+
+function beginHeartbeat() {
+    if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+    state.heartbeatTimer = setInterval(sendHeartbeat, 5 * 60 * 1000);
 }
 
 function closeWebSocket() {

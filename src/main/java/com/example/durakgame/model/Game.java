@@ -20,6 +20,7 @@ public class Game implements Serializable {
 
     private final String code;
     private final Instant createdAt;
+    private Instant lastActivityAt;
     private final List<Player> players = new ArrayList<>();
     private String hostPlayerId;
     private final Deque<Card> talon = new ArrayDeque<>();
@@ -42,6 +43,7 @@ public class Game implements Serializable {
     public record Snapshot(
             String code,
             long createdAtEpochMs,
+            long lastActivityAtEpochMs,
             String hostPlayerId,
             GameStatus status,
             Suit trumpSuit,
@@ -92,6 +94,7 @@ public class Game implements Serializable {
     private Game(String code, Player host, Instant createdAt) {
         this.code = code;
         this.createdAt = createdAt;
+        this.lastActivityAt = createdAt;
         this.players.add(host);
         this.hostPlayerId = host.getId();
     }
@@ -410,6 +413,15 @@ public class Game implements Serializable {
         return version;
     }
 
+    public synchronized Instant getLastActivityAt() {
+        return lastActivityAt;
+    }
+
+    /** Extends inactivity expiry for a connected player without changing gameplay state. */
+    public synchronized void markActive() {
+        touch();
+    }
+
     public synchronized Snapshot toSnapshot() {
         List<PlayerSnapshot> playerSnapshots = players.stream()
                 .map(player -> new PlayerSnapshot(
@@ -431,6 +443,7 @@ public class Game implements Serializable {
         return new Snapshot(
                 code,
                 createdAt.toEpochMilli(),
+                lastActivityAt.toEpochMilli(),
                 hostPlayerId,
                 status,
                 trumpSuit,
@@ -470,6 +483,7 @@ public class Game implements Serializable {
         host.addCards(hostSnapshot.hand());
 
         Game game = new Game(snapshot.code(), host, Instant.ofEpochMilli(snapshot.createdAtEpochMs()));
+        game.lastActivityAt = Instant.ofEpochMilli(snapshot.lastActivityAtEpochMs());
         game.players.clear();
         for (PlayerSnapshot ps : snapshot.players()) {
             Player player = new Player(
@@ -961,6 +975,7 @@ public class Game implements Serializable {
     }
 
     private void touch() {
+        lastActivityAt = Instant.now();
         version++;
     }
 }

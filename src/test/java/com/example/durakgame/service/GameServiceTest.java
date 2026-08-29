@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -43,6 +45,10 @@ class GameServiceTest {
 
     private GameService newService(GameStore store, AutoPlayDecisionEngine engine) {
         return new GameService(store, engine, webSocket);
+    }
+
+    private GameService newService(GameStore store, GameExpiryPolicy expiryPolicy) {
+        return new GameService(store, noOpEngine, webSocket, expiryPolicy);
     }
 
     // --- createGame -------------------------------------------------------
@@ -101,6 +107,30 @@ class GameServiceTest {
     void getGameUnknownThrowsNoSuchElement() {
         GameService service = newService(new InMemoryGameStore());
         assertThrows(NoSuchElementException.class, () -> service.getGame("NOPE12"));
+    }
+
+    @Test
+    void getGameDeletesExpiredRoomAndReturnsGoneSemantics() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
+        Game expired = lobbyAt("OLD001", Instant.now().minus(31, ChronoUnit.MINUTES));
+        store.save(expired);
+
+        assertThrows(RoomExpiredException.class, () -> service.getGame(expired.getCode()));
+        assertFalse(store.existsByCode(expired.getCode()));
+    }
+
+    @Test
+    void heartbeatAdvancesActivityAndVersion() {
+        GameService service = newService(new InMemoryGameStore());
+        Game game = service.createGame("Host");
+        long beforeVersion = game.getVersion();
+        Instant beforeActivity = game.getLastActivityAt();
+
+        Game after = service.heartbeat(game.getCode(), game.getHostPlayerId());
+
+        assertTrue(after.getVersion() > beforeVersion);
+        assertFalse(after.getLastActivityAt().isBefore(beforeActivity));
     }
 
     // --- authorization ----------------------------------------------------
@@ -358,6 +388,23 @@ class GameServiceTest {
         assertEquals(1, reads.get(), "second call within TTL should hit the cache");
     }
 
+    @Test
+    void listOpenLobbiesDeletesExpiredAndSortsMostRecentFirst() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
+        Game old = lobbyAt("OLD001", Instant.now().minus(31, ChronoUnit.MINUTES));
+        Game recent = lobbyAt("NEW001", Instant.now().minus(1, ChronoUnit.MINUTES));
+        Game middle = lobbyAt("MID001", Instant.now().minus(10, ChronoUnit.MINUTES));
+        store.save(old);
+        store.save(middle);
+        store.save(recent);
+
+        List<String> codes = service.listOpenLobbies().stream().map(LobbyGameSummary::code).toList();
+
+        assertEquals(List.of("NEW001", "MID001"), codes);
+        assertFalse(store.existsByCode("OLD001"));
+    }
+
     // --- mutateGame delegation & retry -----------------------------------
 
     @Test
@@ -486,9 +533,11 @@ class GameServiceTest {
             int attackerIndex,
             int defenderIndex
     ) {
+        long now = Instant.now().toEpochMilli();
         return Game.fromSnapshot(new Game.Snapshot(
                 "TEST01",
-                0L,
+                now,
+                now,
                 players.getFirst().id(),
                 GameStatus.IN_PROGRESS,
                 trumpSuit,
@@ -505,6 +554,17 @@ class GameServiceTest {
                 Set.of(),
                 List.of(),
                 List.of()
+        ));
+    }
+
+    private static Game lobbyAt(String code, Instant lastActivityAt) {
+        long timestamp = lastActivityAt.toEpochMilli();
+        Game.PlayerSnapshot host = new Game.PlayerSnapshot(
+                "host", "Host", timestamp, false, null, List.of(), "secret");
+        return Game.fromSnapshot(new Game.Snapshot(
+                code, timestamp, timestamp, "host", GameStatus.LOBBY,
+                null, null, -1, -1, null, false, 0, 0L,
+                List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()
         ));
     }
 

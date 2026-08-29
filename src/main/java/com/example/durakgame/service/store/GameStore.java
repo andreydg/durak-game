@@ -48,6 +48,12 @@ public interface GameStore {
                 .findFirst()
                 .orElse("?");
         List<String> playerNames = game.getPlayers().stream().map(Player::getName).toList();
-        return new LobbyProjection(game.getCode(), hostName, playerNames, game.getPlayers().size());
+        return new LobbyProjection(
+                game.getCode(),
+                hostName,
+                playerNames,
+                game.getPlayers().size(),
+                game.getLastActivityAt()
+        );
     }
 }

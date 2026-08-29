@@ -169,6 +169,15 @@ public class GameController {
         webSocketHandler.broadcastGameUpdated(code);
     }
 
+    @PostMapping("/{code}/heartbeat")
+    public void heartbeat(
+            @PathVariable String code,
+            @Valid @RequestBody PlayerActionRequest request,
+            @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
+        gameService.requireAuthorized(code, request.playerId(), token);
+        gameService.heartbeat(code, request.playerId());
+    }
+
     private GameResponse toResponse(Game game, String viewerPlayerId) {
         return GameResponse.from(
                 game,

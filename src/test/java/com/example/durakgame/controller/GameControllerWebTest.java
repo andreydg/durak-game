@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.time.Instant;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -148,7 +149,11 @@ class GameControllerWebTest {
     @Test
     void listLobbiesReturnsSummaries() throws Exception {
         when(gameService.listOpenLobbies()).thenReturn(List.of(
-                new LobbyGameSummary("ABC123", "Alice", List.of("Alice"), 1, 4)));
+                new LobbyGameSummary(
+                        "ABC123", "Alice", List.of("Alice"), 1, 4,
+                        Instant.parse("2026-08-28T12:00:00Z"),
+                        Instant.parse("2026-08-28T12:30:00Z")
+                )));
 
         mockMvc.perform(get("/api/lobbies"))
                 .andExpect(status().isOk())
