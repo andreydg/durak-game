@@ -30,11 +30,12 @@ class LobbyWebSocketHandlerTest {
 
         handler.afterConnectionEstablished(session);
 
-        assertEquals(1, session.messages.size());
-        Map<String, Object> payload = payload(session.messages.getFirst().getPayload());
-        assertEquals("LOBBIES_READY", payload.get("type"));
-        assertFalse(String.valueOf(payload.get("streamId")).isBlank());
-        assertEquals(1, ((Number) payload.get("revision")).intValue());
+        // The already-scheduled revision broadcast may race with this connection and deliver an
+        // equivalent LOBBIES_CHANGED before or after READY. Ordering and message count are not
+        // protocol guarantees; the synchronous READY snapshot is.
+        Map<String, Object> ready = payloadOfType(session, "LOBBIES_READY");
+        assertFalse(String.valueOf(ready.get("streamId")).isBlank());
+        assertEquals(1, ((Number) ready.get("revision")).intValue());
     }
 
     @Test
@@ -119,6 +120,16 @@ class LobbyWebSocketHandlerTest {
 
     private Map<String, Object> payload(String json) throws Exception {
         return objectMapper.readValue(json, new TypeReference<>() { });
+    }
+
+    private Map<String, Object> payloadOfType(TestWebSocketSession session, String type) throws Exception {
+        for (org.springframework.web.socket.TextMessage message : session.messages) {
+            Map<String, Object> candidate = payload(message.getPayload());
+            if (type.equals(candidate.get("type"))) {
+                return candidate;
+            }
+        }
+        throw new AssertionError("Expected websocket message type " + type + " but got " + session.messages);
     }
 
     private long revision(org.springframework.web.socket.TextMessage message) throws Exception {
