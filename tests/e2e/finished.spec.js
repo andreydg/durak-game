@@ -42,6 +42,8 @@ function game(status) {
         takingPlayerId: null,
         takeLimit: 0,
         loserPlayerId: inProgress ? null : "guest",
+        loserPlayerName: inProgress ? null : "Guest",
+        loserTeam: null,
         trumpSuit: inProgress ? "S" : null,
         trumpCard: inProgress ? "6S" : null,
         talonSize: inProgress ? 24 : 0,
@@ -110,6 +112,29 @@ test("non-host loser sees the loss state and waits for the host", async ({ page 
     await expect(page.locator("#resultTitle")).toContainText("durak");
     await expect(page.locator("#rematchBtn")).toBeHidden();
     await expect(page.locator("#rematchWaiting")).toBeVisible();
+});
+
+test("winner keeps the recorded result after the loser leaves", async ({ page }) => {
+    await page.addInitScript(() => {
+        sessionStorage.setItem("durak_game_code", "FIN123");
+        sessionStorage.setItem("durak_player_id", "host");
+        sessionStorage.setItem("durak_player_token", "host-secret");
+    });
+    const afterDeparture = game("FINISHED");
+    afterDeparture.players = afterDeparture.players.filter(candidate => candidate.id === "host");
+    afterDeparture.playerCount = 1;
+    await page.route("**/api/games/FIN123**", route => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(afterDeparture)
+    }));
+
+    await page.goto("/");
+
+    await expect(page.locator("#resultPanel")).toHaveAttribute("data-outcome", "win");
+    await expect(page.locator("#resultTitle")).toHaveText("You won!");
+    await expect(page.locator("#resultSummary")).toContainText("Guest");
+    await expect(page.locator("#resultTitle")).not.toContainText("Nobody");
 });
 
 test("a remotely observed game transition clears stale card selection", async ({ page }) => {

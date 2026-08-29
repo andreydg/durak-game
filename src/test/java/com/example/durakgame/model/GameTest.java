@@ -66,6 +66,11 @@ class GameTest {
 
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertEquals(List.of("host"), game.getPlayers().stream().map(Player::getId).toList());
+        assertEquals("guest", game.getLoserPlayerId());
+        assertEquals("Guest", game.getLoserPlayerName());
+        assertNull(game.getLoserTeam());
+        assertNull(game.getAttackerPlayerId());
+        assertNull(game.getDefenderPlayerId());
         assertEquals(10L, game.getVersion());
 
         game.rematch("host");

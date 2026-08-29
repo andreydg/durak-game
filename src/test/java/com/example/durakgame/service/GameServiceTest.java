@@ -395,6 +395,8 @@ class GameServiceTest {
         Game afterLeave = service.getGame(finished.getCode());
         assertEquals(GameStatus.FINISHED, afterLeave.getStatus());
         assertEquals(List.of("host"), afterLeave.getPlayers().stream().map(Player::getId).toList());
+        assertEquals("guest", afterLeave.getLoserPlayerId());
+        assertEquals("Guest", afterLeave.getLoserPlayerName());
 
         Game rematched = service.rematch(finished.getCode(), "host");
         assertEquals(GameStatus.LOBBY, rematched.getStatus());

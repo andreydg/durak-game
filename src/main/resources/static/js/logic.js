@@ -127,9 +127,9 @@
 
     function gameResult(game, viewerId) {
         if (!game || game.status !== "FINISHED") return null;
-        const loser = (game.players || []).find(player => player.id === game.loserPlayerId) || null;
-        const viewer = (game.players || []).find(player => player.id === viewerId) || null;
-        if (!loser) {
+        const players = game.players || [];
+        const viewer = players.find(player => player.id === viewerId) || null;
+        if (!game.loserPlayerId) {
             return {
                 outcome: "draw",
                 icon: "🤝",
@@ -137,7 +137,21 @@
                 summary: "The game ended with no player holding cards."
             };
         }
-        const teamGame = (game.players || []).length === 4 && loser.team != null;
+        const seatedLoser = players.find(player => player.id === game.loserPlayerId) || null;
+        const loser = seatedLoser || (game.loserPlayerName ? {
+            id: game.loserPlayerId,
+            name: game.loserPlayerName,
+            team: game.loserTeam ?? null
+        } : null);
+        if (!loser) {
+            return {
+                outcome: "spectator",
+                icon: "🃏",
+                title: "The durak left the table",
+                summary: "The completed result is still preserved."
+            };
+        }
+        const teamGame = loser.team != null;
         if (teamGame && viewer?.team != null) {
             const viewerLost = viewer.team === loser.team;
             return {

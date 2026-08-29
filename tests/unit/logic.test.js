@@ -260,6 +260,48 @@ describe("gameResult", () => {
         expect(L.gameResult(game, "b").outcome).toBe("loss");
     });
 
+    it("preserves a personal win after the loser leaves", () => {
+        const result = L.gameResult({
+            status: "FINISHED",
+            loserPlayerId: "b",
+            loserPlayerName: "Boris",
+            loserTeam: null,
+            players: [players[0]]
+        }, "a");
+
+        expect(result.outcome).toBe("win");
+        expect(result.title).toBe("You won!");
+        expect(result.summary).toContain("Boris");
+    });
+
+    it("scores a shrunken team roster from the durable losing team", () => {
+        const game = {
+            status: "FINISHED",
+            loserPlayerId: "d",
+            loserPlayerName: "D",
+            loserTeam: 1,
+            players: [
+                { id: "a", name: "A", team: 0 },
+                { id: "b", name: "B", team: 1 },
+                { id: "c", name: "C", team: 0 }
+            ]
+        };
+
+        expect(L.gameResult(game, "a").outcome).toBe("win");
+        expect(L.gameResult(game, "b").outcome).toBe("loss");
+    });
+
+    it("does not misreport a legacy dangling loser as a draw", () => {
+        const result = L.gameResult({
+            status: "FINISHED",
+            loserPlayerId: "departed",
+            players: [players[0]]
+        }, "a");
+
+        expect(result.outcome).not.toBe("draw");
+        expect(result.title).toContain("left the table");
+    });
+
     it("returns null before a game is finished", () => {
         expect(L.gameResult({ status: "IN_PROGRESS", players }, "a")).toBeNull();
     });

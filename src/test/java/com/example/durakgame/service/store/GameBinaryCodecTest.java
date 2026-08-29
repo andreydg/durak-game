@@ -3,6 +3,7 @@ package com.example.durakgame.service.store;
 import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.GameStatus;
+import com.example.durakgame.model.Player;
 import com.example.durakgame.model.Suit;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +13,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -87,6 +89,43 @@ class GameBinaryCodecTest {
 
         Game.Snapshot decoded = codec.decode(codec.encode(Game.fromSnapshot(original))).toSnapshot();
         assertEquals(original, decoded);
+    }
+
+    @Test
+    void roundTripPreservesResultIdentityAfterLoserDeparts() {
+        Game game = Game.fromSnapshot(new Game.Snapshot(
+                "RESULT",
+                1_700_000_000_000L,
+                1_700_000_123_000L,
+                "host",
+                GameStatus.FINISHED,
+                Suit.HEARTS,
+                null,
+                0,
+                1,
+                "guest",
+                false,
+                0,
+                42L,
+                List.of(
+                        new Game.PlayerSnapshot("host", "Host", 1L, false, null, List.of(), "sec-host"),
+                        new Game.PlayerSnapshot("guest", "Guest", 2L, false, null, cards("6C"), "sec-guest")
+                ),
+                List.of(),
+                List.of(),
+                Set.of(),
+                List.of(),
+                List.of(),
+                false
+        ));
+        assertTrue(game.removePlayerFromFinishedGame("guest"));
+
+        Game decoded = codec.decode(codec.encode(game));
+
+        assertEquals(List.of("host"), decoded.getPlayers().stream().map(Player::getId).toList());
+        assertEquals("guest", decoded.getLoserPlayerId());
+        assertEquals("Guest", decoded.getLoserPlayerName());
+        assertNull(decoded.getLoserTeam());
     }
 
     @Test
