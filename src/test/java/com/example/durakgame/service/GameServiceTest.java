@@ -92,6 +92,31 @@ class GameServiceTest {
         assertThrows(IllegalArgumentException.class, () -> service.createGame("x".repeat(25)));
     }
 
+    @Test
+    void privateRoomPersistsButDoesNotAppearInPublicLobby() {
+        GameService service = newService(new InMemoryGameStore());
+
+        Game privateGame = service.createGame("Private Host", false);
+
+        assertFalse(privateGame.isPublicRoom());
+        assertEquals(privateGame.getCode(), service.getGame(privateGame.getCode()).getCode());
+        assertFalse(service.listOpenLobbies().stream().anyMatch(lobby -> lobby.code().equals(privateGame.getCode())));
+    }
+
+    @Test
+    void quickPlayCreatesPrivateStartedGameWithOneBot() {
+        GameService service = newService(new InMemoryGameStore());
+
+        Game game = service.createQuickGame("Solo");
+
+        assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
+        assertFalse(game.isPublicRoom());
+        assertEquals(2, game.getPlayers().size());
+        assertEquals(1, game.getPlayers().stream().filter(Player::isBot).count());
+        assertTrue(game.getPlayers().stream().allMatch(player -> player.handSize() == 6));
+        assertFalse(service.listOpenLobbies().stream().anyMatch(lobby -> lobby.code().equals(game.getCode())));
+    }
+
     // --- getGame ----------------------------------------------------------
 
     @Test

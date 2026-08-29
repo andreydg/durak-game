@@ -30,13 +30,18 @@
     </header>
     <div class="lobby-forms">
         <form id="hostForm" class="panel lobby-card">
-            <h2>Host a table</h2>
+            <h2>Play or host</h2>
             <div class="lobby-field">
                 <label for="hostName">Your name <span class="lobby-optional">(optional)</span></label>
                 <input id="hostName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
             </div>
+            <label class="lobby-privacy-option" for="publicRoom">
+                <input id="publicRoom" type="checkbox" checked>
+                <span><strong>List my room publicly</strong><small>Turn this off for invite-only play. Either way, friends can join with the code.</small></span>
+            </label>
             <div class="lobby-actions">
-                <button type="submit" class="btn-primary" id="createBtn">Create game</button>
+                <button type="button" class="btn-primary" id="quickPlayBtn">Quick play vs bot</button>
+                <button type="submit" class="btn btn-secondary" id="createBtn">Create room</button>
             </div>
         </form>
         <form id="joinForm" class="panel lobby-card">
@@ -51,7 +56,7 @@
                     <input id="playerName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
                 </div>
             </div>
-            <p class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code — you can join with one tap; we’ll assign a guest name if the field is empty.</p>
+            <p id="joinHint" class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code — you can join with one tap; we’ll assign a guest name if the field is empty.</p>
             <div class="lobby-actions">
                 <button type="submit" class="btn-primary" id="joinBtn">Join game</button>
             </div>
@@ -82,12 +87,14 @@
             <div class="room-title-row">
                 <h2 class="room-title">Game <span id="gameCodeLabel" class="room-code"></span></h2>
                 <span id="statusLabel" class="status-pill"></span>
+                <span id="visibilityLabel" class="visibility-pill"></span>
             </div>
             <div class="muted room-meta" id="roleLabel"></div>
         </div>
         <div class="room-actions">
             <button id="startBtn" class="btn btn-accent">Start</button>
             <button id="addBotBtn" class="btn btn-secondary">Add bot</button>
+            <button id="shareBtn" class="btn btn-secondary" aria-live="polite">Copy invite</button>
             <button id="leaveBtn" class="btn btn-danger">Leave</button>
         </div>
         <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. The game starts automatically when 4 players are seated.</div>

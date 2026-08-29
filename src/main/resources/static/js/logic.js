@@ -59,6 +59,20 @@
         }
     }
 
+    function roomCodeFromSearch(search) {
+        const code = new URLSearchParams(search || "").get("room");
+        const normalized = String(code || "").trim().toUpperCase();
+        return /^[A-Z0-9]{6}$/.test(normalized) ? normalized : "";
+    }
+
+    function buildInviteUrl(origin, roomCode) {
+        const code = String(roomCode || "").trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$/.test(code)) return "";
+        const url = new URL("/", origin);
+        url.searchParams.set("room", code);
+        return url.toString();
+    }
+
     function escapeHtml(text) {
         const d = document.createElement("div");
         d.textContent = text == null ? "" : String(text);
@@ -122,6 +136,8 @@
         sortCardCodesByRank,
         trumpSuitGlyph,
         displayStatus,
+        roomCodeFromSearch,
+        buildInviteUrl,
         escapeHtml,
         roleTags,
         playerTeam,

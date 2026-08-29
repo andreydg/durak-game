@@ -41,6 +41,7 @@ public class FirestoreGameStore implements GameStore {
     private static final String FIELD_PLAYER_COUNT = "playerCount";
     private static final String FIELD_LAST_ACTIVITY_AT = "lastActivityAt";
     private static final String FIELD_LOBBY_STARTED_AT = "lobbyStartedAt";
+    private static final String FIELD_PUBLIC_ROOM = "publicRoom";
     private static final Duration LEGACY_GAME_TTL = Duration.ofHours(24);
     private final Firestore firestore;
     private final GameExpiryPolicy expiryPolicy;
@@ -96,7 +97,8 @@ public class FirestoreGameStore implements GameStore {
                         Map.entry(FIELD_CODE, game.getCode()),
                         Map.entry(FIELD_HOST_NAME, summary.hostName()),
                         Map.entry(FIELD_PLAYER_NAMES, summary.playerNames()),
-                        Map.entry(FIELD_PLAYER_COUNT, summary.playerCount())
+                        Map.entry(FIELD_PLAYER_COUNT, summary.playerCount()),
+                        Map.entry(FIELD_PUBLIC_ROOM, summary.publicRoom())
                 ));
                 return null;
             }).get();
@@ -177,7 +179,7 @@ public class FirestoreGameStore implements GameStore {
             for (DocumentSnapshot doc : collection()
                     .whereEqualTo(FIELD_STATUS, GameStatus.LOBBY.name())
                     .select(FIELD_CODE, FIELD_HOST_NAME, FIELD_PLAYER_NAMES, FIELD_PLAYER_COUNT,
-                            FIELD_LAST_ACTIVITY_AT, FIELD_LOBBY_STARTED_AT, FIELD_EXPIRE_AT)
+                            FIELD_LAST_ACTIVITY_AT, FIELD_LOBBY_STARTED_AT, FIELD_EXPIRE_AT, FIELD_PUBLIC_ROOM)
                     .get().get().getDocuments()) {
                 Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
                 if (expireAt != null && !toInstant(expireAt).isAfter(now)) {
@@ -202,6 +204,7 @@ public class FirestoreGameStore implements GameStore {
         Timestamp lastActivityAt = doc.getTimestamp(FIELD_LAST_ACTIVITY_AT);
         Timestamp lobbyStartedAt = doc.getTimestamp(FIELD_LOBBY_STARTED_AT);
         Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
+        Boolean publicRoom = doc.getBoolean(FIELD_PUBLIC_ROOM);
         Instant activity = lastActivityAt != null
                 ? toInstant(lastActivityAt)
                 : legacyActivityFromExpiry(expireAt);
@@ -212,7 +215,8 @@ public class FirestoreGameStore implements GameStore {
                 playerNames != null ? playerNames : List.of(),
                 playerCount != null ? playerCount.intValue() : (playerNames != null ? playerNames.size() : 0),
                 activity,
-                lobbyStart
+                lobbyStart,
+                publicRoom == null || publicRoom
         );
     }
 

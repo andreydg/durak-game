@@ -2,6 +2,12 @@
 
 Spring Boot multiplayer Durak game with a browser UI and websocket updates.
 
+## Ways to play
+
+- **Quick play** creates an invite-only two-player game against a bot and starts immediately.
+- **Public rooms** appear under Open tables while waiting for players.
+- **Invite-only rooms** stay out of discovery but remain joinable through their code or `?room=CODE` invite link.
+
 ## Testing
 
 Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:
@@ -11,7 +17,7 @@ Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) a
 | Backend | JUnit / Maven | `./mvnw test` | Game rules, `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, stores |
 | Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
 | Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js) |
-| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby, add bot, play, hand-privacy / anti-cheat) |
+| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, hand privacy / anti-cheat) |
 
 First-time frontend setup:
 

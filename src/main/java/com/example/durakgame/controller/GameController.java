@@ -42,7 +42,16 @@ public class GameController {
 
     @PostMapping
     public CreateGameResponse createGame(@Valid @RequestBody CreateGameRequest request) {
-        Game game = gameService.createGame(request.hostName());
+        boolean publicRoom = request.publicRoom() == null || request.publicRoom();
+        return createResponse(gameService.createGame(request.hostName(), publicRoom));
+    }
+
+    @PostMapping("/quick-play")
+    public CreateGameResponse quickPlay(@Valid @RequestBody CreateGameRequest request) {
+        return createResponse(gameService.createQuickGame(request.hostName()));
+    }
+
+    private CreateGameResponse createResponse(Game game) {
         Player host = game.getPlayers().getFirst();
         return new CreateGameResponse(
                 toResponse(game, host.getId()),

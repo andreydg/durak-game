@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -53,14 +54,43 @@ class GameControllerWebTest {
     @Test
     void createGameReturnsCodeAndHostId() throws Exception {
         Game game = new Game("ABC123", new Player("Alice"));
-        when(gameService.createGame("Alice")).thenReturn(game);
+        when(gameService.createGame("Alice", true)).thenReturn(game);
 
         mockMvc.perform(post("/api/games")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"hostName\":\"Alice\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.game.code").value("ABC123"))
+                .andExpect(jsonPath("$.game.publicRoom").value(true))
                 .andExpect(jsonPath("$.hostPlayerId").value(game.getPlayers().getFirst().getId()));
+    }
+
+    @Test
+    void createGameCanMakeInviteOnlyRoom() throws Exception {
+        Game game = new Game("PVT123", new Player("Alice"), false);
+        when(gameService.createGame("Alice", false)).thenReturn(game);
+
+        mockMvc.perform(post("/api/games")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"hostName\":\"Alice\",\"publicRoom\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.game.publicRoom").value(false));
+
+        verify(gameService).createGame("Alice", false);
+    }
+
+    @Test
+    void quickPlayReturnsPrivateGameSession() throws Exception {
+        Game game = new Game("BOT123", new Player("Alice"), false);
+        when(gameService.createQuickGame("Alice")).thenReturn(game);
+
+        mockMvc.perform(post("/api/games/quick-play")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"hostName\":\"Alice\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.game.code").value("BOT123"))
+                .andExpect(jsonPath("$.game.publicRoom").value(false))
+                .andExpect(jsonPath("$.playerToken").isNotEmpty());
     }
 
     @Test

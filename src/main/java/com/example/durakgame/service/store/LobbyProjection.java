@@ -13,6 +13,7 @@ public record LobbyProjection(
         List<String> playerNames,
         int playerCount,
         Instant lastActivityAt,
-        Instant lobbyStartedAt
+        Instant lobbyStartedAt,
+        boolean publicRoom
 ) {
 }

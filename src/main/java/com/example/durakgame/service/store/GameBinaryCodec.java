@@ -18,7 +18,7 @@ import java.util.Set;
 
 final class GameBinaryCodec {
     private static final byte[] MAGIC = new byte[]{'D', 'G', '1'};
-    private static final int VERSION = 6;
+    private static final int VERSION = 7;
     /** Oldest format this decoder can still read, so a version bump never destroys in-flight games. */
     private static final int MIN_SUPPORTED_VERSION = 3;
     /** Player secret field was introduced in this version; older payloads decode with a blank secret. */
@@ -27,6 +27,8 @@ final class GameBinaryCodec {
     private static final int VERSION_WITH_LAST_ACTIVITY = 5;
     /** Current lobby-phase start was introduced in v6; older rooms use their creation time. */
     private static final int VERSION_WITH_LOBBY_STARTED_AT = 6;
+    /** Public/private room visibility was introduced in v7; historical rooms remain public. */
+    private static final int VERSION_WITH_ROOM_VISIBILITY = 7;
 
     byte[] encode(Game game) {
         Game.Snapshot snapshot = game.toSnapshot();
@@ -38,6 +40,7 @@ final class GameBinaryCodec {
             out.writeLong(snapshot.createdAtEpochMs());
             out.writeLong(snapshot.lastActivityAtEpochMs());
             out.writeLong(snapshot.lobbyStartedAtEpochMs());
+            out.writeBoolean(snapshot.publicRoom());
             out.writeUTF(snapshot.hostPlayerId());
             out.writeByte(snapshot.status().ordinal());
             out.writeBoolean(snapshot.trumpSuit() != null);
@@ -133,6 +136,7 @@ final class GameBinaryCodec {
             long createdAt = in.readLong();
             long lastActivityAt = formatVersion >= VERSION_WITH_LAST_ACTIVITY ? in.readLong() : createdAt;
             long lobbyStartedAt = formatVersion >= VERSION_WITH_LOBBY_STARTED_AT ? in.readLong() : createdAt;
+            boolean publicRoom = formatVersion >= VERSION_WITH_ROOM_VISIBILITY ? in.readBoolean() : true;
             String hostPlayerId = in.readUTF();
             GameStatus status = GameStatus.values()[in.readUnsignedByte()];
             Suit trumpSuit = in.readBoolean() ? Suit.values()[in.readUnsignedByte()] : null;
@@ -220,7 +224,8 @@ final class GameBinaryCodec {
                     table,
                     approvals,
                     discardedCards,
-                    knownCardsByPlayer
+                    knownCardsByPlayer,
+                    publicRoom
             ));
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to decode game snapshot", ex);

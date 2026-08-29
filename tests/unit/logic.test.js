@@ -89,6 +89,26 @@ describe("displayStatus", () => {
     });
 });
 
+describe("room invite links", () => {
+    it("reads and normalizes a valid room query", () => {
+        expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");
+        expect(L.roomCodeFromSearch("?foo=1&room=XY9Z88")).toBe("XY9Z88");
+    });
+
+    it("rejects missing or malformed invite codes", () => {
+        expect(L.roomCodeFromSearch("?room=short")).toBe("");
+        expect(L.roomCodeFromSearch("?room=%3Cscript%3E")).toBe("");
+        expect(L.roomCodeFromSearch("")).toBe("");
+    });
+
+    it("builds a canonical same-origin invite URL", () => {
+        expect(L.buildInviteUrl("https://durak.example", "abc123"))
+            .toBe("https://durak.example/?room=ABC123");
+        expect(L.buildInviteUrl("https://durak.example/old/path", "bad"))
+            .toBe("");
+    });
+});
+
 describe("escapeHtml", () => {
     it("escapes angle brackets and ampersands", () => {
         expect(L.escapeHtml("<script>")).not.toContain("<script>");

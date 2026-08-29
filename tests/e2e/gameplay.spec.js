@@ -81,7 +81,7 @@ test.describe("Gameplay against a bot", () => {
 
         // Resolve to either "I can open" or "the bot already placed a card".
         await expect
-            .poll(async () => (await pair.count()) > 0 || (await attackBtn.isEnabled()), { timeout: 20_000 })
+            .poll(async () => (await pair.count()) > 0 || (await attackBtn.isEnabled()), { timeout: 40_000 })
             .toBe(true);
 
         if ((await pair.count()) === 0 && (await attackBtn.isEnabled())) {

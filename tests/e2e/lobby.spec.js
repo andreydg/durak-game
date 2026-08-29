@@ -58,6 +58,7 @@ test.describe("Lobby & room creation", () => {
         expect(code).toMatch(/^[A-Z0-9]{6}$/);
 
         await expect(page.locator("#statusLabel")).toHaveText("Lobby");
+        await expect(page.locator("#visibilityLabel")).toHaveText("Public room");
         await expect(page.locator("#roleLabel")).toContainText("Alice");
         await expect(page.locator("#roomWaitingLine")).toBeVisible();
     });
@@ -112,6 +113,58 @@ test.describe("Lobby & room creation", () => {
 
         await expect(alert).toContainText("Attack: Not your turn");
         await expect(alert).toBeVisible();
+    });
+
+    test("quick play starts a private game against a bot in one action", async ({ page }) => {
+        await page.goto("/");
+        await page.fill("#hostName", "Solo Player");
+        await page.click("#quickPlayBtn");
+
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect(page.locator("#statusLabel")).toHaveText("In progress");
+        await expect(page.locator("#visibilityLabel")).toHaveText("Invite only");
+        await expect(page.locator("#roleLabel")).toContainText("Elektronik");
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
+    });
+
+    test("invite-only room stays out of discovery but its link pre-fills and joins", async ({ page, browser }) => {
+        await page.goto("/");
+        await page.fill("#hostName", "Private Host");
+        await page.uncheck("#publicRoom");
+        await page.click("#createBtn");
+        await expect(page.locator("#visibilityLabel")).toHaveText("Invite only");
+        const code = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+
+        const otherContext = await browser.newContext();
+        const otherPage = await otherContext.newPage();
+        const response = await otherPage.request.get("/api/lobbies");
+        const listedCodes = (await response.json()).map(room => room.code);
+        expect(listedCodes).not.toContain(code);
+
+        await otherPage.goto(`/?room=${code.toLowerCase()}`);
+        await expect(otherPage.locator("#gameCode")).toHaveValue(code);
+        await expect(otherPage.locator("#joinHint")).toContainText(`Invite loaded for room ${code}`);
+        await otherPage.fill("#playerName", "Invited Friend");
+        await otherPage.click("#joinBtn");
+        await expect(otherPage.locator("#gameView")).toBeVisible();
+        await expect(otherPage.locator("#gameCodeLabel")).toHaveText(code);
+        await expect(otherPage.locator("#visibilityLabel")).toHaveText("Invite only");
+        await otherContext.close();
+    });
+
+    test("copy invite writes a durable room link to the clipboard", async ({ page, context }) => {
+        await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+        await page.goto("/");
+        await page.fill("#hostName", "Link Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
+        const code = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+
+        await page.click("#shareBtn");
+
+        await expect(page.locator("#shareBtn")).toHaveText("Invite copied");
+        const copied = await page.evaluate(() => navigator.clipboard.readText());
+        expect(copied).toBe(`http://localhost:8080/?room=${code}`);
     });
 
     test("a created table appears in Open tables for another visitor", async ({ page, browser }) => {

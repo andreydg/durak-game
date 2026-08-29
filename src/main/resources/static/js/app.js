@@ -17,6 +17,8 @@ const {
     sortCardCodesByRank,
     trumpSuitGlyph,
     displayStatus,
+    roomCodeFromSearch,
+    buildInviteUrl,
     escapeHtml,
     roleTags,
     playerTeam,
@@ -53,10 +55,13 @@ const messages = document.getElementById("messages");
 const debugUi = new URLSearchParams(window.location.search).get("debug") === "1";
 if (debugUi && messagesPanel) messagesPanel.classList.remove("hidden");
 const hostNameInput = document.getElementById("hostName");
+const publicRoomInput = document.getElementById("publicRoom");
 const gameCodeInput = document.getElementById("gameCode");
 const playerNameInput = document.getElementById("playerName");
+const joinHint = document.getElementById("joinHint");
 const gameCodeLabel = document.getElementById("gameCodeLabel");
 const statusLabel = document.getElementById("statusLabel");
+const visibilityLabel = document.getElementById("visibilityLabel");
 const roleLabel = document.getElementById("roleLabel");
 const deckArea = document.getElementById("deckArea");
 const trumpUnderImg = document.getElementById("trumpUnderImg");
@@ -89,6 +94,8 @@ const transferBtn = document.getElementById("transferBtn");
 const takeBtn = document.getElementById("takeBtn");
 const endRoundBtn = document.getElementById("endRoundBtn");
 const addBotBtn = document.getElementById("addBotBtn");
+const quickPlayBtn = document.getElementById("quickPlayBtn");
+const shareBtn = document.getElementById("shareBtn");
 
 function log(message) {
     if (!debugUi || !messages) return;
@@ -222,6 +229,17 @@ async function performJoin(roomCode) {
     state.playerId = joined.playerId;
     state.playerToken = joined.playerToken || "";
     state.game = joined.game;
+    state.selectedHandCard = null;
+    saveSession();
+    beginPolling();
+    connectWebSocket();
+}
+
+function adoptCreatedGame(created) {
+    state.gameCode = created.game.code;
+    state.playerId = created.hostPlayerId;
+    state.playerToken = created.playerToken || "";
+    state.game = created.game;
     state.selectedHandCard = null;
     saveSession();
     beginPolling();
@@ -496,9 +514,15 @@ function render() {
     }
     if (roomWaitingLine) {
         roomWaitingLine.classList.toggle("hidden", !hasSession || !game || game.status !== "LOBBY");
+        if (hasSession && game?.status === "LOBBY") {
+            roomWaitingLine.textContent = game.publicRoom !== false
+                ? "You’re in the room. Share the invite or let players find it under Open tables."
+                : "This room is invite-only. Share the invite link or code with friends.";
+        }
     }
     if (gameOpenTablesWrap) {
-        gameOpenTablesWrap.classList.toggle("hidden", !hasSession || !game || game.status !== "LOBBY");
+        gameOpenTablesWrap.classList.toggle(
+            "hidden", !hasSession || !game || game.status !== "LOBBY" || game.publicRoom === false);
     }
 
     if (!hasSession) {
@@ -513,6 +537,13 @@ function render() {
 
     gameCodeLabel.textContent = game.code;
     statusLabel.textContent = displayStatus(game.status);
+    if (visibilityLabel) {
+        const isPublic = game.publicRoom !== false;
+        visibilityLabel.textContent = isPublic ? "Public room" : "Invite only";
+        visibilityLabel.title = isPublic
+            ? "This waiting room appears in Open tables."
+            : "Only people with the room code can join.";
+    }
     if (game.status === "IN_PROGRESS" && game.trumpCard) {
         const talonCount = Math.max(0, Number(game.talonSize) || 0);
         if (talonCount > 0) {
@@ -846,18 +877,52 @@ function clearSession() {
 document.getElementById("hostForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const createBtn = document.getElementById("createBtn");
-    await runAction("Create game", async () => {
-        const created = await api("/api/games", "POST", {hostName: hostNameInput.value.trim()});
-        state.gameCode = created.game.code;
-        state.playerId = created.hostPlayerId;
-        state.playerToken = created.playerToken || "";
-        state.game = created.game;
-        state.selectedHandCard = null;
-        saveSession();
-        beginPolling();
-        connectWebSocket();
+    await runAction("Create room", async () => {
+        const created = await api("/api/games", "POST", {
+            hostName: hostNameInput.value.trim(),
+            publicRoom: Boolean(publicRoomInput?.checked)
+        });
+        adoptCreatedGame(created);
     }, createBtn);
 });
+
+if (quickPlayBtn) {
+    quickPlayBtn.addEventListener("click", async () => runAction("Quick play", async () => {
+        const created = await api("/api/games/quick-play", "POST", {
+            hostName: hostNameInput.value.trim()
+        });
+        adoptCreatedGame(created);
+    }, quickPlayBtn));
+}
+
+if (shareBtn) {
+    shareBtn.addEventListener("click", async () => {
+        const inviteUrl = buildInviteUrl(window.location.origin, state.gameCode);
+        if (!inviteUrl) return;
+        clearError();
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(inviteUrl);
+                shareBtn.textContent = "Invite copied";
+            } else {
+                const copyInput = document.createElement("textarea");
+                copyInput.value = inviteUrl;
+                copyInput.setAttribute("readonly", "");
+                copyInput.style.position = "fixed";
+                copyInput.style.opacity = "0";
+                document.body.appendChild(copyInput);
+                copyInput.select();
+                const copied = document.execCommand("copy");
+                copyInput.remove();
+                if (!copied) throw new Error("Copy failed");
+                shareBtn.textContent = "Invite copied";
+            }
+            window.setTimeout(() => { shareBtn.textContent = "Copy invite"; }, 1800);
+        } catch (err) {
+            showError("Could not copy the invite. Copy the room code instead.");
+        }
+    });
+}
 
 document.getElementById("joinForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -983,6 +1048,14 @@ battleCards.addEventListener("drop", async (e) => {
         await refreshGame();
         log("Session restored.");
     } else {
+        const invitedCode = roomCodeFromSearch(window.location.search);
+        if (invitedCode) {
+            gameCodeInput.value = invitedCode;
+            if (joinHint) {
+                joinHint.textContent = `Invite loaded for room ${invitedCode}. Add your name or join as a random guest.`;
+            }
+            window.setTimeout(() => playerNameInput.focus(), 0);
+        }
         render();
     }
 })();

@@ -9,6 +9,7 @@ import com.example.durakgame.model.ViewerLegalMoves;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
+import com.example.durakgame.service.store.LobbyProjection;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.slf4j.Logger;
@@ -105,12 +106,35 @@ public class GameService {
     }
 
     public Game createGame(String hostName) {
+        return createGame(hostName, true);
+    }
+
+    public Game createGame(String hostName, boolean publicRoom) {
         String resolved = resolveDisplayName(hostName, List.of());
         Player host = new Player(resolved);
         String code = generateUniqueCode();
-        Game game = new Game(code, host);
+        Game game = new Game(code, host, publicRoom);
         gameStore.save(game);
-        log.info("game_created code={} hostPlayerId={} hostName={}", game.getCode(), host.getId(), host.getName());
+        cachedLobbies = null;
+        log.info("game_created code={} hostPlayerId={} hostName={} publicRoom={}",
+                game.getCode(), host.getId(), host.getName(), publicRoom);
+        return game;
+    }
+
+    /** Creates a private two-player game and starts it immediately against one bot. */
+    public Game createQuickGame(String hostName) {
+        String resolved = resolveDisplayName(hostName, List.of());
+        Player host = new Player(resolved);
+        String code = generateUniqueCode();
+        Game game = new Game(code, host, false);
+        String botName = GuestNameGenerator.randomBotNameDistinctFrom(List.of(host.getName()));
+        game.addPlayer(botName, MAX_PLAYERS, true);
+        game.start(host.getId());
+        gameStore.save(game);
+        cachedLobbies = null;
+        log.info("game_quick_started code={} hostPlayerId={} hostName={} botName={}",
+                game.getCode(), host.getId(), host.getName(), botName);
+        scheduleAutoPlay(code);
         return game;
     }
 
@@ -208,14 +232,7 @@ public class GameService {
                 throw new IllegalStateException("Only one bot is allowed per table");
             }
             List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
-            String resolved;
-            if (botName == null || botName.trim().isEmpty()) {
-                resolved = GuestNameGenerator.randomBotNameDistinctFrom(taken);
-            } else {
-                String base = resolveDisplayName(botName, List.of());
-                String withSuffix = base.endsWith(" Elektronik") ? base : (base + " Elektronik");
-                resolved = resolveDisplayName(withSuffix, taken);
-            }
+            String resolved = resolveBotName(botName, taken);
             Player added = game.addPlayer(resolved, MAX_PLAYERS, true);
             if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
                 game.start(game.getHostPlayerId());
@@ -227,6 +244,15 @@ public class GameService {
         });
         scheduleAutoPlay(normalizedCode);
         return bot;
+    }
+
+    private String resolveBotName(String botName, List<String> taken) {
+        if (botName == null || botName.trim().isEmpty()) {
+            return GuestNameGenerator.randomBotNameDistinctFrom(taken);
+        }
+        String base = resolveDisplayName(botName, List.of());
+        String withSuffix = base.endsWith(" Elektronik") ? base : (base + " Elektronik");
+        return resolveDisplayName(withSuffix, taken);
     }
 
     /**
@@ -353,6 +379,7 @@ public class GameService {
         }
         Instant instantNow = Instant.now();
         List<LobbyGameSummary> summaries = gameStore.listOpenLobbySummaries().stream()
+                .filter(LobbyProjection::publicRoom)
                 .filter(p -> p.playerCount() < MAX_PLAYERS)
                 .filter(p -> {
                     if (!expiryPolicy.isExpired(

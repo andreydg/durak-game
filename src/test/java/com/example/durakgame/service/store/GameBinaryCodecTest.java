@@ -47,7 +47,8 @@ class GameBinaryCodecTest {
                 ),
                 Set.of("host", "p4"),
                 cards("JH", "QH"),
-                List.of(new Game.KnownCardsSnapshot("bot", cards("10H", "JS")))
+                List.of(new Game.KnownCardsSnapshot("bot", cards("10H", "JS"))),
+                false
         );
 
         byte[] encoded = codec.encode(Game.fromSnapshot(original));
@@ -107,6 +108,7 @@ class GameBinaryCodecTest {
         assertEquals("", decoded.getPlayers().getFirst().getSecret());
         assertEquals(decoded.getCreatedAt(), decoded.getLastActivityAt());
         assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
+        assertTrue(decoded.isPublicRoom(), "rooms persisted before visibility existed remain discoverable");
     }
 
     @Test
@@ -117,6 +119,7 @@ class GameBinaryCodecTest {
 
         assertEquals(Instant.ofEpochMilli(1_700_000_123_000L), decoded.getLastActivityAt());
         assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
+        assertTrue(decoded.isPublicRoom(), "rooms persisted before visibility existed remain discoverable");
     }
 
     /** Hand-writes a minimal version-3 lobby payload (the format before the player-secret field). */
