@@ -52,6 +52,7 @@ const state = {
     lobbyWsConnected: false,
     lobbyWsReconnectTimer: null,
     lobbyWsReconnectAttempt: 0,
+    lobbyWsStableTimer: null,
     lobbyListTimer: null,
     lobbyListDueAt: 0,
     lobbyEventTimer: null,
@@ -197,46 +198,56 @@ async function refreshLobbyLists() {
     }
 
     const request = (async () => {
-        let rows = [];
         try {
             const res = await fetch("/api/lobbies", {cache: "no-store"});
             if (!res.ok) throw new Error("bad");
-            rows = await res.json();
-        } catch {
+            const rows = await res.json();
+
+            const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet. Create one above or enter a code.</p>";
+            const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned. Try Refresh or wait a moment.</p>";
+
+            /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
+            if (lobbyGameList) {
+                lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
+            }
+            if (gameLobbyGameList) {
+                const code = state.gameCode || "";
+                const inRoom = gameOpenTablesWrap && !gameOpenTablesWrap.classList.contains("hidden");
+                gameLobbyGameList.innerHTML = rows.length
+                    ? lobbyRowsHtml(rows, false, code)
+                    : (inRoom ? emptyInRoom : "");
+            }
+            return true;
+        } catch (error) {
             const err = "<p class=\"lobby-list-empty muted\">Could not load open tables. Try refreshing the page.</p>";
-            if (lobbyGameList) lobbyGameList.innerHTML = err;
-            if (gameLobbyGameList) gameLobbyGameList.innerHTML = err;
+            try {
+                if (lobbyGameList) lobbyGameList.innerHTML = err;
+                if (gameLobbyGameList) gameLobbyGameList.innerHTML = err;
+            } catch (_) {
+                // A broken renderer must not keep the single-flight lock held forever.
+            }
+            log(`Open tables refresh failed: ${error?.message || "unknown error"}`);
             return false;
         }
-
-        const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet. Create one above or enter a code.</p>";
-        const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned. Try Refresh or wait a moment.</p>";
-
-        /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
-        if (lobbyGameList) {
-            lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
-        }
-        if (gameLobbyGameList) {
-            const code = state.gameCode || "";
-            const inRoom = gameOpenTablesWrap && !gameOpenTablesWrap.classList.contains("hidden");
-            gameLobbyGameList.innerHTML = rows.length
-                ? lobbyRowsHtml(rows, false, code)
-                : (inRoom ? emptyInRoom : "");
-        }
-        return true;
     })();
 
     state.lobbyFetchInFlight = request;
-    const succeeded = await request;
-    state.lobbyFetchInFlight = null;
-    state.lobbyFetchFailures = succeeded ? 0 : Math.min(state.lobbyFetchFailures + 1, 3);
-    scheduleLobbyListPoll(null, true);
+    let succeeded = false;
+    try {
+        succeeded = await request;
+        return succeeded;
+    } finally {
+        if (state.lobbyFetchInFlight === request) {
+            state.lobbyFetchInFlight = null;
+        }
+        state.lobbyFetchFailures = succeeded ? 0 : Math.min(state.lobbyFetchFailures + 1, 3);
+        scheduleLobbyListPoll(null, true);
 
-    if (state.lobbyRefreshQueued) {
-        state.lobbyRefreshQueued = false;
-        queueLobbyRefresh(0);
+        if (state.lobbyRefreshQueued) {
+            state.lobbyRefreshQueued = false;
+            queueLobbyRefresh(0);
+        }
     }
-    return succeeded;
 }
 
 function shouldPollOpenTables() {
@@ -314,6 +325,10 @@ function closeLobbyWebSocket() {
         clearTimeout(state.lobbyWsReconnectTimer);
         state.lobbyWsReconnectTimer = null;
     }
+    if (state.lobbyWsStableTimer) {
+        clearTimeout(state.lobbyWsStableTimer);
+        state.lobbyWsStableTimer = null;
+    }
     const ws = state.lobbyWs;
     state.lobbyWs = null;
     state.lobbyWsConnected = false;
@@ -354,6 +369,13 @@ function connectLobbyWebSocket() {
     state.lobbyWs = ws;
     ws.onopen = () => {
         if (state.lobbyWs !== ws) return;
+        if (state.lobbyWsStableTimer) clearTimeout(state.lobbyWsStableTimer);
+        state.lobbyWsStableTimer = window.setTimeout(() => {
+            state.lobbyWsStableTimer = null;
+            if (state.lobbyWs === ws && ws.readyState === WebSocket.OPEN) {
+                state.lobbyWsReconnectAttempt = 0;
+            }
+        }, 5_000);
         log("Open tables realtime transport connected.");
     };
     ws.onmessage = (event) => {
@@ -373,7 +395,6 @@ function connectLobbyWebSocket() {
                 if (hasNewRevision) state.lobbyRevision = revision;
             }
             state.lobbyWsConnected = true;
-            state.lobbyWsReconnectAttempt = 0;
             scheduleLobbyListPoll(null, true);
             log("Open tables realtime connected.");
             if (!hasNewRevision) return;
@@ -384,6 +405,10 @@ function connectLobbyWebSocket() {
     };
     ws.onclose = () => {
         if (state.lobbyWs !== ws) return;
+        if (state.lobbyWsStableTimer) {
+            clearTimeout(state.lobbyWsStableTimer);
+            state.lobbyWsStableTimer = null;
+        }
         state.lobbyWs = null;
         state.lobbyWsConnected = false;
         scheduleLobbyListPoll();
@@ -1121,7 +1146,6 @@ function connectWebSocket() {
     };
     ws.onmessage = async (event) => {
         if (state.ws !== ws || state.gameCode !== gameCode) return;
-        state.wsReconnectAttempt = 0;
         let msgVersion = null;
         let type = "";
         try {
@@ -1149,11 +1173,13 @@ function connectWebSocket() {
         } catch (_) {
             msgVersion = null;
         }
-        if (Date.now() < state.suppressWsRefreshUntilMs) {
-            return;
-        }
         const localVersion = Number(state.game?.version || 0);
         if (msgVersion !== null && msgVersion <= localVersion) {
+            return;
+        }
+        const suppressionRemainingMs = state.suppressWsRefreshUntilMs - Date.now();
+        if (suppressionRemainingMs > 0) {
+            scheduleGameRefresh(suppressionRemainingMs + 25);
             return;
         }
         await refreshGame(false);

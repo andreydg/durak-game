@@ -322,6 +322,51 @@ test.describe("Lobby & room creation", () => {
         expect(lobbyGets).toBeGreaterThanOrEqual(1);
     });
 
+    test("repeated lobby handshakes back off until a connection stays healthy", async ({ page }) => {
+        const connectionTimes = [];
+        let revision = 0;
+        await page.routeWebSocket("**/ws/lobbies", socket => {
+            connectionTimes.push(Date.now());
+            setTimeout(() => socket.send(JSON.stringify({
+                type: "LOBBIES_READY",
+                streamId: "flapping-test",
+                revision: revision++
+            })), 10);
+            setTimeout(() => socket.close({
+                code: 1011,
+                reason: "flapping test"
+            }), 60);
+        });
+
+        await page.goto("/");
+        await expect.poll(() => connectionTimes.length, {timeout: 7_000}).toBeGreaterThanOrEqual(3);
+
+        const firstRetryMs = connectionTimes[1] - connectionTimes[0];
+        const secondRetryMs = connectionTimes[2] - connectionTimes[1];
+        expect(firstRetryMs).toBeGreaterThanOrEqual(700);
+        expect(secondRetryMs).toBeGreaterThan(firstRetryMs);
+        expect(secondRetryMs).toBeGreaterThanOrEqual(1_400);
+    });
+
+    test("a lobby render failure releases the single-flight refresh lock", async ({ page }) => {
+        await page.goto("/");
+        await page.evaluate(() => window.refreshLobbyLists());
+
+        const failed = await page.evaluate(async () => {
+            const list = document.getElementById("lobbyGameList");
+            Object.defineProperty(list, "innerHTML", {
+                configurable: true,
+                set() { throw new Error("test render failure"); }
+            });
+            const result = await window.refreshLobbyLists();
+            delete list.innerHTML;
+            return result;
+        });
+
+        expect(failed).toBe(false);
+        await expect(page.evaluate(() => window.refreshLobbyLists())).resolves.toBe(true);
+    });
+
     test("healthy game websocket eliminates three-second lobby-state game reads", async ({ page }) => {
         let gameGets = 0;
         page.on("request", request => {
@@ -366,5 +411,30 @@ test.describe("Lobby & room creation", () => {
         await page.waitForTimeout(3_500);
 
         expect(gameGets).toBeGreaterThanOrEqual(1);
+    });
+
+    test("a game update suppressed by an action gets a prompt catch-up read", async ({ page }) => {
+        let gameSocket = null;
+        await page.routeWebSocket("**/ws/games/*", socket => {
+            gameSocket = socket;
+        });
+        let gameGets = 0;
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === "GET" && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                gameGets++;
+            }
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Catch-up Host");
+        await page.click("#createBtn");
+        await expect.poll(() => gameSocket !== null).toBe(true);
+        await expect(page.locator("#createBtn")).not.toHaveAttribute("aria-busy", "true");
+        gameGets = 0;
+
+        gameSocket.send(JSON.stringify({type: "GAME_UPDATED", version: 999}));
+
+        await expect.poll(() => gameGets, {timeout: 2_500}).toBeGreaterThanOrEqual(1);
     });
 });
