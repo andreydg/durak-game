@@ -14,7 +14,12 @@ class RateLimitFilterTest {
 
     @Test
     void bothRoomCreationEndpointsUseTheStrictCreationBucket() throws Exception {
-        for (String path : new String[]{"/api/games", "/api/games/quick-play"}) {
+        for (String path : new String[]{
+                "/api/games",
+                "/api/games/quick-play",
+                "/api/games;source=bot",
+                "/api;version=1/games"
+        }) {
             RateLimitFilter filter = new RateLimitFilter(true, 100, 100, 1, 0);
             AtomicInteger chainCalls = new AtomicInteger();
             FilterChain chain = (request, response) -> chainCalls.incrementAndGet();

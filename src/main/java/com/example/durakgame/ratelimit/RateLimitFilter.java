@@ -58,7 +58,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (!enabled) {
             return true;
         }
-        String path = request.getRequestURI();
+        String path = routePath(request);
         return !(path.startsWith("/api/") || path.startsWith("/ws/"));
     }
 
@@ -82,8 +82,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
         if (!"POST".equalsIgnoreCase(request.getMethod())) {
             return false;
         }
-        String path = request.getRequestURI();
+        String path = routePath(request);
         return "/api/games".equals(path) || "/api/games/quick-play".equals(path);
+    }
+
+    /** Matches Spring's matrix-parameter-insensitive routing before choosing a rate-limit bucket. */
+    private static String routePath(HttpServletRequest request) {
+        String raw = request.getRequestURI();
+        StringBuilder normalized = new StringBuilder(raw.length());
+        boolean inPathParameter = false;
+        for (int i = 0; i < raw.length(); i++) {
+            char ch = raw.charAt(i);
+            if (ch == ';') {
+                inPathParameter = true;
+            } else if (ch == '/') {
+                inPathParameter = false;
+                normalized.append(ch);
+            } else if (!inPathParameter) {
+                normalized.append(ch);
+            }
+        }
+        return normalized.toString();
     }
 
     private boolean allow(ConcurrentHashMap<String, TokenBucket> buckets, String ip, Supplier<TokenBucket> factory) {

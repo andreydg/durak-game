@@ -143,6 +143,26 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#joinHint")).toContainText(`Invite loaded for room ${invitedCode}`);
     });
 
+    test("quick play consumes an invite URL so reload restores the new private game", async ({ page }) => {
+        await page.goto("/?room=ABC123&utm_source=invite#play");
+        await page.fill("#hostName", "Invite Quick Player");
+        await page.click("#quickPlayBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        const quickGameCode = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+        expect(quickGameCode).toMatch(/^[A-Z0-9]{6}$/);
+
+        const consumedUrl = new URL(page.url());
+        expect(consumedUrl.searchParams.has("room")).toBe(false);
+        expect(consumedUrl.searchParams.get("utm_source")).toBe("invite");
+        expect(consumedUrl.hash).toBe("#play");
+
+        await page.reload();
+
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect(page.locator("#gameCodeLabel")).toHaveText(quickGameCode);
+        await expect(page.locator("#visibilityLabel")).toHaveText("Invite only");
+    });
+
     test("invite-only room stays out of discovery but its link pre-fills and joins", async ({ page, browser }) => {
         await page.goto("/");
         await page.fill("#hostName", "Private Host");

@@ -147,6 +147,18 @@ function saveSession() {
     sessionStorage.setItem("durak_player_token", state.playerToken || "");
 }
 
+/** An invite is one-shot navigation state; once a game is adopted it must not replay on reload. */
+function clearConsumedInvite() {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("room")) return;
+    url.searchParams.delete("room");
+    window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`
+    );
+}
+
 let lobbyListTimer = null;
 
 async function refreshLobbyLists() {
@@ -231,6 +243,7 @@ async function performJoin(roomCode) {
     state.game = joined.game;
     state.selectedHandCard = null;
     saveSession();
+    clearConsumedInvite();
     beginPolling();
     connectWebSocket();
 }
@@ -242,6 +255,7 @@ function adoptCreatedGame(created) {
     state.game = created.game;
     state.selectedHandCard = null;
     saveSession();
+    clearConsumedInvite();
     beginPolling();
     connectWebSocket();
 }
