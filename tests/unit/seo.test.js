@@ -6,10 +6,8 @@ import {JSDOM} from "jsdom";
 const staticDir = join(process.cwd(), "src/main/resources/static");
 const canonicalOrigin = "https://durak.andreyg.com";
 const pages = [
-    ["index.html", `${canonicalOrigin}/`, "en"],
-    ["ru.html", `${canonicalOrigin}/ru.html`, "ru"],
-    ["rules.html", `${canonicalOrigin}/rules.html`, "en"],
-    ["rules-ru.html", `${canonicalOrigin}/rules-ru.html`, "ru"]
+    ["index.html", `${canonicalOrigin}/`],
+    ["rules.html", `${canonicalOrigin}/rules.html`]
 ];
 
 function source(file) {
@@ -26,11 +24,11 @@ function structuredData(document) {
 }
 
 describe("crawlable SEO pages", () => {
-    test.each(pages)("%s has canonical, social, language, and crawler metadata", (file, canonical, language) => {
+    test.each(pages)("%s has canonical, social, and crawler metadata", (file, canonical) => {
         const document = documentFor(file);
         const description = document.querySelector('meta[name="description"]')?.content || "";
 
-        expect(document.documentElement.lang).toBe(language);
+        expect(document.documentElement.lang).toBe("en");
         expect(document.title.length).toBeGreaterThan(25);
         expect(description.length).toBeGreaterThan(90);
         expect(description.length).toBeLessThanOrEqual(170);
@@ -40,56 +38,40 @@ describe("crawlable SEO pages", () => {
         expect(document.querySelector('meta[property="og:image"]')?.content).toBe(`${canonicalOrigin}/social-card.png`);
         expect(document.querySelector('meta[name="twitter:card"]')?.content).toBe("summary_large_image");
         expect(document.querySelectorAll("h1")).toHaveLength(1);
-        expect(document.querySelector('link[hreflang="en"]')).not.toBeNull();
-        expect(document.querySelector('link[hreflang="ru"]')).not.toBeNull();
-        expect(document.querySelector('link[hreflang="x-default"]')).not.toBeNull();
+        expect(document.querySelector('link[hreflang="ru"]')).toBeNull();
         expect(() => structuredData(document)).not.toThrow();
     });
 
-    test("home page exposes useful rules and FAQ text without running JavaScript", () => {
+    test("home page exposes factual game and rules copy without JavaScript", () => {
         const document = documentFor("index.html");
         const visibleSource = document.querySelector("#lobbyView")?.textContent || "";
 
-        expect(document.querySelector("#play-durak-online")).not.toBeNull();
-        expect(document.querySelectorAll("#faq details").length).toBeGreaterThanOrEqual(4);
+        expect(document.querySelector("#what-is-durak")?.textContent).toBe("What is Durak");
+        expect(document.querySelector("#faq")).toBeNull();
+        expect(visibleSource).toContain("Durak (Дурак) is a fast card shedding game");
         expect(visibleSource).toContain("2–4 players");
         expect(visibleSource).toContain("last player");
-        expect(visibleSource).toContain("no account");
+        expect(visibleSource).toContain("Quick Play vs Elektronik");
     });
 
-    test("structured data describes the free game, FAQ, and both rules guides", () => {
+    test("structured data describes the English game and rules guide", () => {
         const homeGraph = structuredData(documentFor("index.html"))[0]["@graph"];
         const app = homeGraph.find(item => item["@type"] === "WebApplication");
-        const faq = homeGraph.find(item => item["@type"] === "FAQPage");
 
+        expect(homeGraph.some(item => item["@type"] === "FAQPage")).toBe(false);
         expect(app.url).toBe(`${canonicalOrigin}/`);
-        expect(app.isAccessibleForFree).toBe(true);
-        expect(app.offers.price).toBe("0");
-        expect(faq.mainEntity).toHaveLength(4);
+        expect(app.alternateName).toBe("Дурак");
+        expect(app.inLanguage).toBe("en");
+        expect(app).not.toHaveProperty("isAccessibleForFree");
+        expect(app).not.toHaveProperty("offers");
 
-        const visibleFaq = [...documentFor("index.html").querySelectorAll("#faq details")]
-            .map(details => ({
-                question: details.querySelector("summary").textContent.trim(),
-                answer: details.querySelector("p").textContent.trim()
-            }));
-        const structuredFaq = faq.mainEntity.map(question => ({
-            question: question.name,
-            answer: question.acceptedAnswer.text
-        }));
-        expect(structuredFaq).toEqual(visibleFaq);
-
-        const russianApp = structuredData(documentFor("ru.html"))[0];
-        expect(russianApp["@id"]).toBe(`${canonicalOrigin}/ru.html#game`);
-        expect(russianApp["@id"]).not.toBe(app["@id"]);
-
-        for (const file of ["rules.html", "rules-ru.html"]) {
-            const howTo = structuredData(documentFor(file))[0];
-            expect(howTo["@type"]).toBe("HowTo");
-            expect(howTo.step.length).toBeGreaterThanOrEqual(5);
-        }
+        const howTo = structuredData(documentFor("rules.html"))[0];
+        expect(howTo["@type"]).toBe("HowTo");
+        expect(howTo.inLanguage).toBe("en");
+        expect(howTo.step.length).toBeGreaterThanOrEqual(5);
     });
 
-    test("robots and sitemap expose only real canonical pages", () => {
+    test("robots and sitemap expose only the two English canonical pages", () => {
         const robots = source("robots.txt");
         expect(robots).toContain("User-agent: *");
         expect(robots).toContain(`Sitemap: ${canonicalOrigin}/sitemap.xml`);
@@ -99,7 +81,7 @@ describe("crawlable SEO pages", () => {
         expect(xml.querySelector("parsererror")).toBeNull();
         const locations = [...xml.querySelectorAll("loc")].map(node => node.textContent.trim());
         expect(new Set(locations)).toEqual(new Set(pages.map(([, canonical]) => canonical)));
-        expect(xml.querySelectorAll("url")).toHaveLength(4);
+        expect(xml.querySelectorAll("url")).toHaveLength(2);
 
         for (const location of locations) {
             const path = new URL(location).pathname;
@@ -108,20 +90,24 @@ describe("crawlable SEO pages", () => {
         }
     });
 
-    test("language alternates are reciprocal", () => {
-        const pairs = [
-            ["index.html", "ru.html"],
-            ["rules.html", "rules-ru.html"]
-        ];
-        for (const [englishFile, russianFile] of pairs) {
-            const english = documentFor(englishFile);
-            const russian = documentFor(russianFile);
-            const englishCanonical = english.querySelector('link[rel="canonical"]').href;
-            const russianCanonical = russian.querySelector('link[rel="canonical"]').href;
-
-            expect(english.querySelector('link[hreflang="ru"]').href).toBe(russianCanonical);
-            expect(russian.querySelector('link[hreflang="en"]').href).toBe(englishCanonical);
+    test("Russian pages and links are removed while Дурак remains in the brand", () => {
+        expect(existsSync(join(staticDir, "ru.html"))).toBe(false);
+        expect(existsSync(join(staticDir, "rules-ru.html"))).toBe(false);
+        for (const file of ["index.html", "rules.html", "sitemap.xml"]) {
+            expect(source(file)).not.toMatch(/(?:ru\.html|rules-ru|hreflang="ru")/i);
         }
+        expect(source("index.html")).toContain("Durak <span>Дурак</span>");
+        expect(source("rules.html")).toContain("Durak <span>Дурак</span>");
+        expect(source("social-card.svg")).toContain(">Дурак</text>");
+    });
+
+    test("public copy omits advertising language and em dashes", () => {
+        for (const file of ["index.html", "rules.html", "social-card.svg", "js/app.js"]) {
+            expect(source(file)).not.toMatch(/\bfree\b/i);
+            expect(source(file)).not.toContain(String.fromCodePoint(0x2014));
+        }
+        expect(source("index.html")).not.toContain("Start in seconds");
+        expect(source("index.html")).not.toContain("fast Russian shedding");
     });
 
     test("social preview is the declared 1200 by 630 PNG", () => {

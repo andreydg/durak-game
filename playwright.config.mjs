@@ -20,7 +20,7 @@ export default defineConfig({
     projects: [
         { name: "chromium", use: { ...devices["Desktop Chrome"] } }
     ],
-    // Boots the real Spring Boot app (in-memory store, offline heuristic bot — no API keys needed).
+    // Boots the real Spring Boot app (in-memory store and offline heuristic bot; no API keys needed).
     webServer: {
         command: `java -jar ${JAR}`,
         url: BASE_URL,

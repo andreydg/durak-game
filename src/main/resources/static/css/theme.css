@@ -1,10 +1,10 @@
 /* ============================================================
-   theme.css — shared "terminal" design system
+   theme.css: shared "terminal" design system
    Source aesthetic: andreyg.com (light, monospace, gold accent)
 
    Default palette is LIGHT (matches andreyg.com). A project that
    wants a dark skin (e.g. solar-system) overrides the palette
-   tokens in its own :root block loaded after this file — no need
+   tokens in its own :root block loaded after this file; no need
    to fork this file.
 
    Keep identical copies in:
@@ -33,7 +33,7 @@
   /* the ghostly oversized andreyg.com title */
   --text-ghost: #dcdcdc;
 
-  /* gold — the andreyg.com group-label color */
+  /* gold: the andreyg.com group-label color */
   --accent: #b9863a;
   /* deeper gold for hover/links so it stays legible on near-white */
   --accent-bright: #9c6c25;
@@ -108,7 +108,7 @@ a:focus {
 }
 
 /* The signature bracketed label, e.g. [about] / [your text].
-   Use the class and omit the brackets in markup — they are added here. */
+   Use the class and omit the brackets in markup; they are added here. */
 .t-label {
   font-family: var(--font-mono);
   font-size: 0.85rem;

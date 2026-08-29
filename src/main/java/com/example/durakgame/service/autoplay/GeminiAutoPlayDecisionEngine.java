@@ -315,7 +315,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
 
                 STRICT RULE: You are strictly forbidden from attacking your partner. Even if your partner has decided to "Take" (Беру), you may not throw in cards to their hand. You only attack the two opponents.
 
-                IF 2 or 3 Players (Free-For-All): Every other player is an enemy. Your only goal is to empty your hand first.
+                IF 2 or 3 Players (all against all): Every other player is an enemy. Your only goal is to empty your hand first.
 
                 3. Advanced Gameplay Mechanics
 

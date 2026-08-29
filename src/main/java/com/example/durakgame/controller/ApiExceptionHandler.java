@@ -32,12 +32,12 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(StaleGameWriteException.class)
     public ResponseEntity<Map<String, Object>> handleStaleWrite(StaleGameWriteException ex) {
-        return buildError(HttpStatus.CONFLICT, "Game state changed — please retry your move.");
+        return buildError(HttpStatus.CONFLICT, "Game state changed. Please retry your move.");
     }
 
     @ExceptionHandler(GameStoreException.class)
     public ResponseEntity<Map<String, Object>> handleStoreFailure(GameStoreException ex) {
-        return buildError(HttpStatus.SERVICE_UNAVAILABLE, "Game storage is temporarily unavailable — please try again.");
+        return buildError(HttpStatus.SERVICE_UNAVAILABLE, "Game storage is temporarily unavailable. Please try again.");
     }
 
     @ExceptionHandler(IllegalStateException.class)

@@ -149,7 +149,7 @@ class GameControllerWebTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"playerId\":\"p1\",\"card\":\"9H\"}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("Game state changed — please retry your move."));
+                .andExpect(jsonPath("$.message").value("Game state changed. Please retry your move."));
     }
 
     @Test

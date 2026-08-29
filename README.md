@@ -9,11 +9,11 @@ Spring Boot multiplayer Durak game with a browser UI and websocket updates.
 - **Invite-only rooms** stay out of discovery but remain joinable through their code or `?room=CODE` invite link.
 - **Rematches** let the host replay a finished table with the same players, room code, and privacy setting.
 
-## Search and language pages
+## Search pages
 
-The canonical public origin is `https://durak.andreyg.com`. The home page includes crawlable game/rules copy, FAQ and WebApplication structured data, social metadata, and English/Russian language alternates. Standalone guides live at `/rules.html`, `/ru.html`, and `/rules-ru.html`; `robots.txt` points crawlers to `sitemap.xml`.
+The canonical public origin is `https://durak.andreyg.com`. The home page includes crawlable game and rules copy, WebApplication structured data, and social metadata. The standalone guide lives at `/rules.html`; `robots.txt` points crawlers to `sitemap.xml`.
 
-Keep canonical URLs, language alternates, and sitemap entries in sync when adding pages. The frontend test suite validates that contract and the 1200×630 social preview.
+Keep canonical URLs and sitemap entries in sync when adding pages. The frontend test suite validates that contract and the 1200×630 social preview.
 
 ## Testing
 
@@ -33,9 +33,9 @@ npm ci
 npx playwright install --with-deps chromium   # only needed for E2E
 ```
 
-The Playwright config boots the packaged jar itself (in-memory store, offline heuristic bot — no API keys needed), so run `./mvnw -DskipTests package` once before `npm run test:e2e`.
+The Playwright config boots the packaged jar itself (in-memory store and offline heuristic bot; no API keys needed), so run `./mvnw -DskipTests package` once before `npm run test:e2e`.
 
-The Firestore emulator tests run automatically in CI (against the emulator Docker image). Locally they only run when an emulator is reachable — e.g. `gcloud beta emulators firestore start --host-port=localhost:8085` then `FIRESTORE_EMULATOR_HOST=localhost:8085 ./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` (needs a JDK the emulator supports).
+The Firestore emulator tests run automatically in CI (against the emulator Docker image). Locally they only run when an emulator is reachable. For example, run `gcloud beta emulators firestore start --host-port=localhost:8085` then `FIRESTORE_EMULATOR_HOST=localhost:8085 ./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` (needs a JDK the emulator supports).
 
 ## Security & limits
 
