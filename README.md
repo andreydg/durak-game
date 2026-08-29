@@ -123,7 +123,7 @@ Optional environment variables:
 - `TAG` (default `latest`)
 - `ALLOW_UNAUTHENTICATED` (default `true`)
 - `GEMINI_SECRET` (default `gemini-api-key`)
-- `GEMINI_SECRET_PROJECT` (default `527294552477`, the project containing the secret)
+- `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
 - `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
 - `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.7-flash`)
 - `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
@@ -139,7 +139,7 @@ The deployed Durak service and its Gemini key can live in different projects. Th
 For the current production layout, Durak runs in `andreyg-main` while `gemini-api-key` is stored in project `527294552477`:
 
 ```bash
-PROJECT_ID="andreyg-main" REGION="us-west1" ./scripts/deploy-cloud-run.sh
+PROJECT_ID="andreyg-main" GEMINI_SECRET_PROJECT="527294552477" REGION="us-west1" ./scripts/deploy-cloud-run.sh
 ```
 
 ### Single-instance deployment requirement

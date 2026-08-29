@@ -14,7 +14,7 @@ set -euo pipefail
 #   FIRESTORE_DATABASE_ID=(default)
 #   CONFIGURE_FIRESTORE_TTL=true
 #   GEMINI_SECRET=gemini-api-key
-#   GEMINI_SECRET_PROJECT=527294552477
+#   GEMINI_SECRET_PROJECT=my-secret-project (defaults to PROJECT_ID)
 #   GEMINI_SECRET_VERSION=latest
 #   AUTOPLAY_GEMINI_MODEL=gemini-3.7-flash
 #   RUNTIME_SERVICE_ACCOUNT=service-account@project.iam.gserviceaccount.com
@@ -28,7 +28,7 @@ ALLOW_UNAUTHENTICATED="${ALLOW_UNAUTHENTICATED:-true}"
 FIRESTORE_DATABASE_ID="${FIRESTORE_DATABASE_ID:-(default)}"
 CONFIGURE_FIRESTORE_TTL="${CONFIGURE_FIRESTORE_TTL:-true}"
 GEMINI_SECRET="${GEMINI_SECRET:-gemini-api-key}"
-GEMINI_SECRET_PROJECT="${GEMINI_SECRET_PROJECT:-527294552477}"
+GEMINI_SECRET_PROJECT="${GEMINI_SECRET_PROJECT:-${PROJECT_ID}}"
 GEMINI_SECRET_VERSION="${GEMINI_SECRET_VERSION:-latest}"
 AUTOPLAY_GEMINI_MODEL="${AUTOPLAY_GEMINI_MODEL:-gemini-3.7-flash}"
 RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
@@ -36,8 +36,12 @@ GCLOUD_BIN="${GCLOUD_BIN:-gcloud}"
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${TAG}"
 
-GEMINI_SECRET_PROJECT_NUMBER="$("${GCLOUD_BIN}" projects describe "${GEMINI_SECRET_PROJECT}" \
-  --format='value(projectNumber)')"
+GEMINI_SECRET_PROJECT_NUMBER=""
+if ! GEMINI_SECRET_PROJECT_NUMBER="$("${GCLOUD_BIN}" projects describe "${GEMINI_SECRET_PROJECT}" \
+  --format='value(projectNumber)')"; then
+  echo "Error: could not resolve project number for GEMINI_SECRET_PROJECT=${GEMINI_SECRET_PROJECT}" >&2
+  exit 1
+fi
 if [[ ! "${GEMINI_SECRET_PROJECT_NUMBER}" =~ ^[0-9]+$ ]]; then
   echo "Error: could not resolve project number for GEMINI_SECRET_PROJECT=${GEMINI_SECRET_PROJECT}" >&2
   exit 1
@@ -52,8 +56,12 @@ if [[ -z "${RUNTIME_SERVICE_ACCOUNT}" ]]; then
     2>/dev/null || true)"
 fi
 if [[ -z "${RUNTIME_SERVICE_ACCOUNT}" ]]; then
-  PROJECT_NUMBER="$("${GCLOUD_BIN}" projects describe "${PROJECT_ID}" \
-    --format='value(projectNumber)')"
+  PROJECT_NUMBER=""
+  if ! PROJECT_NUMBER="$("${GCLOUD_BIN}" projects describe "${PROJECT_ID}" \
+    --format='value(projectNumber)')"; then
+    echo "Error: could not resolve project number for PROJECT_ID=${PROJECT_ID}" >&2
+    exit 1
+  fi
   if [[ ! "${PROJECT_NUMBER}" =~ ^[0-9]+$ ]]; then
     echo "Error: could not resolve project number for PROJECT_ID=${PROJECT_ID}" >&2
     exit 1
