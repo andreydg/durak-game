@@ -389,19 +389,22 @@ class GameServiceTest {
     }
 
     @Test
-    void listOpenLobbiesDeletesExpiredAndSortsMostRecentFirst() {
+    void listOpenLobbiesDeletesExpiredAndPrioritizesPopulatedRoomsWithoutHeartbeatReordering() {
         InMemoryGameStore store = new InMemoryGameStore();
         GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
         Game old = lobbyAt("OLD001", Instant.now().minus(31, ChronoUnit.MINUTES));
-        Game recent = lobbyAt("NEW001", Instant.now().minus(1, ChronoUnit.MINUTES));
+        Game recent = lobbyAt("ZZZ001", Instant.now().minus(1, ChronoUnit.MINUTES));
         Game middle = lobbyAt("MID001", Instant.now().minus(10, ChronoUnit.MINUTES));
+        middle.addPlayer("Guest", 4);
+        Game refreshedOldSingle = lobbyAt("AAA001", Instant.now());
         store.save(old);
         store.save(middle);
         store.save(recent);
+        store.save(refreshedOldSingle);
 
         List<String> codes = service.listOpenLobbies().stream().map(LobbyGameSummary::code).toList();
 
-        assertEquals(List.of("NEW001", "MID001"), codes);
+        assertEquals(List.of("MID001", "AAA001", "ZZZ001"), codes);
         assertFalse(store.existsByCode("OLD001"));
     }
 

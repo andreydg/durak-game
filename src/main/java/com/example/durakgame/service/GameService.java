@@ -371,7 +371,8 @@ public class GameService {
                         p.lastActivityAt(),
                         expiryPolicy.expiresAt(GameStatus.LOBBY, p.lastActivityAt())
                 ))
-                .sorted(Comparator.comparing(LobbyGameSummary::lastActivityAt).reversed())
+                .sorted(Comparator.comparingInt(LobbyGameSummary::playerCount).reversed()
+                        .thenComparing(LobbyGameSummary::code))
                 .toList();
         cachedLobbies = new CachedLobbies(now, summaries);
         return summaries;

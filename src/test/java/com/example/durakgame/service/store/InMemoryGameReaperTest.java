@@ -19,7 +19,7 @@ class InMemoryGameReaperTest {
     private final InMemoryGameStore store = new InMemoryGameStore();
     private final InMemoryGameReaper reaper = new InMemoryGameReaper(
             store,
-            new GameExpiryPolicy(120, 24, 60)
+            GameExpiryPolicy.defaults()
     );
 
     @Test

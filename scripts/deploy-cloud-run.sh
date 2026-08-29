@@ -40,12 +40,14 @@ gcloud services enable \
 
 if [[ "${CONFIGURE_FIRESTORE_TTL}" == "true" ]]; then
   echo "==> Ensuring Firestore TTL policy on games.expireAt"
-  gcloud firestore fields ttls update expireAt \
+  if ! gcloud firestore fields ttls update expireAt \
     --collection-group=games \
     --database="${FIRESTORE_DATABASE_ID}" \
     --enable-ttl \
     --async \
-    --project "${PROJECT_ID}"
+    --project "${PROJECT_ID}"; then
+    echo "Warning: Firestore TTL policy could not be configured; continuing deployment." >&2
+  fi
 fi
 
 echo "==> Ensuring Artifact Registry repository exists"
