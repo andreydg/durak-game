@@ -9,9 +9,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.server.PathContainer;
+import org.springframework.http.server.RequestPath;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ServletRequestPathUtils;
 
 import java.io.IOException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -86,23 +89,23 @@ public class RateLimitFilter extends OncePerRequestFilter {
         return "/api/games".equals(path) || "/api/games/quick-play".equals(path);
     }
 
-    /** Matches Spring's matrix-parameter-insensitive routing before choosing a rate-limit bucket. */
+    /** Uses the same decoded, matrix-parameter-free segment values that Spring matches. */
     private static String routePath(HttpServletRequest request) {
-        String raw = request.getRequestURI();
-        StringBuilder normalized = new StringBuilder(raw.length());
-        boolean inPathParameter = false;
-        for (int i = 0; i < raw.length(); i++) {
-            char ch = raw.charAt(i);
-            if (ch == ';') {
-                inPathParameter = true;
-            } else if (ch == '/') {
-                inPathParameter = false;
-                normalized.append(ch);
-            } else if (!inPathParameter) {
-                normalized.append(ch);
+        try {
+            RequestPath parsed = ServletRequestPathUtils.parse(request);
+            StringBuilder resolved = new StringBuilder(parsed.pathWithinApplication().value().length());
+            for (PathContainer.Element element : parsed.pathWithinApplication().elements()) {
+                if (element instanceof PathContainer.PathSegment segment) {
+                    resolved.append(segment.valueToMatch());
+                } else {
+                    resolved.append(element.value());
+                }
             }
+            return resolved.toString();
+        } catch (IllegalArgumentException ignored) {
+            /* Malformed encodings cannot match a controller route; retain API filtering when possible. */
+            return request.getRequestURI();
         }
-        return normalized.toString();
     }
 
     private boolean allow(ConcurrentHashMap<String, TokenBucket> buckets, String ip, Supplier<TokenBucket> factory) {

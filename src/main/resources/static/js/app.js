@@ -1065,6 +1065,12 @@ battleCards.addEventListener("drop", async (e) => {
 (async function init() {
     const invitedCode = roomCodeFromSearch(window.location.search);
     const hasDifferentInvite = Boolean(invitedCode && invitedCode !== state.gameCode);
+    if (hasDifferentInvite) {
+        /* Keep the saved session recoverable at /, but do not leave it live behind the invite view. */
+        state.gameCode = "";
+        state.playerId = "";
+        state.playerToken = "";
+    }
     if (!hasDifferentInvite && state.gameCode && state.playerId) {
         beginPolling();
         connectWebSocket();

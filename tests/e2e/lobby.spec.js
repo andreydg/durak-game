@@ -157,6 +157,16 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#gameView")).toBeHidden();
         await expect(page.locator("#gameCode")).toHaveValue(invitedCode);
         await expect(page.locator("#joinHint")).toContainText(`Invite loaded for room ${invitedCode}`);
+        let restoredGameRequests = 0;
+        await page.route(`**/api/games/${currentCode}*`, async route => {
+            restoredGameRequests += 1;
+            await route.continue();
+        });
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        await page.waitForTimeout(250);
+        await expect(page.locator("#lobbyView")).toBeVisible();
+        await expect(page.locator("#gameCode")).toHaveValue(invitedCode);
+        expect(restoredGameRequests).toBe(0);
         await page.click("#joinBtn");
         await expect(page.locator("#appAlert")).toContainText("Game not found");
         expect(await page.evaluate(() => ({
