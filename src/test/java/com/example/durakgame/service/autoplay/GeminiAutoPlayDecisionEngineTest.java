@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -119,6 +120,34 @@ class GeminiAutoPlayDecisionEngineTest {
         assertNull(action);
     }
 
+    @Test
+    void gemini37UsesStableEndpointAndCompatibleGenerationConfig() {
+        GeminiAutoPlayDecisionEngine gemini37 = engineFor("gemini-3.7-flash", "HIGH");
+
+        assertEquals("http://localhost/models/gemini-3.7-flash:generateContent", gemini37.endpoint());
+        assertEquals("application/json", gemini37.generationConfig().get("responseMimeType"));
+        assertEquals(Map.of("thinkingLevel", "HIGH"), gemini37.generationConfig().get("thinkingConfig"));
+    }
+
+    @Test
+    void generationConfigOmitsDeprecatedSamplingParameters() {
+        Map<String, Object> generationConfig = engineFor("gemini-3.7-flash", "HIGH").generationConfig();
+
+        assertFalse(generationConfig.containsKey("temperature"));
+        assertFalse(generationConfig.containsKey("topP"));
+        assertFalse(generationConfig.containsKey("topK"));
+        assertFalse(generationConfig.containsKey("candidateCount"));
+    }
+
+    @Test
+    void nonGemini3ModelDoesNotReceiveThinkingConfigAutomatically() {
+        Map<String, Object> generationConfig = engineFor("gemini-2.5-flash", "HIGH").generationConfig();
+
+        assertEquals(0, generationConfig.get("temperature"));
+        assertEquals("application/json", generationConfig.get("responseMimeType"));
+        assertFalse(generationConfig.containsKey("thinkingConfig"));
+    }
+
     private AutoPlayAction parse(String modelText, ViewerLegalMoves legalMoves) throws IOException {
         String response = objectMapper.writeValueAsString(Map.of(
                 "candidates", List.of(Map.of(
@@ -128,5 +157,24 @@ class GeminiAutoPlayDecisionEngineTest {
                 ))
         ));
         return engine.parseResponse(response, "CODE", "player", legalMoves);
+    }
+
+    private GeminiAutoPlayDecisionEngine engineFor(String model, String thinkingLevel) {
+        return new GeminiAutoPlayDecisionEngine(
+                new HeuristicAutoPlayDecisionEngine(),
+                objectMapper,
+                false,
+                "",
+                model,
+                "http://localhost",
+                thinkingLevel,
+                true,
+                30,
+                "auto",
+                "auto",
+                "auto",
+                "auto",
+                1000
+        );
     }
 }

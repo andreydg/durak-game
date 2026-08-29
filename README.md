@@ -69,9 +69,9 @@ The host can add bot players in the lobby. Bots use the primary LLM to choose mo
 
 Environment variables:
 
-- `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback)
+- `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback; Cloud Run receives this from Secret Manager)
 - `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
-- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.1-flash-lite-preview` by default)
+- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.7-flash` by default)
 - `AUTOPLAY_GEMINI_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta` by default)
 - `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default)
 - `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
@@ -122,11 +122,24 @@ Optional environment variables:
 - `REPOSITORY` (default `durak-game`)
 - `TAG` (default `latest`)
 - `ALLOW_UNAUTHENTICATED` (default `true`)
+- `GEMINI_SECRET` (default `gemini-api-key`)
+- `GEMINI_SECRET_PROJECT` (default `527294552477`, the project containing the secret)
+- `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
+- `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.7-flash`)
+- `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
 
 Example:
 
 ```bash
 PROJECT_ID="my-gcp-project" REGION="europe-west1" SERVICE="durak-prod" TAG="$(git rev-parse --short HEAD)" ./scripts/deploy-cloud-run.sh
+```
+
+The deployed Durak service and its Gemini key can live in different projects. The script resolves the secret project's numeric id, verifies the configured secret and version without reading the secret value, grants the Cloud Run runtime identity `roles/secretmanager.secretAccessor` on that one secret, and injects it as `GEMINI_API_KEY`. The key is never passed to Cloud Build or stored in the container image. The account running the script must be able to update that secret's IAM policy and act as the selected runtime service account.
+
+For the current production layout, Durak runs in `andreyg-main` while `gemini-api-key` is stored in project `527294552477`:
+
+```bash
+PROJECT_ID="andreyg-main" REGION="us-west1" ./scripts/deploy-cloud-run.sh
 ```
 
 ### Single-instance deployment requirement
