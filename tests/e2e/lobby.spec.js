@@ -5,6 +5,7 @@ test.describe("Lobby & room creation", () => {
         await page.goto("/");
         await expect(page.locator("#lobbyView")).toBeVisible();
         await expect(page.locator("#createBtn")).toBeVisible();
+        await expect(page.locator("#createBtn")).toHaveClass(/btn-primary/);
         await expect(page.locator("#joinBtn")).toBeVisible();
         await expect(page.locator("#hostName")).toBeVisible();
         await expect(page.locator("#quickPlayBtn")).toHaveText("Quick Play vs Elektronik");
