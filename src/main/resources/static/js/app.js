@@ -185,10 +185,10 @@ async function refreshLobbyLists() {
         return;
     }
 
-    const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet — create one above or enter a code.</p>";
-    const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned — try Refresh or wait a moment.</p>";
+    const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet. Create one above or enter a code.</p>";
+    const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned. Try Refresh or wait a moment.</p>";
 
-    /* Always fill #lobbyGameList when data arrives — do not gate on lobbyView visibility (async fetch can race with show/hide). */
+    /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
     if (lobbyGameList) {
         lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
     }
@@ -324,9 +324,9 @@ function updateBattleTableBanner(game) {
     const n = (game.table || []).length;
     const sub = n < limit
         ? "Throw in matching ranks (first come), then all attackers press End round."
-        : "No more throw-ins — all attackers must press End round.";
+        : "No more throw-ins. All attackers must press End round.";
     battleTableBanner.innerHTML =
-        `<span class="taking-lead-icon" aria-hidden="true">⇩</span><strong>${escapeHtml(takingName)}</strong> is taking cards — ${sub}`;
+        `<span class="taking-lead-icon" aria-hidden="true">⇩</span><strong>${escapeHtml(takingName)}</strong> is taking cards. ${sub}`;
     battleTableBanner.classList.remove("hidden");
 }
 
@@ -431,17 +431,17 @@ function renderActionState(game) {
     endRoundBtn.disabled = !lm.canEndRound;
 
     if (game.takingCardsInProgress) {
-        actionHint.textContent = "See the message on the table — use buttons or drag cards.";
+        actionHint.textContent = "See the message on the table. Use buttons or drag cards.";
         return;
     }
 
     if (lm.canEndRound) {
         actionHint.textContent = lm.canAttack
-            ? "All attacks are defended — you may add another attack (matching rank) or press End round."
-            : "All attacks are defended — press End round to finish this bout.";
+            ? "All attacks are defended. You may add another attack (matching rank) or press End round."
+            : "All attacks are defended. Press End round to finish this bout.";
     } else if (!selected) {
         if (team4 && tableEmpty && iOnAttackSide && iAmOpeningAttacker) {
-            actionHint.textContent = "Your turn — lead the first attack (⚔️ opening attacker).";
+            actionHint.textContent = "Your turn. Lead the first attack (⚔️ opening attacker).";
         } else if (team4 && tableEmpty && iOnAttackSide && !iAmOpeningAttacker) {
             const opener = game.players.find(p => p.id === openerId);
             actionHint.textContent =
@@ -628,7 +628,7 @@ function render() {
     const playersList = game.players
         .map(p => p.id === game.hostPlayerId ? `${p.name} (host)` : p.name)
         .join(", ");
-    roleLabel.textContent = `Players: ${playersList || "—"}`;
+    roleLabel.textContent = `Players: ${playersList || "-"}`;
     const canStart = Boolean(me && game.status === "LOBBY" && game.hostPlayerId === state.playerId);
     if (startBtn) {
         startBtn.classList.toggle("hidden", !canStart);
@@ -646,19 +646,19 @@ function render() {
     }
 
     if (game.status === "FINISHED") {
-        tableAttackerLabel.textContent = "—";
-        tableDefenderLabel.textContent = "—";
+        tableAttackerLabel.textContent = "-";
+        tableDefenderLabel.textContent = "-";
     } else if (game.takingCardsInProgress) {
-        tableAttackerLabel.textContent = attacker ? attacker.name : "—";
+        tableAttackerLabel.textContent = attacker ? attacker.name : "-";
         if (defender) {
             tableDefenderLabel.innerHTML =
                 `${escapeHtml(defender.name)}<span class="pill-take" title="Taking cards">⇩</span>`;
         } else {
-            tableDefenderLabel.textContent = "—";
+            tableDefenderLabel.textContent = "-";
         }
     } else {
-        tableAttackerLabel.textContent = attacker ? attacker.name : "—";
-        tableDefenderLabel.textContent = defender ? defender.name : "—";
+        tableAttackerLabel.textContent = attacker ? attacker.name : "-";
+        tableDefenderLabel.textContent = defender ? defender.name : "-";
     }
     if (openingLeadHud) {
         const emptyTable = !game.table || game.table.length === 0;
@@ -666,7 +666,7 @@ function render() {
             game.status === "IN_PROGRESS" && game.players.length === 4 && emptyTable && attacker;
         if (showOpening) {
             openingLeadHud.textContent =
-                `${attacker.name} — attacking; teammates add matching ranks after.`;
+                `${attacker.name} is attacking; teammates add matching ranks after.`;
             openingLeadHud.classList.remove("hidden");
         } else {
             openingLeadHud.textContent = "";

@@ -70,14 +70,14 @@ test.describe("Gameplay against a bot", () => {
         await expect(firstCard).toHaveAttribute("aria-pressed", "false");
     });
 
-    test("a card reaches the table — human leads or the bot opens the attack", async ({ page }) => {
+    test("a card reaches the table whether the human or bot opens the attack", async ({ page }) => {
         await createRoom(page, "Alice");
         await page.click("#addBotBtn");
         await expect(page.locator("#roleLabel")).toContainText("Elektronik", { timeout: 10_000 });
         await page.click("#startBtn");
         await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6, { timeout: 10_000 });
 
-        // The first attacker is chosen by lowest trump — could be either player. Select my
+        // The first attacker is chosen by lowest trump, so it could be either player. Select my
         // first card so the Attack button reflects whether I'm the opener.
         const pair = page.locator("#battleCards .battle-pair").first();
         const attackBtn = page.locator("#attackBtn");

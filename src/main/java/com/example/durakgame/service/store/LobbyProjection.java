@@ -5,7 +5,7 @@ import java.time.Instant;
 
 /**
  * Lightweight lobby summary the store can return without decoding the full game payload.
- * {@code maxPlayers} is intentionally absent — it's a service-level policy, not stored state.
+ * {@code maxPlayers} is intentionally absent; it's a service-level policy, not stored state.
  */
 public record LobbyProjection(
         String code,

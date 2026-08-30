@@ -175,7 +175,7 @@ public class FirestoreGameStore implements GameStore {
             log.debug("firestore_read op=listOpenLobbySummaries");
             List<LobbyProjection> summaries = new ArrayList<>();
             Instant now = Instant.now();
-            // Project only the denormalized summary fields — no payload blob, no decode.
+            // Project only the denormalized summary fields; no payload blob, no decode.
             for (DocumentSnapshot doc : collection()
                     .whereEqualTo(FIELD_STATUS, GameStatus.LOBBY.name())
                     .select(FIELD_CODE, FIELD_HOST_NAME, FIELD_PLAYER_NAMES, FIELD_PLAYER_COUNT,

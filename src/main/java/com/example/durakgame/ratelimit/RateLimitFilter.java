@@ -71,11 +71,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String ip = clientIp(request);
 
         if (isGameCreation(request) && !allow(createBuckets, ip, () -> new TokenBucket(createBurst, createPerSecond))) {
-            reject(response, "Too many games created — slow down.");
+            reject(response, "Too many games created. Slow down.");
             return;
         }
         if (!allow(generalBuckets, ip, () -> new TokenBucket(generalBurst, generalPerSecond))) {
-            reject(response, "Too many requests — slow down.");
+            reject(response, "Too many requests. Slow down.");
             return;
         }
         chain.doFilter(request, response);

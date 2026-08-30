@@ -19,7 +19,7 @@ public class GameStoreHealthIndicator implements HealthIndicator {
     /*
      * A code never allocated as a real game (those are 6 uppercase alphanumerics), so the probe is
      * a cheap negative lookup. Must avoid Firestore's reserved "__.*__" document-id pattern, which
-     * is rejected on read — hence the hyphen rather than wrapping underscores.
+     * is rejected on read; hence the hyphen rather than wrapping underscores.
      */
     private static final String PROBE_CODE = "health-probe";
 

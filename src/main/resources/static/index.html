@@ -3,18 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Durak Multiplayer</title>
+    <title>Durak Online | Card Game for 2 to 4 Players</title>
+    <meta name="description" content="Durak (Дурак) is a card shedding game for two to four players. Play with friends in public or private rooms, or against Elektronik.">
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+    <meta name="theme-color" content="#f4f4f4">
+    <link rel="canonical" href="https://durak.andreyg.com/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Durak Online">
+    <meta property="og:title" content="Durak Online | Card Game for 2 to 4 Players">
+    <meta property="og:description" content="A card shedding game for two to four players, with public rooms, private rooms, and an Elektronik opponent.">
+    <meta property="og:url" content="https://durak.andreyg.com/">
+    <meta property="og:image" content="https://durak.andreyg.com/social-card.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Durak Online card game">
+    <meta property="og:locale" content="en_US">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Durak Online">
+    <meta name="twitter:description" content="A card shedding game for two to four players, with public rooms, private rooms, and an Elektronik opponent.">
+    <meta name="twitter:image" content="https://durak.andreyg.com/social-card.png">
     <link rel="icon" href="/favicon.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css">
     <link rel="stylesheet" href="/css/app.css">
+    <link rel="stylesheet" href="/css/content.css">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebApplication",
+          "@id": "https://durak.andreyg.com/#game",
+          "name": "Durak Online",
+          "alternateName": "Дурак",
+          "url": "https://durak.andreyg.com/",
+          "description": "A browser-based Durak card game for two to four players, private groups, and play against Elektronik.",
+          "applicationCategory": "GameApplication",
+          "operatingSystem": "Any",
+          "browserRequirements": "Requires JavaScript and a modern web browser",
+          "inLanguage": "en"
+        }
+      ]
+    }
+    </script>
 </head>
 <body>
 <div id="appAlert" class="app-alert hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
 <section id="lobbyView" class="lobby-root">
     <header class="lobby-hero">
+        <nav class="site-nav" aria-label="Site navigation">
+            <a href="/rules.html">How to play</a>
+        </nav>
         <div class="lobby-brand">
             <div class="lobby-card-deco" aria-hidden="true">
                 <span class="card-back-face"></span>
@@ -57,7 +98,7 @@
                     <input id="playerName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
                 </div>
             </div>
-            <p id="joinHint" class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code — you can join with one tap; we’ll assign a guest name if the field is empty.</p>
+            <p id="joinHint" class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code. We’ll assign a guest name if the name field is empty.</p>
             <div class="lobby-actions">
                 <button type="submit" class="btn-primary" id="joinBtn">Join game</button>
             </div>
@@ -68,21 +109,32 @@
         <p class="lobby-hint muted" style="margin-top:-0.35rem;margin-bottom:0.75rem;">Rooms stay listed until four players join, the host starts, the table is inactive for 30 minutes, or it has waited for 2 hours. A completed round that returns to the lobby starts a fresh waiting window. Tap Join to use your name from the form above (or a random name if empty).</p>
         <div id="lobbyGameList" class="lobby-list-host" aria-live="polite"></div>
     </div>
+
+    <div class="seo-content">
+        <section class="seo-panel seo-intro" aria-labelledby="what-is-durak">
+            <h2 id="what-is-durak">What is Durak</h2>
+            <p>Durak (Дурак) is a fast card shedding game. Players attack and defend in turn while trying to empty their hands. The last player holding cards is the durak.</p>
+            <ul class="feature-list" aria-label="Game features">
+                <li><strong>2–4 players</strong><span>Individual or team play</span></li>
+                <li><strong>Public or private rooms</strong><span>Join by table or code</span></li>
+                <li><strong>Elektronik opponent</strong><span>Two-player Quick Play</span></li>
+            </ul>
+        </section>
+
+        <section class="seo-panel" aria-labelledby="how-it-works">
+            <h2 id="how-it-works">Online play</h2>
+            <ol class="step-list">
+                <li><span>1</span><div><strong>Choose a table</strong><p>Use Quick Play vs Elektronik, create a room, or join with a six-character code.</p></div></li>
+                <li><span>2</span><div><strong>Invite players</strong><p>Copy the private link, or leave the room public so it appears under Open tables.</p></div></li>
+                <li><span>3</span><div><strong>Attack and defend</strong><p>Match ranks when attacking and beat cards with a higher card or a trump when defending.</p></div></li>
+                <li><span>4</span><div><strong>Avoid being the durak</strong><p>Empty your hand before everyone else. The last player with cards loses.</p></div></li>
+            </ol>
+            <p class="content-link-row"><a href="/rules.html">Read the complete Durak rules →</a></p>
+        </section>
+    </div>
 </section>
 
 <section id="gameView" class="stack hidden">
-    <header class="lobby-hero lobby-hero--in-game" id="gameBrandHero" aria-label="Durak">
-        <div class="lobby-brand">
-            <div class="lobby-card-deco" aria-hidden="true">
-                <span class="card-back-face"></span>
-                <span class="card-back-face"></span>
-                <span class="card-back-face"></span>
-            </div>
-            <div>
-                <h1 class="lobby-title">Durak <span>Дурак</span></h1>
-            </div>
-        </div>
-    </header>
     <div class="panel room-header">
         <div>
             <div class="room-title-row">

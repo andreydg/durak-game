@@ -53,7 +53,7 @@ class ApiExceptionHandlerTest {
         ResponseEntity<Map<String, Object>> res =
                 handler.handleStaleWrite(new StaleGameWriteException("ABC123", 1, 2));
         assertEquals(HttpStatus.CONFLICT, res.getStatusCode());
-        assertEquals("Game state changed — please retry your move.", body(res).get("message"));
+        assertEquals("Game state changed. Please retry your move.", body(res).get("message"));
     }
 
     @Test
