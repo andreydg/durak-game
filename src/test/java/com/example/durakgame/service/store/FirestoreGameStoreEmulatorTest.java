@@ -70,7 +70,7 @@ class FirestoreGameStoreEmulatorTest {
     @Test
     void lobbySummariesUseDenormalizedFields() {
         String code = uniqueCode();
-        Game game = new Game(code, new Player("Alice"));
+        Game game = new Game(code, new Player("Alice"), false);
         game.addPlayer("Bob", 4);
         try {
             store.save(game);
@@ -84,6 +84,7 @@ class FirestoreGameStoreEmulatorTest {
             assertTrue(summary.playerNames().containsAll(List.of("Alice", "Bob")));
             assertEquals(game.getLastActivityAt().toEpochMilli(), summary.lastActivityAt().toEpochMilli());
             assertEquals(game.getLobbyStartedAt().toEpochMilli(), summary.lobbyStartedAt().toEpochMilli());
+            assertFalse(summary.publicRoom());
         } finally {
             store.deleteByCode(code);
         }

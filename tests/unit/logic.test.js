@@ -89,6 +89,39 @@ describe("displayStatus", () => {
     });
 });
 
+describe("room invite links", () => {
+    it("reads and normalizes a valid room query", () => {
+        expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");
+        expect(L.roomCodeFromSearch("?foo=1&room=XY9Z88")).toBe("XY9Z88");
+    });
+
+    it("rejects missing or malformed invite codes", () => {
+        expect(L.roomCodeFromSearch("?room=short")).toBe("");
+        expect(L.roomCodeFromSearch("?room=%3Cscript%3E")).toBe("");
+        expect(L.roomCodeFromSearch("")).toBe("");
+    });
+
+    it("builds a canonical same-origin invite URL", () => {
+        expect(L.buildInviteUrl("https://durak.example", "abc123"))
+            .toBe("https://durak.example/?room=ABC123");
+        expect(L.buildInviteUrl("https://durak.example/old/path", "bad"))
+            .toBe("");
+    });
+
+    it("removes invite state without reserializing unrelated query parameters", () => {
+        expect(L.searchWithoutRoomParam("?room=ABC123&utm_source=invite"))
+            .toBe("?utm_source=invite");
+        expect(L.searchWithoutRoomParam("?utm_source=a%20b&room=ABC123&flag"))
+            .toBe("?utm_source=a%20b&flag");
+        expect(L.searchWithoutRoomParam("?room=ABC123")).toBe("");
+    });
+
+    it("preserves malformed and similarly named query parameters", () => {
+        expect(L.searchWithoutRoomParam("?%E0%A4%A=x&roommate=one&room=ABC123"))
+            .toBe("?%E0%A4%A=x&roommate=one");
+    });
+});
+
 describe("escapeHtml", () => {
     it("escapes angle brackets and ampersands", () => {
         expect(L.escapeHtml("<script>")).not.toContain("<script>");

@@ -47,7 +47,8 @@ class GameBinaryCodecTest {
                 ),
                 Set.of("host", "p4"),
                 cards("JH", "QH"),
-                List.of(new Game.KnownCardsSnapshot("bot", cards("10H", "JS")))
+                List.of(new Game.KnownCardsSnapshot("bot", cards("10H", "JS"))),
+                false
         );
 
         byte[] encoded = codec.encode(Game.fromSnapshot(original));
@@ -107,6 +108,7 @@ class GameBinaryCodecTest {
         assertEquals("", decoded.getPlayers().getFirst().getSecret());
         assertEquals(decoded.getCreatedAt(), decoded.getLastActivityAt());
         assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
+        assertTrue(decoded.isPublicRoom(), "rooms persisted before visibility existed remain discoverable");
     }
 
     @Test
@@ -117,6 +119,28 @@ class GameBinaryCodecTest {
 
         assertEquals(Instant.ofEpochMilli(1_700_000_123_000L), decoded.getLastActivityAt());
         assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
+        assertTrue(decoded.isPublicRoom(), "rooms persisted before visibility existed remain discoverable");
+    }
+
+    @Test
+    void decodesV5PayloadAsPublicWithoutShiftingTheRemainingFields() throws Exception {
+        byte[] legacy = encodeV5SinglePlayerLobby("VISIB5", "host", "Host", "secret-v5");
+
+        Game decoded = codec.decode(legacy);
+
+        assertEquals("VISIB5", decoded.getCode());
+        assertEquals(1_700_000_123_000L, decoded.getLastActivityAt().toEpochMilli());
+        assertEquals("secret-v5", decoded.getPlayers().getFirst().getSecret());
+        assertTrue(decoded.isPublicRoom(), "rooms persisted before visibility existed remain public");
+    }
+
+    @Test
+    void decodesVersionSixLobbyPhasePayloadAsPublic() throws Exception {
+        Game decoded = codec.decode(encodeV6SinglePlayerLobby("VISIB6", "host", "Host", "secret-v6"));
+
+        assertEquals(1_700_000_060_000L, decoded.getLobbyStartedAt().toEpochMilli());
+        assertEquals("secret-v6", decoded.getPlayers().getFirst().getSecret());
+        assertTrue(decoded.isPublicRoom(), "v6 rooms written before visibility existed remain public");
     }
 
     /** Hand-writes a minimal version-3 lobby payload (the format before the player-secret field). */
@@ -156,6 +180,15 @@ class GameBinaryCodecTest {
 
     /** Hand-writes the v5 layout immediately before lobby-phase tracking was added. */
     private static byte[] encodeV5SinglePlayerLobby(String code, String playerId, String name) throws Exception {
+        return encodeV5SinglePlayerLobby(code, playerId, name, "secret");
+    }
+
+    private static byte[] encodeV5SinglePlayerLobby(
+            String code,
+            String playerId,
+            String name,
+            String secret
+    ) throws Exception {
         var bos = new java.io.ByteArrayOutputStream();
         try (var out = new java.io.DataOutputStream(bos)) {
             out.write(new byte[]{'D', 'G', '1'});
@@ -163,6 +196,7 @@ class GameBinaryCodecTest {
             out.writeUTF(code);
             out.writeLong(1_700_000_000_000L);      // createdAt
             out.writeLong(1_700_000_123_000L);      // lastActivityAt
+            // (no lobbyStartedAt or publicRoom fields in v5)
             out.writeUTF(playerId);                 // hostPlayerId
             out.writeByte(GameStatus.LOBBY.ordinal());
             out.writeBoolean(false);                // trumpSuit absent
@@ -172,13 +206,56 @@ class GameBinaryCodecTest {
             out.writeBoolean(false);                // loserPlayerId absent
             out.writeBoolean(false);                // takingCardsInProgress
             out.writeInt(0);                        // takeLimit
-            out.writeLong(0L);                      // game version
+            out.writeLong(5L);                      // version
             out.writeInt(1);                        // playerCount
             out.writeUTF(playerId);
             out.writeUTF(name);
             out.writeLong(1_700_000_000_001L);      // joinedAt
             out.writeBoolean(false);                // bot
-            out.writeUTF("secret");                // player secret
+            out.writeUTF(secret);
+            out.writeBoolean(false);                // team absent
+            out.writeInt(0);                        // hand size
+            out.writeInt(0);                        // talon
+            out.writeInt(0);                        // table
+            out.writeInt(0);                        // endRoundApprovals
+            out.writeInt(0);                        // discarded
+            out.writeInt(0);                        // knownCardsByPlayer
+        }
+        return bos.toByteArray();
+    }
+
+    /** Hand-writes the v6 layout immediately before room visibility was added. */
+    private static byte[] encodeV6SinglePlayerLobby(
+            String code,
+            String playerId,
+            String name,
+            String secret
+    ) throws Exception {
+        var bos = new java.io.ByteArrayOutputStream();
+        try (var out = new java.io.DataOutputStream(bos)) {
+            out.write(new byte[]{'D', 'G', '1'});
+            out.writeByte(6);                       // payload version
+            out.writeUTF(code);
+            out.writeLong(1_700_000_000_000L);      // createdAt
+            out.writeLong(1_700_000_123_000L);      // lastActivityAt
+            out.writeLong(1_700_000_060_000L);      // lobbyStartedAt
+            // (no publicRoom field in v6)
+            out.writeUTF(playerId);                 // hostPlayerId
+            out.writeByte(GameStatus.LOBBY.ordinal());
+            out.writeBoolean(false);                // trumpSuit absent
+            out.writeBoolean(false);                // trumpCard absent
+            out.writeInt(-1);                       // attackerIndex
+            out.writeInt(-1);                       // defenderIndex
+            out.writeBoolean(false);                // loserPlayerId absent
+            out.writeBoolean(false);                // takingCardsInProgress
+            out.writeInt(0);                        // takeLimit
+            out.writeLong(6L);                      // game version
+            out.writeInt(1);                        // playerCount
+            out.writeUTF(playerId);
+            out.writeUTF(name);
+            out.writeLong(1_700_000_000_001L);      // joinedAt
+            out.writeBoolean(false);                // bot
+            out.writeUTF(secret);
             out.writeBoolean(false);                // team absent
             out.writeInt(0);                        // hand size
             out.writeInt(0);                        // talon

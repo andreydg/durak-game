@@ -54,7 +54,8 @@ public interface GameStore {
                 playerNames,
                 game.getPlayers().size(),
                 game.getLastActivityAt(),
-                game.getLobbyStartedAt()
+                game.getLobbyStartedAt(),
+                game.isPublicRoom()
         );
     }
 }
