@@ -1,6 +1,7 @@
 package com.example.durakgame.controller;
 
 import com.example.durakgame.service.UnauthorizedActionException;
+import com.example.durakgame.service.RoomExpiredException;
 import com.example.durakgame.service.store.GameStoreException;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import org.springframework.http.HttpStatus;
@@ -22,6 +23,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<Map<String, Object>> handleNotFound(NoSuchElementException ex) {
         return buildError(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(RoomExpiredException.class)
+    public ResponseEntity<Map<String, Object>> handleExpired(RoomExpiredException ex) {
+        return buildError(HttpStatus.GONE, ex.getMessage());
     }
 
     @ExceptionHandler(StaleGameWriteException.class)

@@ -98,6 +98,7 @@ class HeuristicAutoPlayDecisionEngineTest {
         return Game.fromSnapshot(new Game.Snapshot(
                 "TEST01",
                 0L,
+                0L,
                 "p",
                 GameStatus.IN_PROGRESS,
                 trumpSuit,

@@ -11,6 +11,8 @@ set -euo pipefail
 #   REPOSITORY=durak-game
 #   TAG=latest
 #   ALLOW_UNAUTHENTICATED=true
+#   FIRESTORE_DATABASE_ID=(default)
+#   CONFIGURE_FIRESTORE_TTL=true
 
 : "${PROJECT_ID:?Set PROJECT_ID (your GCP project id)}"
 REGION="${REGION:-us-central1}"
@@ -18,6 +20,8 @@ SERVICE="${SERVICE:-durak-game}"
 REPOSITORY="${REPOSITORY:-durak-game}"
 TAG="${TAG:-latest}"
 ALLOW_UNAUTHENTICATED="${ALLOW_UNAUTHENTICATED:-true}"
+FIRESTORE_DATABASE_ID="${FIRESTORE_DATABASE_ID:-(default)}"
+CONFIGURE_FIRESTORE_TTL="${CONFIGURE_FIRESTORE_TTL:-true}"
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${TAG}"
 
@@ -31,7 +35,20 @@ gcloud services enable \
   run.googleapis.com \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
+  firestore.googleapis.com \
   --project "${PROJECT_ID}"
+
+if [[ "${CONFIGURE_FIRESTORE_TTL}" == "true" ]]; then
+  echo "==> Ensuring Firestore TTL policy on games.expireAt"
+  if ! gcloud firestore fields ttls update expireAt \
+    --collection-group=games \
+    --database="${FIRESTORE_DATABASE_ID}" \
+    --enable-ttl \
+    --async \
+    --project "${PROJECT_ID}"; then
+    echo "Warning: Firestore TTL policy could not be configured; continuing deployment." >&2
+  fi
+fi
 
 echo "==> Ensuring Artifact Registry repository exists"
 if ! gcloud artifacts repositories describe "${REPOSITORY}" \

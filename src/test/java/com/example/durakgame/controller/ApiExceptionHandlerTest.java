@@ -2,6 +2,7 @@ package com.example.durakgame.controller;
 
 import com.example.durakgame.service.store.GameStoreException;
 import com.example.durakgame.service.store.StaleGameWriteException;
+import com.example.durakgame.service.RoomExpiredException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,13 @@ class ApiExceptionHandlerTest {
         assertEquals(HttpStatus.NOT_FOUND, res.getStatusCode());
         assertEquals("Game not found", body(res).get("message"));
         assertEquals(404, body(res).get("status"));
+    }
+
+    @Test
+    void expiredRoomMapsTo410() {
+        ResponseEntity<Map<String, Object>> res = handler.handleExpired(new RoomExpiredException());
+        assertEquals(HttpStatus.GONE, res.getStatusCode());
+        assertEquals("Room expired due to inactivity.", body(res).get("message"));
     }
 
     @Test

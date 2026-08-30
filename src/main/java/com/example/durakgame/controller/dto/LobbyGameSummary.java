@@ -5,5 +5,7 @@ public record LobbyGameSummary(
         String hostName,
         java.util.List<String> playerNames,
         int playerCount,
-        int maxPlayers
+        int maxPlayers,
+        java.time.Instant lastActivityAt,
+        java.time.Instant expiresAt
 ) {}

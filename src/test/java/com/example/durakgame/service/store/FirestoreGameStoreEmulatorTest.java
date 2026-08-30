@@ -8,7 +8,10 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.health.contributor.Status;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -79,6 +82,29 @@ class FirestoreGameStoreEmulatorTest {
             assertEquals("Alice", summary.hostName());
             assertEquals(2, summary.playerCount());
             assertTrue(summary.playerNames().containsAll(List.of("Alice", "Bob")));
+            assertEquals(game.getLastActivityAt().toEpochMilli(), summary.lastActivityAt().toEpochMilli());
+            assertEquals(game.getLobbyStartedAt().toEpochMilli(), summary.lobbyStartedAt().toEpochMilli());
+        } finally {
+            store.deleteByCode(code);
+        }
+    }
+
+    @Test
+    void expiredLobbyIsHiddenAndScheduledForCleanup() {
+        String code = uniqueCode();
+        Instant activity = Instant.now().minus(31, ChronoUnit.MINUTES);
+        long timestamp = activity.toEpochMilli();
+        Game.PlayerSnapshot host = new Game.PlayerSnapshot(
+                "host", "Host", timestamp, false, null, List.of(), "secret");
+        Game game = Game.fromSnapshot(new Game.Snapshot(
+                code, timestamp, timestamp, "host", com.example.durakgame.model.GameStatus.LOBBY,
+                null, null, -1, -1, null, false, 0, 0L,
+                List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()
+        ));
+        try {
+            store.save(game);
+
+            assertFalse(store.listOpenLobbySummaries().stream().anyMatch(p -> p.code().equals(code)));
         } finally {
             store.deleteByCode(code);
         }

@@ -377,6 +377,7 @@ class GameTest {
         return Game.fromSnapshot(new Game.Snapshot(
                 "TEST01",
                 0L,
+                0L,
                 players.getFirst().id(),
                 GameStatus.IN_PROGRESS,
                 trumpSuit,

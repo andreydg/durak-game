@@ -18,11 +18,15 @@ import java.util.Set;
 
 final class GameBinaryCodec {
     private static final byte[] MAGIC = new byte[]{'D', 'G', '1'};
-    private static final int VERSION = 4;
+    private static final int VERSION = 6;
     /** Oldest format this decoder can still read, so a version bump never destroys in-flight games. */
     private static final int MIN_SUPPORTED_VERSION = 3;
     /** Player secret field was introduced in this version; older payloads decode with a blank secret. */
     private static final int VERSION_WITH_PLAYER_SECRET = 4;
+    /** Last-activity timestamp was introduced in v5; older rooms fall back to creation time. */
+    private static final int VERSION_WITH_LAST_ACTIVITY = 5;
+    /** Current lobby-phase start was introduced in v6; older rooms use their creation time. */
+    private static final int VERSION_WITH_LOBBY_STARTED_AT = 6;
 
     byte[] encode(Game game) {
         Game.Snapshot snapshot = game.toSnapshot();
@@ -32,6 +36,8 @@ final class GameBinaryCodec {
             out.writeByte(VERSION);
             out.writeUTF(snapshot.code());
             out.writeLong(snapshot.createdAtEpochMs());
+            out.writeLong(snapshot.lastActivityAtEpochMs());
+            out.writeLong(snapshot.lobbyStartedAtEpochMs());
             out.writeUTF(snapshot.hostPlayerId());
             out.writeByte(snapshot.status().ordinal());
             out.writeBoolean(snapshot.trumpSuit() != null);
@@ -125,6 +131,8 @@ final class GameBinaryCodec {
 
             String code = in.readUTF();
             long createdAt = in.readLong();
+            long lastActivityAt = formatVersion >= VERSION_WITH_LAST_ACTIVITY ? in.readLong() : createdAt;
+            long lobbyStartedAt = formatVersion >= VERSION_WITH_LOBBY_STARTED_AT ? in.readLong() : createdAt;
             String hostPlayerId = in.readUTF();
             GameStatus status = GameStatus.values()[in.readUnsignedByte()];
             Suit trumpSuit = in.readBoolean() ? Suit.values()[in.readUnsignedByte()] : null;
@@ -195,6 +203,8 @@ final class GameBinaryCodec {
             return Game.fromSnapshot(new Game.Snapshot(
                     code,
                     createdAt,
+                    lastActivityAt,
+                    lobbyStartedAt,
                     hostPlayerId,
                     status,
                     trumpSuit,

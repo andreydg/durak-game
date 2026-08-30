@@ -6,6 +6,7 @@ import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Suit;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 
@@ -22,6 +23,7 @@ class GameBinaryCodecTest {
         Game.Snapshot original = new Game.Snapshot(
                 "ROUND1",
                 1_700_000_000_000L,
+                1_700_000_123_000L,
                 "host",
                 GameStatus.IN_PROGRESS,
                 Suit.SPADES,
@@ -60,6 +62,7 @@ class GameBinaryCodecTest {
         Game.Snapshot original = new Game.Snapshot(
                 "ROUND2",
                 1_700_000_000_000L,
+                1_700_000_123_000L,
                 "host",
                 GameStatus.FINISHED,
                 Suit.HEARTS,
@@ -102,6 +105,18 @@ class GameBinaryCodecTest {
         assertEquals(GameStatus.LOBBY, decoded.getStatus());
         assertEquals(1, decoded.getPlayers().size());
         assertEquals("", decoded.getPlayers().getFirst().getSecret());
+        assertEquals(decoded.getCreatedAt(), decoded.getLastActivityAt());
+        assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
+    }
+
+    @Test
+    void decodesVersionFiveLobbyWithCreationTimeAsLobbyPhaseStart() throws Exception {
+        byte[] legacy = encodeV5SinglePlayerLobby("LEGCY5", "host", "Host");
+
+        Game decoded = codec.decode(legacy);
+
+        assertEquals(Instant.ofEpochMilli(1_700_000_123_000L), decoded.getLastActivityAt());
+        assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
     }
 
     /** Hand-writes a minimal version-3 lobby payload (the format before the player-secret field). */
@@ -128,6 +143,42 @@ class GameBinaryCodecTest {
             out.writeLong(1_700_000_000_001L);      // joinedAt
             out.writeBoolean(false);                // bot
             // (no secret field in v3)
+            out.writeBoolean(false);                // team absent
+            out.writeInt(0);                        // hand size
+            out.writeInt(0);                        // talon
+            out.writeInt(0);                        // table
+            out.writeInt(0);                        // endRoundApprovals
+            out.writeInt(0);                        // discarded
+            out.writeInt(0);                        // knownCardsByPlayer
+        }
+        return bos.toByteArray();
+    }
+
+    /** Hand-writes the v5 layout immediately before lobby-phase tracking was added. */
+    private static byte[] encodeV5SinglePlayerLobby(String code, String playerId, String name) throws Exception {
+        var bos = new java.io.ByteArrayOutputStream();
+        try (var out = new java.io.DataOutputStream(bos)) {
+            out.write(new byte[]{'D', 'G', '1'});
+            out.writeByte(5);                       // version
+            out.writeUTF(code);
+            out.writeLong(1_700_000_000_000L);      // createdAt
+            out.writeLong(1_700_000_123_000L);      // lastActivityAt
+            out.writeUTF(playerId);                 // hostPlayerId
+            out.writeByte(GameStatus.LOBBY.ordinal());
+            out.writeBoolean(false);                // trumpSuit absent
+            out.writeBoolean(false);                // trumpCard absent
+            out.writeInt(-1);                       // attackerIndex
+            out.writeInt(-1);                       // defenderIndex
+            out.writeBoolean(false);                // loserPlayerId absent
+            out.writeBoolean(false);                // takingCardsInProgress
+            out.writeInt(0);                        // takeLimit
+            out.writeLong(0L);                      // game version
+            out.writeInt(1);                        // playerCount
+            out.writeUTF(playerId);
+            out.writeUTF(name);
+            out.writeLong(1_700_000_000_001L);      // joinedAt
+            out.writeBoolean(false);                // bot
+            out.writeUTF("secret");                // player secret
             out.writeBoolean(false);                // team absent
             out.writeInt(0);                        // hand size
             out.writeInt(0);                        // talon

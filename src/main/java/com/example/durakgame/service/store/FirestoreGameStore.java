@@ -2,6 +2,7 @@ package com.example.durakgame.service.store;
 
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.GameStatus;
+import com.example.durakgame.service.GameExpiryPolicy;
 import com.google.cloud.firestore.Blob;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
@@ -11,6 +12,7 @@ import com.google.cloud.firestore.FirestoreOptions;
 import com.google.cloud.Timestamp;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,12 +39,20 @@ public class FirestoreGameStore implements GameStore {
     private static final String FIELD_HOST_NAME = "hostName";
     private static final String FIELD_PLAYER_NAMES = "playerNames";
     private static final String FIELD_PLAYER_COUNT = "playerCount";
-    private static final Duration GAME_TTL = Duration.ofHours(24);
+    private static final String FIELD_LAST_ACTIVITY_AT = "lastActivityAt";
+    private static final String FIELD_LOBBY_STARTED_AT = "lobbyStartedAt";
+    private static final Duration LEGACY_GAME_TTL = Duration.ofHours(24);
     private final Firestore firestore;
+    private final GameExpiryPolicy expiryPolicy;
     private final GameBinaryCodec codec = new GameBinaryCodec();
 
-    public FirestoreGameStore(@Value("${app.firestore.database-id:(default)}") String databaseId) {
+    @Autowired
+    public FirestoreGameStore(
+            @Value("${app.firestore.database-id:(default)}") String databaseId,
+            GameExpiryPolicy expiryPolicy
+    ) {
         String resolvedDatabaseId = (databaseId == null || databaseId.isBlank()) ? "(default)" : databaseId.trim();
+        this.expiryPolicy = expiryPolicy;
         this.firestore = FirestoreOptions.getDefaultInstance().toBuilder()
                 .setDatabaseId(resolvedDatabaseId)
                 .build()
@@ -50,13 +60,23 @@ public class FirestoreGameStore implements GameStore {
         log.info("firestore_store_initialized databaseId={}", resolvedDatabaseId);
     }
 
+    FirestoreGameStore(String databaseId) {
+        this(databaseId, GameExpiryPolicy.defaults());
+    }
+
     @Override
     public void save(Game game) {
         byte[] encoded = encode(game);
         long attemptedVersion = game.getVersion();
         try {
-            Instant expireAt = game.getCreatedAt().plus(GAME_TTL);
+            Instant expireAt = expiryPolicy.expiresAt(game);
             Timestamp expireTs = Timestamp.ofTimeSecondsAndNanos(expireAt.getEpochSecond(), expireAt.getNano());
+            Instant lastActivityAt = game.getLastActivityAt();
+            Timestamp lastActivityTs = Timestamp.ofTimeSecondsAndNanos(
+                    lastActivityAt.getEpochSecond(), lastActivityAt.getNano());
+            Instant lobbyStartedAt = game.getLobbyStartedAt();
+            Timestamp lobbyStartedTs = Timestamp.ofTimeSecondsAndNanos(
+                    lobbyStartedAt.getEpochSecond(), lobbyStartedAt.getNano());
             log.debug("firestore_write code={} op=save version={}", game.getCode(), attemptedVersion);
             DocumentReference ref = collection().document(game.getCode());
             firestore.runTransaction(tx -> {
@@ -66,15 +86,17 @@ public class FirestoreGameStore implements GameStore {
                     throw new StaleGameWriteException(game.getCode(), attemptedVersion, storedVersion);
                 }
                 LobbyProjection summary = GameStore.toProjection(game);
-                tx.set(ref, Map.of(
-                        FIELD_PAYLOAD, Blob.fromBytes(encoded),
-                        FIELD_EXPIRE_AT, expireTs,
-                        FIELD_STATUS, game.getStatus().name(),
-                        FIELD_VERSION, attemptedVersion,
-                        FIELD_CODE, game.getCode(),
-                        FIELD_HOST_NAME, summary.hostName(),
-                        FIELD_PLAYER_NAMES, summary.playerNames(),
-                        FIELD_PLAYER_COUNT, summary.playerCount()
+                tx.set(ref, Map.ofEntries(
+                        Map.entry(FIELD_PAYLOAD, Blob.fromBytes(encoded)),
+                        Map.entry(FIELD_EXPIRE_AT, expireTs),
+                        Map.entry(FIELD_LAST_ACTIVITY_AT, lastActivityTs),
+                        Map.entry(FIELD_LOBBY_STARTED_AT, lobbyStartedTs),
+                        Map.entry(FIELD_STATUS, game.getStatus().name()),
+                        Map.entry(FIELD_VERSION, attemptedVersion),
+                        Map.entry(FIELD_CODE, game.getCode()),
+                        Map.entry(FIELD_HOST_NAME, summary.hostName()),
+                        Map.entry(FIELD_PLAYER_NAMES, summary.playerNames()),
+                        Map.entry(FIELD_PLAYER_COUNT, summary.playerCount())
                 ));
                 return null;
             }).get();
@@ -150,11 +172,19 @@ public class FirestoreGameStore implements GameStore {
         try {
             log.debug("firestore_read op=listOpenLobbySummaries");
             List<LobbyProjection> summaries = new ArrayList<>();
+            Instant now = Instant.now();
             // Project only the denormalized summary fields — no payload blob, no decode.
             for (DocumentSnapshot doc : collection()
                     .whereEqualTo(FIELD_STATUS, GameStatus.LOBBY.name())
-                    .select(FIELD_CODE, FIELD_HOST_NAME, FIELD_PLAYER_NAMES, FIELD_PLAYER_COUNT)
+                    .select(FIELD_CODE, FIELD_HOST_NAME, FIELD_PLAYER_NAMES, FIELD_PLAYER_COUNT,
+                            FIELD_LAST_ACTIVITY_AT, FIELD_LOBBY_STARTED_AT, FIELD_EXPIRE_AT)
                     .get().get().getDocuments()) {
+                Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
+                if (expireAt != null && !toInstant(expireAt).isAfter(now)) {
+                    doc.getReference().delete();
+                    log.info("firestore_expired_lobby_cleanup code={}", doc.getId());
+                    continue;
+                }
                 summaries.add(toProjection(doc));
             }
             return summaries;
@@ -169,12 +199,29 @@ public class FirestoreGameStore implements GameStore {
         String hostName = doc.getString(FIELD_HOST_NAME);
         List<String> playerNames = (List<String>) doc.get(FIELD_PLAYER_NAMES);
         Long playerCount = doc.getLong(FIELD_PLAYER_COUNT);
+        Timestamp lastActivityAt = doc.getTimestamp(FIELD_LAST_ACTIVITY_AT);
+        Timestamp lobbyStartedAt = doc.getTimestamp(FIELD_LOBBY_STARTED_AT);
+        Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
+        Instant activity = lastActivityAt != null
+                ? toInstant(lastActivityAt)
+                : legacyActivityFromExpiry(expireAt);
+        Instant lobbyStart = lobbyStartedAt != null ? toInstant(lobbyStartedAt) : activity;
         return new LobbyProjection(
                 code != null ? code : doc.getId(),
                 hostName != null ? hostName : "?",
                 playerNames != null ? playerNames : List.of(),
-                playerCount != null ? playerCount.intValue() : (playerNames != null ? playerNames.size() : 0)
+                playerCount != null ? playerCount.intValue() : (playerNames != null ? playerNames.size() : 0),
+                activity,
+                lobbyStart
         );
+    }
+
+    private Instant legacyActivityFromExpiry(Timestamp expireAt) {
+        return expireAt == null ? Instant.EPOCH : toInstant(expireAt).minus(LEGACY_GAME_TTL);
+    }
+
+    private Instant toInstant(Timestamp timestamp) {
+        return Instant.ofEpochSecond(timestamp.getSeconds(), timestamp.getNanos());
     }
 
     private List<Game> decodeAll(List<? extends DocumentSnapshot> documents) {

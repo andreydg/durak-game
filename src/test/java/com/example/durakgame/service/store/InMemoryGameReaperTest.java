@@ -3,6 +3,7 @@ package com.example.durakgame.service.store;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Player;
+import com.example.durakgame.service.GameExpiryPolicy;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -16,7 +17,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class InMemoryGameReaperTest {
 
     private final InMemoryGameStore store = new InMemoryGameStore();
-    private final InMemoryGameReaper reaper = new InMemoryGameReaper(store, 120, 24);
+    private final InMemoryGameReaper reaper = new InMemoryGameReaper(
+            store,
+            GameExpiryPolicy.defaults()
+    );
 
     @Test
     void keepsFreshLobby() {
@@ -66,7 +70,7 @@ class InMemoryGameReaperTest {
         long createdAtMs = Instant.now().minus(minutesAgo, ChronoUnit.MINUTES).toEpochMilli();
         Game.PlayerSnapshot host = new Game.PlayerSnapshot("host", "Host", createdAtMs, false, null, List.of(), "");
         return Game.fromSnapshot(new Game.Snapshot(
-                code, createdAtMs, "host", GameStatus.LOBBY,
+                code, createdAtMs, createdAtMs, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()));
     }

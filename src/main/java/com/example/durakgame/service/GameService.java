@@ -13,9 +13,11 @@ import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -55,6 +57,7 @@ public class GameService {
     private final GameStore gameStore;
     private final AutoPlayDecisionEngine autoPlayDecisionEngine;
     private final GameWebSocketHandler webSocketHandler;
+    private final GameExpiryPolicy expiryPolicy;
     private final Set<String> autoPlayRunning = ConcurrentHashMap.newKeySet();
     /*
      * Serializes load->mutate->save per game code so concurrent actions (human + bot,
@@ -80,14 +83,25 @@ public class GameService {
     private record CachedLobbies(long atMs, List<LobbyGameSummary> summaries) {
     }
 
+    @Autowired
     public GameService(
             GameStore gameStore,
             AutoPlayDecisionEngine autoPlayDecisionEngine,
-            GameWebSocketHandler webSocketHandler
+            GameWebSocketHandler webSocketHandler,
+            GameExpiryPolicy expiryPolicy
     ) {
         this.gameStore = gameStore;
         this.autoPlayDecisionEngine = autoPlayDecisionEngine;
         this.webSocketHandler = webSocketHandler;
+        this.expiryPolicy = expiryPolicy;
+    }
+
+    GameService(
+            GameStore gameStore,
+            AutoPlayDecisionEngine autoPlayDecisionEngine,
+            GameWebSocketHandler webSocketHandler
+    ) {
+        this(gameStore, autoPlayDecisionEngine, webSocketHandler, GameExpiryPolicy.defaults());
     }
 
     public Game createGame(String hostName) {
@@ -102,8 +116,32 @@ public class GameService {
 
     public Game getGame(String gameCode) {
         String normalizedCode = normalizeCode(gameCode);
-        return gameStore.findByCode(normalizedCode)
+        Game game = gameStore.findByCode(normalizedCode)
                 .orElseThrow(() -> new NoSuchElementException("Game not found"));
+        if (expiryPolicy.isExpired(game, Instant.now())) {
+            gameStore.deleteByCode(normalizedCode);
+            cachedLobbies = null;
+            log.info("game_expired code={} status={} lastActivityAt={}",
+                    game.getCode(), game.getStatus(), game.getLastActivityAt());
+            throw new RoomExpiredException();
+        }
+        return game;
+    }
+
+    public Game heartbeat(String gameCode, String playerId) {
+        String normalizedCode = normalizeCode(gameCode);
+        return withGameLockRetryingStale(normalizedCode, () -> {
+            Game game = getGame(normalizedCode);
+            boolean seated = game.getPlayers().stream().anyMatch(player -> player.getId().equals(playerId));
+            if (!seated) {
+                throw new NoSuchElementException("Player not found in this game");
+            }
+            if (game.getStatus() != GameStatus.FINISHED) {
+                game.markActive();
+                gameStore.save(game);
+            }
+            return game;
+        });
     }
 
     /**
@@ -313,16 +351,29 @@ public class GameService {
         if (cached != null && now - cached.atMs() < LOBBY_CACHE_TTL_MS) {
             return cached.summaries();
         }
+        Instant instantNow = Instant.now();
         List<LobbyGameSummary> summaries = gameStore.listOpenLobbySummaries().stream()
                 .filter(p -> p.playerCount() < MAX_PLAYERS)
+                .filter(p -> {
+                    if (!expiryPolicy.isExpired(
+                            GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt(), instantNow)) {
+                        return true;
+                    }
+                    gameStore.deleteByCode(p.code());
+                    log.info("game_expired code={} status=LOBBY lastActivityAt={}", p.code(), p.lastActivityAt());
+                    return false;
+                })
                 .map(p -> new LobbyGameSummary(
                         p.code(),
                         p.hostName(),
                         p.playerNames(),
                         p.playerCount(),
-                        MAX_PLAYERS
+                        MAX_PLAYERS,
+                        p.lastActivityAt(),
+                        expiryPolicy.expiresAt(GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt())
                 ))
-                .sorted(Comparator.comparing(LobbyGameSummary::code))
+                .sorted(Comparator.comparingInt(LobbyGameSummary::playerCount).reversed()
+                        .thenComparing(LobbyGameSummary::code))
                 .toList();
         cachedLobbies = new CachedLobbies(now, summaries);
         return summaries;
