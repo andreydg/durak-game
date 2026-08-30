@@ -90,6 +90,18 @@ jobs:
       - name: Run Vitest
         run: npm run test:unit
 
+  deployment-config:
+    name: Deployment configuration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deploy script syntax
+        run: bash -n scripts/deploy-cloud-run.sh
+
+      - name: Test Secret Manager deployment contract
+        run: bash tests/scripts/deploy-cloud-run.test.sh
+
   e2e:
     name: End-to-end tests (Playwright)
     runs-on: ubuntu-latest

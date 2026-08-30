@@ -31,6 +31,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private static final Logger log = LoggerFactory.getLogger(GeminiAutoPlayDecisionEngine.class);
 
     private static final long MAX_CONNECT_TIMEOUT_MS = 5000;
+    static final String DEFAULT_MODEL = "gemini-3.7-flash";
 
     private final HeuristicAutoPlayDecisionEngine fallback;
     private final ObjectMapper objectMapper;
@@ -53,7 +54,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             ObjectMapper objectMapper,
             @Value("${autoplay.gemini.enabled:true}") boolean enabled,
             @Value("${autoplay.gemini.api-key:}") String apiKey,
-            @Value("${autoplay.gemini.model:gemini-3.1-flash-lite-preview}") String model,
+            @Value("${autoplay.gemini.model:" + DEFAULT_MODEL + "}") String model,
             @Value("${autoplay.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}") String baseUrl,
             @Value("${autoplay.gemini.thinking-level:HIGH}") String thinkingLevel,
             @Value("${autoplay.gemini.public-card-memory-enabled:true}") boolean publicCardMemoryEnabled,
@@ -141,20 +142,14 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         }
     }
 
-    private String endpoint() {
+    /** Package-private for request-contract tests. */
+    String endpoint() {
         return baseUrl + "/models/" + model + ":generateContent";
     }
 
     private String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
         String prompt = buildPrompt(game, playerId, legalMoves);
-        Map<String, Object> generationConfig = new LinkedHashMap<>();
-        generationConfig.put("temperature", 0);
-        if (jsonModeSupported) {
-            generationConfig.put("responseMimeType", "application/json");
-        }
-        if (thinkingConfigSupported) {
-            generationConfig.put("thinkingConfig", Map.of("thinkingLevel", thinkingLevel));
-        }
+        Map<String, Object> generationConfig = generationConfig();
         Map<String, Object> body = new LinkedHashMap<>();
         if (systemInstructionSupported) {
             body.put("systemInstruction", Map.of(
@@ -172,6 +167,22 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         }
         body.put("generationConfig", generationConfig);
         return objectMapper.writeValueAsString(body);
+    }
+
+    /** Package-private for request-contract tests. */
+    Map<String, Object> generationConfig() {
+        Map<String, Object> generationConfig = new LinkedHashMap<>();
+        // Gemini 3.7 uses model defaults instead of the deprecated sampling controls.
+        if (!model.startsWith("gemini-3.7")) {
+            generationConfig.put("temperature", 0);
+        }
+        if (jsonModeSupported) {
+            generationConfig.put("responseMimeType", "application/json");
+        }
+        if (thinkingConfigSupported) {
+            generationConfig.put("thinkingConfig", Map.of("thinkingLevel", thinkingLevel));
+        }
+        return generationConfig;
     }
 
     private String buildPrompt(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
