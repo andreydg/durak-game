@@ -1,6 +1,7 @@
 import {describe, expect, test} from "vitest";
 import {readFileSync, existsSync} from "node:fs";
 import {join} from "node:path";
+import {createHash} from "node:crypto";
 import {JSDOM} from "jsdom";
 
 const staticDir = join(process.cwd(), "src/main/resources/static");
@@ -21,6 +22,10 @@ function documentFor(file) {
 function structuredData(document) {
     return [...document.querySelectorAll('script[type="application/ld+json"]')]
         .map(script => JSON.parse(script.textContent));
+}
+
+function assetVersion(assetPath) {
+    return createHash("sha256").update(source(assetPath)).digest("hex").slice(0, 12);
 }
 
 describe("crawlable SEO pages", () => {
@@ -52,6 +57,20 @@ describe("crawlable SEO pages", () => {
         expect(visibleSource).toContain("2–4 players");
         expect(visibleSource).toContain("last player");
         expect(visibleSource).toContain("Quick Play vs Elektronik");
+    });
+
+    test.each(["index.html", "rules.html"])("%s content-versions every stylesheet and script", file => {
+        const document = documentFor(file);
+        const references = [
+            ...document.querySelectorAll('link[rel="stylesheet"][href], script[src]')
+        ].map(element => element.getAttribute(element.tagName === "LINK" ? "href" : "src"));
+
+        expect(references.length).toBeGreaterThan(0);
+        for (const reference of references) {
+            const url = new URL(reference, canonicalOrigin);
+            const assetPath = url.pathname.slice(1);
+            expect(url.searchParams.get("v"), `${file}: ${assetPath}`).toBe(assetVersion(assetPath));
+        }
     });
 
     test("structured data describes the English game and rules guide", () => {

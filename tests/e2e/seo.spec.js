@@ -42,6 +42,22 @@ test.describe("Search discovery and rules content", () => {
         expect((await request.get("/rules-ru.html")).status()).toBe(404);
     });
 
+    test("static pages use versioned assets that browsers must revalidate", async ({page}) => {
+        const documentResponse = await page.goto("/");
+        expect(documentResponse.headers()["cache-control"]).toContain("no-cache");
+
+        const assetUrls = await page.locator('link[rel="stylesheet"][href], script[src]').evaluateAll(elements =>
+            elements.map(element => element.href || element.src));
+        expect(assetUrls.length).toBeGreaterThan(0);
+
+        for (const assetUrl of assetUrls) {
+            expect(new URL(assetUrl).searchParams.get("v")).toMatch(/^[a-f0-9]{12}$/);
+            const response = await page.request.get(assetUrl);
+            expect(response.ok()).toBe(true);
+            expect(response.headers()["cache-control"]).toContain("no-cache");
+        }
+    });
+
     test("robots, sitemap, and social image use the English page set", async ({request}) => {
         const robots = await request.get("/robots.txt");
         expect(robots.ok()).toBe(true);
