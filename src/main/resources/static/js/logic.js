@@ -89,6 +89,45 @@
         return kept.length ? `?${kept.join("&")}` : "";
     }
 
+    /** Bounded exponential reconnect delay with ±20% jitter. */
+    function reconnectDelayMs(attempt, randomValue = Math.random()) {
+        const safeAttempt = Math.max(0, Math.min(10, Number(attempt) || 0));
+        const base = Math.min(30_000, 1_000 * (2 ** safeAttempt));
+        const random = Math.max(0, Math.min(1, Number(randomValue) || 0));
+        return Math.min(30_000, Math.round(base * (0.8 + random * 0.4)));
+    }
+
+    /** HTTP refresh is only a fallback/health check while realtime game updates are healthy. */
+    function gameRefreshDelayMs(webSocketConnected, visibilityState = "visible") {
+        if (visibilityState === "hidden") return null;
+        return webSocketConnected ? 30_000 : 3_000;
+    }
+
+    /** Prevent a delayed read from replacing newer state returned by an action. */
+    function shouldAcceptGameVersion(currentVersion, incomingVersion) {
+        if (currentVersion == null || incomingVersion == null) return true;
+        const current = Number(currentVersion);
+        const incoming = Number(incomingVersion);
+        if (!Number.isFinite(current) || !Number.isFinite(incoming)) return true;
+        return incoming >= current;
+    }
+
+    /** Preserve a pending prompt refresh unless the new deadline is earlier or explicitly replaces it. */
+    function shouldReplaceRefreshTimer(existingDueAt, requestedDueAt, replaceExisting = false) {
+        if (replaceExisting) return true;
+        const existing = Number(existingDueAt) || 0;
+        const requested = Number(requestedDueAt) || 0;
+        return existing <= 0 || requested < existing;
+    }
+
+    /** Lobby events drive normal updates; failed fallback reads back off to protect the store. */
+    function lobbyRefreshDelayMs(webSocketConnected, failureCount = 0, visibilityState = "visible") {
+        if (visibilityState === "hidden") return null;
+        if (webSocketConnected) return 60_000;
+        const failures = Math.max(0, Math.min(3, Number(failureCount) || 0));
+        return Math.min(30_000, 4_000 * (2 ** failures));
+    }
+
     function escapeHtml(text) {
         const d = document.createElement("div");
         d.textContent = text == null ? "" : String(text);
@@ -215,6 +254,11 @@
         roomCodeFromSearch,
         buildInviteUrl,
         searchWithoutRoomParam,
+        reconnectDelayMs,
+        gameRefreshDelayMs,
+        shouldAcceptGameVersion,
+        shouldReplaceRefreshTimer,
+        lobbyRefreshDelayMs,
         escapeHtml,
         roleTags,
         playerTeam,

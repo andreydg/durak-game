@@ -11,6 +11,7 @@ import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
 import com.example.durakgame.service.store.InMemoryGameStore;
+import com.example.durakgame.service.store.LobbyProjection;
 import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +26,11 @@ import java.util.Set;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -49,6 +55,16 @@ class GameServiceTest {
 
     private GameService newService(GameStore store, GameExpiryPolicy expiryPolicy) {
         return new GameService(store, noOpEngine, webSocket, expiryPolicy);
+    }
+
+    private GameService newService(GameStore store, LobbyUpdatePublisher lobbyUpdatePublisher) {
+        return new GameService(
+                store,
+                noOpEngine,
+                webSocket,
+                GameExpiryPolicy.defaults(),
+                lobbyUpdatePublisher
+        );
     }
 
     // --- createGame -------------------------------------------------------
@@ -90,6 +106,53 @@ class GameServiceTest {
         GameService service = newService(new InMemoryGameStore());
         assertThrows(IllegalArgumentException.class, () -> service.createGame("x"));
         assertThrows(IllegalArgumentException.class, () -> service.createGame("x".repeat(25)));
+    }
+
+    @Test
+    void onlyVisiblePublicLobbyMutationsPublishInvalidations() {
+        AtomicInteger invalidations = new AtomicInteger();
+        GameService service = newService(new InMemoryGameStore(), invalidations::incrementAndGet);
+
+        Game game = service.createGame("Host");
+        assertEquals(1, invalidations.get());
+
+        Player guest = service.joinGame(game.getCode(), "Guest");
+        assertEquals(2, invalidations.get());
+
+        service.heartbeat(game.getCode(), game.getHostPlayerId());
+        assertEquals(2, invalidations.get(), "heartbeat changes expiry only, not the visible lobby roster");
+
+        service.startGame(game.getCode(), game.getHostPlayerId());
+        assertEquals(3, invalidations.get());
+
+        service.leaveGame(game.getCode(), guest.getId());
+        assertEquals(4, invalidations.get());
+    }
+
+    @Test
+    void privateRoomMutationsDoNotInvalidatePublicLobby() {
+        AtomicInteger invalidations = new AtomicInteger();
+        GameService service = newService(new InMemoryGameStore(), invalidations::incrementAndGet);
+
+        Game game = service.createGame("Host", false);
+        Player guest = service.joinGame(game.getCode(), "Guest");
+        service.heartbeat(game.getCode(), game.getHostPlayerId());
+        service.startGame(game.getCode(), game.getHostPlayerId());
+        service.leaveGame(game.getCode(), guest.getId());
+
+        assertEquals(0, invalidations.get());
+    }
+
+    @Test
+    void lobbyPublishFailureCannotFailSuccessfulMutation() {
+        GameStore store = new InMemoryGameStore();
+        GameService service = newService(store, () -> {
+            throw new IllegalStateException("publisher unavailable");
+        });
+
+        Game game = org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> service.createGame("Host"));
+
+        assertTrue(store.existsByCode(game.getCode()));
     }
 
     @Test
@@ -479,6 +542,71 @@ class GameServiceTest {
 
         assertTrue(service.listOpenLobbies().isEmpty());
         assertFalse(store.existsByCode("MAXAGE"));
+    }
+
+    @Test
+    void deletingExpiredLobbyPublishesOneInvalidation() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        AtomicInteger invalidations = new AtomicInteger();
+        GameService service = new GameService(
+                store,
+                noOpEngine,
+                webSocket,
+                new GameExpiryPolicy(30, 24, 60),
+                invalidations::incrementAndGet
+        );
+        store.save(lobbyAt("OLD001", Instant.now().minus(31, ChronoUnit.MINUTES)));
+        store.save(lobbyAt("NEW001", Instant.now().minus(1, ChronoUnit.MINUTES)));
+
+        service.listOpenLobbies();
+        service.listOpenLobbies();
+
+        assertEquals(1, invalidations.get());
+    }
+
+    @Test
+    void concurrentMutationCannotReplaceInvalidatedCacheWithOlderSnapshot() throws Exception {
+        CountDownLatch firstReadCaptured = new CountDownLatch(1);
+        CountDownLatch releaseFirstRead = new CountDownLatch(1);
+        AtomicInteger reads = new AtomicInteger();
+        InMemoryGameStore store = new InMemoryGameStore() {
+            @Override
+            public List<LobbyProjection> listOpenLobbySummaries() {
+                List<LobbyProjection> snapshot = super.listOpenLobbySummaries();
+                if (reads.incrementAndGet() == 1) {
+                    firstReadCaptured.countDown();
+                    try {
+                        if (!releaseFirstRead.await(2, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("timed out waiting to release first lobby read");
+                        }
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(ex);
+                    }
+                }
+                return snapshot;
+            }
+        };
+        GameService service = newService(store);
+        Game first = service.createGame("First Host");
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<List<LobbyGameSummary>> listing = pool.submit(service::listOpenLobbies);
+            assertTrue(firstReadCaptured.await(2, TimeUnit.SECONDS));
+            Game second = service.createGame("Second Host");
+            releaseFirstRead.countDown();
+
+            List<String> codes = listing.get(2, TimeUnit.SECONDS).stream()
+                    .map(LobbyGameSummary::code)
+                    .toList();
+
+            assertTrue(codes.contains(first.getCode()));
+            assertTrue(codes.contains(second.getCode()));
+            assertEquals(2, reads.get(), "revision change should force one fresh projection read");
+        } finally {
+            releaseFirstRead.countDown();
+            pool.shutdownNow();
+        }
     }
 
     // --- mutateGame delegation & retry -----------------------------------

@@ -33,6 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -59,6 +61,7 @@ public class GameService {
     private final AutoPlayDecisionEngine autoPlayDecisionEngine;
     private final GameWebSocketHandler webSocketHandler;
     private final GameExpiryPolicy expiryPolicy;
+    private final LobbyUpdatePublisher lobbyUpdatePublisher;
     private final Set<String> autoPlayRunning = ConcurrentHashMap.newKeySet();
     /*
      * Serializes load->mutate->save per game code so concurrent actions (human + bot,
@@ -80,8 +83,9 @@ public class GameService {
     /* Bot turns block for seconds (LLM call + pacing pauses); virtual threads keep that cheap. */
     private final ExecutorService autoPlayExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile CachedLobbies cachedLobbies;
+    private final AtomicLong lobbyProjectionRevision = new AtomicLong();
 
-    private record CachedLobbies(long atMs, List<LobbyGameSummary> summaries) {
+    private record CachedLobbies(long atMs, long revision, List<LobbyGameSummary> summaries) {
     }
 
     @Autowired
@@ -89,12 +93,23 @@ public class GameService {
             GameStore gameStore,
             AutoPlayDecisionEngine autoPlayDecisionEngine,
             GameWebSocketHandler webSocketHandler,
-            GameExpiryPolicy expiryPolicy
+            GameExpiryPolicy expiryPolicy,
+            LobbyUpdatePublisher lobbyUpdatePublisher
     ) {
         this.gameStore = gameStore;
         this.autoPlayDecisionEngine = autoPlayDecisionEngine;
         this.webSocketHandler = webSocketHandler;
         this.expiryPolicy = expiryPolicy;
+        this.lobbyUpdatePublisher = lobbyUpdatePublisher;
+    }
+
+    GameService(
+            GameStore gameStore,
+            AutoPlayDecisionEngine autoPlayDecisionEngine,
+            GameWebSocketHandler webSocketHandler,
+            GameExpiryPolicy expiryPolicy
+    ) {
+        this(gameStore, autoPlayDecisionEngine, webSocketHandler, expiryPolicy, LobbyUpdatePublisher.noop());
     }
 
     GameService(
@@ -115,7 +130,9 @@ public class GameService {
         String code = generateUniqueCode();
         Game game = new Game(code, host, publicRoom);
         gameStore.save(game);
-        cachedLobbies = null;
+        if (publicRoom) {
+            publishLobbyChange();
+        }
         log.info("game_created code={} hostPlayerId={} hostName={} publicRoom={}",
                 game.getCode(), host.getId(), host.getName(), publicRoom);
         return game;
@@ -131,7 +148,6 @@ public class GameService {
         game.addPlayer(botName, MAX_PLAYERS, true);
         game.start(host.getId());
         gameStore.save(game);
-        cachedLobbies = null;
         log.info("game_quick_started code={} hostPlayerId={} hostName={} botName={}",
                 game.getCode(), host.getId(), host.getName(), botName);
         scheduleAutoPlay(code);
@@ -144,7 +160,9 @@ public class GameService {
                 .orElseThrow(() -> new NoSuchElementException("Game not found"));
         if (expiryPolicy.isExpired(game, Instant.now())) {
             gameStore.deleteByCode(normalizedCode);
-            cachedLobbies = null;
+            if (game.isPublicRoom() && game.getStatus() == GameStatus.LOBBY) {
+                publishLobbyChange();
+            }
             log.info("game_expired code={} status={} lastActivityAt={}",
                     game.getCode(), game.getStatus(), game.getLastActivityAt());
             throw new RoomExpiredException();
@@ -163,6 +181,11 @@ public class GameService {
             if (game.getStatus() != GameStatus.FINISHED) {
                 game.markActive();
                 gameStore.save(game);
+                if (game.isPublicRoom() && game.getStatus() == GameStatus.LOBBY) {
+                    // Expiry metadata changed, so bypass this instance's short projection cache.
+                    // The visible lobby roster did not change, so avoid broadcasting to every client.
+                    invalidateLobbyCache();
+                }
             }
             return game;
         });
@@ -212,6 +235,9 @@ public class GameService {
                         game.getCode(), game.getHostPlayerId(), game.getPlayers().size());
             }
             gameStore.save(game);
+            if (game.isPublicRoom()) {
+                publishLobbyChange();
+            }
             log.info("game_joined code={} playerId={} playerName={} players={}",
                     game.getCode(), player.getId(), player.getName(), game.getPlayers().size());
             return player;
@@ -238,6 +264,9 @@ public class GameService {
                 game.start(game.getHostPlayerId());
             }
             gameStore.save(game);
+            if (game.isPublicRoom()) {
+                publishLobbyChange();
+            }
             log.info("game_joined code={} playerId={} playerName={} players={}",
                     game.getCode(), added.getId(), added.getName(), game.getPlayers().size());
             return added;
@@ -278,6 +307,9 @@ public class GameService {
 
     public Game startGame(String gameCode, String playerId) {
         Game game = mutateGame(gameCode, g -> g.start(playerId));
+        if (game.isPublicRoom()) {
+            publishLobbyChange();
+        }
         log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), playerId, game.getPlayers().size());
         scheduleAutoPlay(game.getCode());
         return game;
@@ -370,9 +402,15 @@ public class GameService {
             boolean hasHumanPlayer = game.getPlayers().stream().anyMatch(player -> !player.isBot());
             if (!hasHumanPlayer) {
                 gameStore.deleteByCode(normalizedCode);
+                if (game.isPublicRoom()) {
+                    publishLobbyChange();
+                }
                 return true;
             }
             gameStore.save(game);
+            if (game.isPublicRoom()) {
+                publishLobbyChange();
+            }
             return false;
         });
     }
@@ -382,42 +420,74 @@ public class GameService {
     }
 
     /**
-     * Open lobby rooms waiting for players. Cached briefly because every connected
-     * client polls this and each refresh hits the store.
+     * Open lobby rooms waiting for players. Cached briefly as a safety net for reconnects
+     * and health checks; normal clients refresh when the lobby websocket is invalidated.
      */
     public List<LobbyGameSummary> listOpenLobbies() {
-        CachedLobbies cached = cachedLobbies;
-        long now = System.currentTimeMillis();
-        if (cached != null && now - cached.atMs() < LOBBY_CACHE_TTL_MS) {
-            return cached.summaries();
+        List<LobbyGameSummary> summaries = List.of();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            long revisionAtStart = lobbyProjectionRevision.get();
+            CachedLobbies cached = cachedLobbies;
+            long now = System.currentTimeMillis();
+            if (cached != null
+                    && cached.revision() == revisionAtStart
+                    && now - cached.atMs() < LOBBY_CACHE_TTL_MS) {
+                return cached.summaries();
+            }
+
+            Instant instantNow = Instant.now();
+            AtomicBoolean deletedExpiredLobby = new AtomicBoolean();
+            summaries = gameStore.listOpenLobbySummaries().stream()
+                    .filter(LobbyProjection::publicRoom)
+                    .filter(p -> p.playerCount() < MAX_PLAYERS)
+                    .filter(p -> {
+                        if (!expiryPolicy.isExpired(
+                                GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt(), instantNow)) {
+                            return true;
+                        }
+                        gameStore.deleteByCode(p.code());
+                        deletedExpiredLobby.set(true);
+                        log.info("game_expired code={} status=LOBBY lastActivityAt={}", p.code(), p.lastActivityAt());
+                        return false;
+                    })
+                    .map(p -> new LobbyGameSummary(
+                            p.code(),
+                            p.hostName(),
+                            p.playerNames(),
+                            p.playerCount(),
+                            MAX_PLAYERS,
+                            p.lastActivityAt(),
+                            expiryPolicy.expiresAt(GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt())
+                    ))
+                    .sorted(Comparator.comparingInt(LobbyGameSummary::playerCount).reversed()
+                            .thenComparing(LobbyGameSummary::code))
+                    .toList();
+            if (deletedExpiredLobby.get()) {
+                publishLobbyChange();
+            }
+
+            long revisionAfterRead = lobbyProjectionRevision.get();
+            if (revisionAfterRead == revisionAtStart) {
+                cachedLobbies = new CachedLobbies(now, revisionAtStart, summaries);
+                return summaries;
+            }
         }
-        Instant instantNow = Instant.now();
-        List<LobbyGameSummary> summaries = gameStore.listOpenLobbySummaries().stream()
-                .filter(LobbyProjection::publicRoom)
-                .filter(p -> p.playerCount() < MAX_PLAYERS)
-                .filter(p -> {
-                    if (!expiryPolicy.isExpired(
-                            GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt(), instantNow)) {
-                        return true;
-                    }
-                    gameStore.deleteByCode(p.code());
-                    log.info("game_expired code={} status=LOBBY lastActivityAt={}", p.code(), p.lastActivityAt());
-                    return false;
-                })
-                .map(p -> new LobbyGameSummary(
-                        p.code(),
-                        p.hostName(),
-                        p.playerNames(),
-                        p.playerCount(),
-                        MAX_PLAYERS,
-                        p.lastActivityAt(),
-                        expiryPolicy.expiresAt(GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt())
-                ))
-                .sorted(Comparator.comparingInt(LobbyGameSummary::playerCount).reversed()
-                        .thenComparing(LobbyGameSummary::code))
-                .toList();
-        cachedLobbies = new CachedLobbies(now, summaries);
         return summaries;
+    }
+
+    /** Lobby fan-out is best effort and must never turn a successful game mutation into an error. */
+    private void publishLobbyChange() {
+        invalidateLobbyCache();
+        try {
+            lobbyUpdatePublisher.lobbiesChanged();
+        } catch (RuntimeException ex) {
+            log.warn("lobby_update_publish_failed message={}", ex.getMessage());
+        }
+    }
+
+    private void invalidateLobbyCache() {
+        lobbyProjectionRevision.incrementAndGet();
+        cachedLobbies = null;
     }
 
     private String generateUniqueCode() {

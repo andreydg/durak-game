@@ -89,6 +89,37 @@ describe("displayStatus", () => {
     });
 });
 
+describe("shouldReplaceRefreshTimer", () => {
+    it("preserves an earlier catch-up deadline from a later health poll", () => {
+        expect(L.shouldReplaceRefreshTimer(1_200, 30_000)).toBe(false);
+    });
+
+    it("allows prompt fallback work to replace a later health poll", () => {
+        expect(L.shouldReplaceRefreshTimer(30_000, 1_200)).toBe(true);
+    });
+
+    it("allows explicit rescheduling and empty timer slots", () => {
+        expect(L.shouldReplaceRefreshTimer(1_200, 30_000, true)).toBe(true);
+        expect(L.shouldReplaceRefreshTimer(0, 30_000)).toBe(true);
+    });
+});
+
+describe("shouldAcceptGameVersion", () => {
+    it("rejects a delayed snapshot older than current action state", () => {
+        expect(L.shouldAcceptGameVersion(10, 9)).toBe(false);
+    });
+
+    it("accepts equal and newer snapshots", () => {
+        expect(L.shouldAcceptGameVersion(10, 10)).toBe(true);
+        expect(L.shouldAcceptGameVersion(10, 11)).toBe(true);
+    });
+
+    it("accepts snapshots when either version is unavailable", () => {
+        expect(L.shouldAcceptGameVersion(undefined, 1)).toBe(true);
+        expect(L.shouldAcceptGameVersion(1, undefined)).toBe(true);
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
         expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");
@@ -336,5 +367,46 @@ describe("lobbyRowsHtml", () => {
         const html = L.lobbyRowsHtml(evil, true, null);
         expect(html).not.toContain("<img src=x>");
         expect(html).toContain("&lt;img");
+    });
+});
+
+describe("realtime fallback timing", () => {
+    it("uses exponential reconnect backoff and caps it at 30 seconds", () => {
+        expect(L.reconnectDelayMs(0, 0.5)).toBe(1_000);
+        expect(L.reconnectDelayMs(1, 0.5)).toBe(2_000);
+        expect(L.reconnectDelayMs(4, 0.5)).toBe(16_000);
+        expect(L.reconnectDelayMs(20, 1)).toBe(30_000);
+    });
+
+    it("adds bounded jitter without allowing negative delays", () => {
+        expect(L.reconnectDelayMs(0, 0)).toBe(800);
+        expect(L.reconnectDelayMs(0, 1)).toBe(1_200);
+        expect(L.reconnectDelayMs(-5, -1)).toBe(800);
+    });
+
+    it("backs game HTTP refreshes off when the websocket is healthy", () => {
+        expect(L.gameRefreshDelayMs(false, "visible")).toBe(3_000);
+        expect(L.gameRefreshDelayMs(true, "visible")).toBe(30_000);
+    });
+
+    it("pauses game refreshes in hidden tabs", () => {
+        expect(L.gameRefreshDelayMs(false, "hidden")).toBeNull();
+        expect(L.gameRefreshDelayMs(true, "hidden")).toBeNull();
+    });
+
+    it("uses a long lobby health interval when invalidations are connected", () => {
+        expect(L.lobbyRefreshDelayMs(true, 0, "visible")).toBe(60_000);
+    });
+
+    it("backs failed lobby fallback reads off and caps them", () => {
+        expect(L.lobbyRefreshDelayMs(false, 0, "visible")).toBe(4_000);
+        expect(L.lobbyRefreshDelayMs(false, 1, "visible")).toBe(8_000);
+        expect(L.lobbyRefreshDelayMs(false, 2, "visible")).toBe(16_000);
+        expect(L.lobbyRefreshDelayMs(false, 99, "visible")).toBe(30_000);
+    });
+
+    it("pauses lobby health reads in hidden tabs", () => {
+        expect(L.lobbyRefreshDelayMs(false, 0, "hidden")).toBeNull();
+        expect(L.lobbyRefreshDelayMs(true, 0, "hidden")).toBeNull();
     });
 });

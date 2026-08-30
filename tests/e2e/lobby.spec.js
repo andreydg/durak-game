@@ -256,4 +256,266 @@ test.describe("Lobby & room creation", () => {
         await expect(otherPage.locator("#lobbyGameList")).toContainText(code, { timeout: 15_000 });
         await otherContext.close();
     });
+
+    test("an already-open visitor receives create and leave invalidations immediately", async ({ page, browser }) => {
+        const observerContext = await browser.newContext();
+        const observer = await observerContext.newPage();
+        const observerSocket = observer.waitForEvent(
+            "websocket",
+            socket => socket.url().endsWith("/ws/lobbies")
+        );
+        await observer.goto("/");
+        await observerSocket;
+
+        await page.goto("/");
+        await page.fill("#hostName", "Realtime Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
+        const code = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
+
+        await expect(observer.locator("#lobbyGameList")).toContainText(code, { timeout: 2_500 });
+        await page.click("#leaveBtn");
+        await expect(observer.locator("#lobbyGameList")).not.toContainText(code, { timeout: 2_500 });
+        await observerContext.close();
+    });
+
+    test("healthy lobby websocket eliminates fixed-interval lobby reads", async ({ page }) => {
+        let lobbyGets = 0;
+        page.on("request", request => {
+            if (request.method() === "GET" && new URL(request.url()).pathname === "/api/lobbies") {
+                lobbyGets++;
+            }
+        });
+        const socketOpened = page.waitForEvent(
+            "websocket",
+            socket => socket.url().endsWith("/ws/lobbies")
+        );
+
+        await page.goto("/");
+        await socketOpened;
+        await page.waitForTimeout(750); // allow initial read + revision handshake read to settle
+        lobbyGets = 0;
+        await page.waitForTimeout(4_500);
+
+        expect(lobbyGets).toBe(0);
+    });
+
+    test("lobby HTTP fallback remains active when its websocket closes", async ({ page }) => {
+        await page.routeWebSocket("**/ws/lobbies", socket => {
+            setTimeout(() => socket.close({
+                code: 1011,
+                reason: "test disconnect"
+            }), 100);
+        });
+        let lobbyGets = 0;
+        page.on("request", request => {
+            if (request.method() === "GET" && new URL(request.url()).pathname === "/api/lobbies") {
+                lobbyGets++;
+            }
+        });
+
+        await page.goto("/");
+        await page.waitForTimeout(500);
+        lobbyGets = 0;
+        await page.waitForTimeout(4_200);
+
+        expect(lobbyGets).toBeGreaterThanOrEqual(1);
+    });
+
+    test("repeated lobby handshakes back off until a connection stays healthy", async ({ page }) => {
+        const connectionTimes = [];
+        let revision = 0;
+        await page.routeWebSocket("**/ws/lobbies", socket => {
+            connectionTimes.push(Date.now());
+            setTimeout(() => socket.send(JSON.stringify({
+                type: "LOBBIES_READY",
+                streamId: "flapping-test",
+                revision: revision++
+            })), 10);
+            setTimeout(() => socket.close({
+                code: 1011,
+                reason: "flapping test"
+            }), 60);
+        });
+
+        await page.goto("/");
+        await expect.poll(() => connectionTimes.length, {timeout: 7_000}).toBeGreaterThanOrEqual(3);
+
+        const firstRetryMs = connectionTimes[1] - connectionTimes[0];
+        const secondRetryMs = connectionTimes[2] - connectionTimes[1];
+        expect(firstRetryMs).toBeGreaterThanOrEqual(700);
+        expect(secondRetryMs).toBeGreaterThan(firstRetryMs);
+        expect(secondRetryMs).toBeGreaterThanOrEqual(1_400);
+    });
+
+    test("a lobby render failure releases the single-flight refresh lock", async ({ page }) => {
+        await page.goto("/");
+        await page.evaluate(() => window.refreshLobbyLists());
+
+        const failed = await page.evaluate(async () => {
+            const list = document.getElementById("lobbyGameList");
+            Object.defineProperty(list, "innerHTML", {
+                configurable: true,
+                set() { throw new Error("test render failure"); }
+            });
+            const result = await window.refreshLobbyLists();
+            delete list.innerHTML;
+            return result;
+        });
+
+        expect(failed).toBe(false);
+        await expect(page.evaluate(() => window.refreshLobbyLists())).resolves.toBe(true);
+    });
+
+    test("healthy game websocket eliminates three-second lobby-state game reads", async ({ page }) => {
+        let gameGets = 0;
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === "GET" && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                gameGets++;
+            }
+        });
+        await page.goto("/");
+        const socketOpened = page.waitForEvent(
+            "websocket",
+            socket => socket.url().includes("/ws/games/")
+        );
+        await page.fill("#hostName", "Efficient Host");
+        await page.click("#createBtn");
+        await socketOpened;
+        await page.waitForTimeout(500);
+        gameGets = 0;
+        await page.waitForTimeout(3_500);
+
+        expect(gameGets).toBe(0);
+    });
+
+    test("game HTTP fallback remains active when its websocket closes", async ({ page }) => {
+        await page.routeWebSocket("**/ws/games/*", socket => socket.close({
+            code: 1011,
+            reason: "test disconnect"
+        }));
+        let gameGets = 0;
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === "GET" && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                gameGets++;
+            }
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Fallback Host");
+        await page.click("#createBtn");
+        await page.waitForTimeout(500);
+        gameGets = 0;
+        await page.waitForTimeout(3_500);
+
+        expect(gameGets).toBeGreaterThanOrEqual(1);
+    });
+
+    test("a reconnected game websocket triggers an immediate catch-up read", async ({ page }) => {
+        let connections = 0;
+        let secondConnectionSeen = false;
+        let readsAfterSecondConnection = 0;
+        await page.routeWebSocket("**/ws/games/*", socket => {
+            connections++;
+            if (connections === 1) {
+                setTimeout(() => socket.close({
+                    code: 1011,
+                    reason: "force reconnect"
+                }), 75);
+            } else {
+                secondConnectionSeen = true;
+            }
+        });
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (secondConnectionSeen
+                && request.method() === "GET"
+                && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                readsAfterSecondConnection++;
+            }
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Reconnect Catch-up Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect.poll(() => connections, {timeout: 5_000}).toBeGreaterThanOrEqual(2);
+        await expect.poll(() => readsAfterSecondConnection, {timeout: 1_500}).toBeGreaterThanOrEqual(1);
+    });
+
+    test("a game update suppressed by an action gets a prompt catch-up read", async ({ page }) => {
+        let gameSocket = null;
+        await page.routeWebSocket("**/ws/games/*", socket => {
+            gameSocket = socket;
+        });
+        let gameGets = 0;
+        page.on("request", request => {
+            const path = new URL(request.url()).pathname;
+            if (request.method() === "GET" && /^\/api\/games\/[A-Z0-9]{6}$/.test(path)) {
+                gameGets++;
+            }
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Catch-up Host");
+        await page.click("#createBtn");
+        await expect.poll(() => gameSocket !== null).toBe(true);
+        await expect(page.locator("#createBtn")).not.toHaveAttribute("aria-busy", "true");
+        gameGets = 0;
+
+        gameSocket.send(JSON.stringify({type: "GAME_UPDATED", version: 999}));
+
+        await expect.poll(() => gameGets, {timeout: 2_500}).toBeGreaterThanOrEqual(1);
+    });
+
+    test("an in-flight refresh cannot postpone a suppressed update catch-up", async ({ page }) => {
+        let gameSocket = null;
+        await page.routeWebSocket("**/ws/games/*", socket => {
+            gameSocket = socket;
+        });
+
+        let gameGets = 0;
+        let holdNextGameGet = false;
+        let releaseHeldGet;
+        let reportHeldGet;
+        const heldGet = new Promise(resolve => { reportHeldGet = resolve; });
+        const releaseGet = new Promise(resolve => { releaseHeldGet = resolve; });
+        await page.route("**/api/games/*", async route => {
+            const request = route.request();
+            const path = new URL(request.url()).pathname;
+            const isGameGet = request.method() === "GET"
+                && /^\/api\/games\/[A-Z0-9]{6}$/.test(path);
+            if (isGameGet) {
+                gameGets++;
+                if (holdNextGameGet) {
+                    holdNextGameGet = false;
+                    reportHeldGet();
+                    await releaseGet;
+                }
+            }
+            await route.continue();
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Timer Race Host");
+        await page.click("#createBtn");
+        await expect.poll(() => gameSocket !== null).toBe(true);
+        await expect(page.locator("#createBtn")).not.toHaveAttribute("aria-busy", "true");
+        await page.evaluate(() => window.stopPolling());
+
+        holdNextGameGet = true;
+        const inFlightRefresh = page.evaluate(() => window.refreshGame(false));
+        await heldGet;
+        await page.evaluate(() => window.runAction("Synthetic action", async () => {}));
+        gameSocket.send(JSON.stringify({type: "GAME_UPDATED", version: 999}));
+        await page.waitForTimeout(100);
+        releaseHeldGet();
+        await inFlightRefresh;
+
+        const readsAfterInFlightRefresh = gameGets;
+        await expect.poll(() => gameGets, {timeout: 2_500})
+            .toBeGreaterThan(readsAfterInFlightRefresh);
+    });
 });

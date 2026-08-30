@@ -144,19 +144,26 @@ test("a remotely observed game transition clears stale card selection", async ({
         sessionStorage.setItem("durak_player_token", "host-secret");
     });
     let remoteStatus = "IN_PROGRESS";
-    await page.route("**/api/games/FIN123**", route => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(game(remoteStatus))
-    }));
+    let remoteVersion = 12;
+    await page.route("**/api/games/FIN123**", route => {
+        const response = game(remoteStatus);
+        response.version = remoteVersion;
+        return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(response)
+        });
+    });
 
     await page.goto("/");
     await page.locator("#myHand .hand-card-btn").first().click();
     await expect(page.locator("#myHand .hand-card-btn.selected")).toHaveCount(1);
 
     remoteStatus = "FINISHED";
+    remoteVersion = 13;
     await page.evaluate(() => window.refreshGame(false));
     remoteStatus = "IN_PROGRESS";
+    remoteVersion = 14;
     await page.evaluate(() => window.refreshGame(false));
 
     await expect(page.locator("#myHand .hand-card-btn.selected")).toHaveCount(0);
