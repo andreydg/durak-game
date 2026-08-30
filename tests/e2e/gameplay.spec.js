@@ -34,6 +34,21 @@ test.describe("Gameplay against a bot", () => {
         await expect(page.locator("#trumpSuitHud")).toBeVisible();
     });
 
+    test("host can reload an active game without deleting it", async ({ page }) => {
+        const code = await createRoom(page, "Reload Host");
+        await page.click("#addBotBtn");
+        await expect(page.locator("#roleLabel")).toContainText("Elektronik", { timeout: 10_000 });
+        await page.click("#startBtn");
+        await expect(page.locator("#statusLabel")).toHaveText("In progress", { timeout: 10_000 });
+
+        await page.reload();
+
+        await expect(page.locator("#gameView")).toBeVisible();
+        await expect(page.locator("#gameCodeLabel")).toHaveText(code);
+        await expect(page.locator("#statusLabel")).toHaveText("In progress");
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
+    });
+
     test("selecting a hand card toggles its selected state and updates the hint", async ({ page }) => {
         await createRoom(page);
         await page.click("#addBotBtn");

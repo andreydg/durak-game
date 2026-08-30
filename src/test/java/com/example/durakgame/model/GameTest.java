@@ -47,6 +47,31 @@ class GameTest {
     }
 
     @Test
+    void removingHostTransfersOwnershipToFirstRemainingHuman() {
+        Game game = new Game("CODE03", new Player("Host"));
+        Player bot = game.addPlayer("Bot", 4, true);
+        Player guest = game.addPlayer("Guest", 4);
+
+        assertTrue(game.removePlayerFromLobby(game.getHostPlayerId()));
+
+        assertEquals(guest.getId(), game.getHostPlayerId());
+        assertNotEquals(bot.getId(), game.getHostPlayerId());
+        assertDoesNotThrow(() -> game.start(guest.getId()));
+    }
+
+    @Test
+    void removingHostFromStartedGameTransfersOwnershipAndResetsLobby() {
+        Game game = new Game("CODE04", new Player("Host"));
+        Player guest = game.addPlayer("Guest", 4);
+        game.start(game.getHostPlayerId());
+
+        assertTrue(game.removePlayerAndResetToLobby(game.getHostPlayerId()));
+
+        assertEquals(GameStatus.LOBBY, game.getStatus());
+        assertEquals(guest.getId(), game.getHostPlayerId());
+    }
+
+    @Test
     void podkidnoyAttackMustMatchRankOnTable() {
         Game game = inProgress(
                 List.of(

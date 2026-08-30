@@ -34,7 +34,6 @@ const state = {
     pollTimer: null,
     ws: null,
     wsConnected: false,
-    leaveNotified: false,
     suppressWsRefreshUntilMs: 0,
     lastWsHealthRefreshMs: 0,
     botThinking: {},
@@ -43,6 +42,7 @@ const state = {
 
 const lobbyView = document.getElementById("lobbyView");
 const gameView = document.getElementById("gameView");
+const appAlert = document.getElementById("appAlert");
 const playingArea = document.getElementById("playingArea");
 const gameplayHintEl = document.getElementById("gameplayHint");
 const helpToggleBtn = document.getElementById("helpToggleBtn");
@@ -95,6 +95,21 @@ function log(message) {
     messages.textContent = `[${now}] ${message}`;
 }
 
+function clearError(kind = null) {
+    if (!appAlert) return;
+    if (kind && appAlert.dataset.kind !== kind) return;
+    appAlert.textContent = "";
+    delete appAlert.dataset.kind;
+    appAlert.classList.add("hidden");
+}
+
+function showError(message, kind = "action") {
+    if (!appAlert) return;
+    appAlert.textContent = message || "Something went wrong. Please try again.";
+    appAlert.dataset.kind = kind;
+    appAlert.classList.remove("hidden");
+}
+
 /* Capability token proving we own state.playerId; falls back to the id for legacy sessions/games. */
 function effectivePlayerToken() {
     return state.playerToken || state.playerId || "";
@@ -116,36 +131,6 @@ async function api(path, method, body) {
         throw new Error(payload.message || "Request failed");
     }
     return payload;
-}
-
-function notifyLeaveOnUnload() {
-    if (state.leaveNotified) return;
-    const code = state.gameCode;
-    const playerId = state.playerId;
-    if (!code || !playerId) return;
-    // Beacons can't set headers, so carry the token in the body; the server accepts either.
-    const payload = JSON.stringify({ playerId, token: effectivePlayerToken() });
-    try {
-        const blob = new Blob([payload], { type: "application/json" });
-        const sent = navigator.sendBeacon(`/api/games/${code}/leave`, blob);
-        if (sent) {
-            state.leaveNotified = true;
-            return;
-        }
-    } catch (_) {
-        // Fall through to fetch keepalive.
-    }
-    try {
-        fetch(`/api/games/${code}/leave`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...authHeaders() },
-            body: payload,
-            keepalive: true
-        });
-        state.leaveNotified = true;
-    } catch (_) {
-        // Best-effort only during unload.
-    }
 }
 
 function saveSession() {
@@ -685,12 +670,17 @@ async function refreshGame(showMessage = false) {
         state.game = await api(`/api/games/${state.gameCode}?${query}`, "GET");
         syncBotThinkingFromGame(state.game);
         render();
+        // A healthy read resolves connection failures, but it must not erase a
+        // gameplay/action error that the player is still trying to understand.
+        clearError("connection");
         if (showMessage) log("Game refreshed.");
     } catch (err) {
         if (err.message === "Game not found") {
             clearSession();
+            showError("This room no longer exists.", "session");
             return;
         }
+        showError(`Connection problem: ${err.message}`, "connection");
         log(`Refresh failed: ${err.message}`);
     }
 }
@@ -708,7 +698,14 @@ function syncBotThinkingFromGame(game) {
     state.botThinkingEventAt = nextEventAt;
 }
 
-async function runAction(name, fn) {
+async function runAction(name, fn, trigger = null) {
+    clearError();
+    const previousText = trigger ? trigger.textContent : "";
+    if (trigger) {
+        trigger.disabled = true;
+        trigger.setAttribute("aria-busy", "true");
+        trigger.textContent = `${name}…`;
+    }
     try {
         await fn();
         syncBotThinkingFromGame(state.game);
@@ -717,8 +714,17 @@ async function runAction(name, fn) {
         // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
         state.suppressWsRefreshUntilMs = Date.now() + 1200;
         log(`${name} success.`);
+        return true;
     } catch (err) {
+        showError(`${name}: ${err.message}`);
         log(`${name} failed: ${err.message}`);
+        return false;
+    } finally {
+        if (trigger) {
+            trigger.disabled = false;
+            trigger.removeAttribute("aria-busy");
+            trigger.textContent = previousText;
+        }
     }
 }
 
@@ -807,7 +813,6 @@ function clearSession() {
     state.playerToken = "";
     state.game = null;
     state.selectedHandCard = null;
-    state.leaveNotified = false;
     saveSession();
     stopPolling();
     closeWebSocket();
@@ -815,7 +820,9 @@ function clearSession() {
     log("Session cleared.");
 }
 
-document.getElementById("createBtn").addEventListener("click", async () => {
+document.getElementById("hostForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const createBtn = document.getElementById("createBtn");
     await runAction("Create game", async () => {
         const created = await api("/api/games", "POST", {hostName: hostNameInput.value.trim()});
         state.gameCode = created.game.code;
@@ -826,17 +833,19 @@ document.getElementById("createBtn").addEventListener("click", async () => {
         saveSession();
         beginPolling();
         connectWebSocket();
-    });
+    }, createBtn);
 });
 
-document.getElementById("joinBtn").addEventListener("click", async () => {
-    await runAction("Join game", () => performJoin(null));
+document.getElementById("joinForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const joinBtn = document.getElementById("joinBtn");
+    await runAction("Join game", () => performJoin(null), joinBtn);
 });
 
 document.getElementById("leaveBtn").addEventListener("click", async () => {
     const code = state.gameCode;
     const playerId = state.playerId;
-    state.leaveNotified = true;
+    clearError();
     try {
         if (code && playerId) {
             await api(`/api/games/${code}/leave`, "POST", {playerId});
@@ -943,9 +952,6 @@ battleCards.addEventListener("drop", async (e) => {
     const code = (e.dataTransfer.getData("text/plain") || "").trim();
     if (code) await playCardToTable(code, preferred || undefined);
 });
-
-window.addEventListener("pagehide", notifyLeaveOnUnload);
-window.addEventListener("beforeunload", notifyLeaveOnUnload);
 
 (async function init() {
     if (state.gameCode && state.playerId) {

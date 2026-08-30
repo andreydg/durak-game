@@ -21,7 +21,7 @@ public class Game implements Serializable {
     private final String code;
     private final Instant createdAt;
     private final List<Player> players = new ArrayList<>();
-    private final String hostPlayerId;
+    private String hostPlayerId;
     private final Deque<Card> talon = new ArrayDeque<>();
     private final List<AttackEntry> table = new ArrayList<>();
     private final Set<Rank> tableRanks = new HashSet<>();
@@ -124,6 +124,7 @@ public class Game implements Serializable {
         boolean removed = players.removeIf(player -> player.getId().equals(playerId));
         if (removed) {
             knownCardsByPlayer.remove(playerId);
+            transferHostAfterDeparture(playerId);
             touch();
         }
         return removed;
@@ -142,6 +143,7 @@ public class Game implements Serializable {
             return false;
         }
         knownCardsByPlayer.remove(playerId);
+        transferHostAfterDeparture(playerId);
         resetToLobbyState();
         touch();
         return true;
@@ -747,6 +749,22 @@ public class Game implements Serializable {
         attackerIndex = -1;
         defenderIndex = -1;
         loserPlayerId = null;
+    }
+
+    /**
+     * Keeps a surviving room controllable when its original host intentionally leaves.
+     * Prefer the earliest seated human; a bot is only selected when no human remains so
+     * callers can decide whether a bot-only room should be deleted.
+     */
+    private void transferHostAfterDeparture(String departedPlayerId) {
+        if (!Objects.equals(hostPlayerId, departedPlayerId) || players.isEmpty()) {
+            return;
+        }
+        hostPlayerId = players.stream()
+                .filter(player -> !player.isBot())
+                .findFirst()
+                .orElse(players.getFirst())
+                .getId();
     }
 
     private void finalizeTakeCardsRound() {

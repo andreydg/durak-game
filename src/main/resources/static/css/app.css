@@ -9,6 +9,23 @@ body {
 }
 /* Must win over .stack etc., or #gameView stays visible and the table leaks onto the lobby. */
 .hidden { display: none !important; }
+.app-alert {
+    position: fixed;
+    z-index: 1000;
+    top: max(0.75rem, env(safe-area-inset-top, 0px));
+    left: 50%;
+    width: min(calc(100% - 1.5rem), 42rem);
+    transform: translateX(-50%);
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--danger);
+    border-radius: 10px;
+    color: var(--danger-strong);
+    background: color-mix(in srgb, var(--danger) 12%, white);
+    box-shadow: var(--shadow-soft);
+    font-weight: 700;
+    line-height: 1.4;
+    pointer-events: none;
+}
 .stack { display: grid; gap: 1rem; }
 .panel {
     border: 1px solid var(--border);
