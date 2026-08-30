@@ -125,6 +125,66 @@
         return dt != null && vt != null && vt !== dt;
     }
 
+    function gameResult(game, viewerId) {
+        if (!game || game.status !== "FINISHED") return null;
+        const players = game.players || [];
+        const viewer = players.find(player => player.id === viewerId) || null;
+        if (!game.loserPlayerId) {
+            return {
+                outcome: "draw",
+                icon: "🤝",
+                title: "Nobody is the durak",
+                summary: "The game ended with no player holding cards."
+            };
+        }
+        const seatedLoser = players.find(player => player.id === game.loserPlayerId) || null;
+        const loser = seatedLoser || (game.loserPlayerName ? {
+            id: game.loserPlayerId,
+            name: game.loserPlayerName,
+            team: game.loserTeam ?? null
+        } : null);
+        if (!loser) {
+            return {
+                outcome: "spectator",
+                icon: "🃏",
+                title: "The durak left the table",
+                summary: "The completed result is still preserved."
+            };
+        }
+        const teamGame = loser.team != null;
+        if (teamGame && viewer?.team != null) {
+            const viewerLost = viewer.team === loser.team;
+            return {
+                outcome: viewerLost ? "loss" : "win",
+                icon: viewerLost ? "🤡" : "🏆",
+                title: viewerLost ? "Your team is the durak" : "Your team won!",
+                summary: `${loser.name}’s team was left holding cards.`
+            };
+        }
+        if (viewer?.id === loser.id) {
+            return {
+                outcome: "loss",
+                icon: "🤡",
+                title: "You’re the durak",
+                summary: "You were the last player holding cards."
+            };
+        }
+        if (viewer) {
+            return {
+                outcome: "win",
+                icon: "🏆",
+                title: "You won!",
+                summary: `${loser.name} was the last player holding cards.`
+            };
+        }
+        return {
+            outcome: "spectator",
+            icon: "🃏",
+            title: `${loser.name} is the durak`,
+            summary: `${loser.name} was the last player holding cards.`
+        };
+    }
+
     function lobbyRowsHtml(rows, interactive, currentCode) {
         const cur = (currentCode || "").toUpperCase();
         if (!rows.length) return "";
@@ -159,6 +219,7 @@
         roleTags,
         playerTeam,
         onAttackingSide,
+        gameResult,
         lobbyRowsHtml
     };
 });

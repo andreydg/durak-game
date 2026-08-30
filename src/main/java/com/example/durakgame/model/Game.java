@@ -40,6 +40,8 @@ public class Game implements Serializable {
     private int attackerIndex = -1;
     private int defenderIndex = -1;
     private String loserPlayerId;
+    private String loserPlayerName;
+    private Integer loserTeam;
     private long version = 0;
 
     public record Snapshot(
@@ -63,7 +65,9 @@ public class Game implements Serializable {
             Set<String> endRoundApprovals,
             List<Card> discardedCards,
             List<KnownCardsSnapshot> knownCardsByPlayer,
-            boolean publicRoom
+            boolean publicRoom,
+            String loserPlayerName,
+            Integer loserTeam
     ) {
         /** Source-compatible constructor for snapshots before lobby phases and visibility were tracked. */
         public Snapshot(
@@ -90,7 +94,7 @@ public class Game implements Serializable {
             this(code, createdAtEpochMs, lastActivityAtEpochMs, createdAtEpochMs, hostPlayerId, status,
                     trumpSuit, trumpCard, attackerIndex, defenderIndex, loserPlayerId, takingCardsInProgress,
                     takeLimit, version, players, talon, table, endRoundApprovals, discardedCards,
-                    knownCardsByPlayer, true);
+                    knownCardsByPlayer, true, loserName(players, loserPlayerId), loserTeam(players, loserPlayerId));
         }
 
         /** Source-compatible constructor for the visibility format before lobby phases were tracked. */
@@ -119,7 +123,25 @@ public class Game implements Serializable {
             this(code, createdAtEpochMs, lastActivityAtEpochMs, createdAtEpochMs, hostPlayerId, status,
                     trumpSuit, trumpCard, attackerIndex, defenderIndex, loserPlayerId, takingCardsInProgress,
                     takeLimit, version, players, talon, table, endRoundApprovals, discardedCards,
-                    knownCardsByPlayer, publicRoom);
+                    knownCardsByPlayer, publicRoom,
+                    loserName(players, loserPlayerId), loserTeam(players, loserPlayerId));
+        }
+
+        private static String loserName(List<PlayerSnapshot> players, String loserPlayerId) {
+            return players.stream()
+                    .filter(player -> Objects.equals(player.id(), loserPlayerId))
+                    .map(PlayerSnapshot::name)
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        private static Integer loserTeam(List<PlayerSnapshot> players, String loserPlayerId) {
+            return players.stream()
+                    .filter(player -> Objects.equals(player.id(), loserPlayerId))
+                    .map(PlayerSnapshot::team)
+                    .filter(Objects::nonNull)
+                    .findFirst()
+                    .orElse(null);
         }
     }
 
@@ -218,6 +240,22 @@ public class Game implements Serializable {
         return true;
     }
 
+    /** Removes a player after the result is known without dismissing it for everyone else. */
+    public synchronized boolean removePlayerFromFinishedGame(String playerId) {
+        if (status != GameStatus.FINISHED) {
+            throw new IllegalStateException("Finished-game removal requires a completed game");
+        }
+        boolean removed = players.removeIf(player -> player.getId().equals(playerId));
+        if (removed) {
+            knownCardsByPlayer.remove(playerId);
+            transferHostAfterDeparture(playerId);
+            attackerIndex = -1;
+            defenderIndex = -1;
+            touch();
+        }
+        return removed;
+    }
+
     public synchronized void start(String playerId) {
         ensureLobby();
         if (!Objects.equals(hostPlayerId, playerId)) {
@@ -235,6 +273,22 @@ public class Game implements Serializable {
         this.defenderIndex = nextEligibleDefenderIndex(attackerIndex);
         this.status = GameStatus.IN_PROGRESS;
         touch();
+    }
+
+    /** Starts a fresh deal with the same room, seats, teams, and player credentials. */
+    public synchronized void rematch(String playerId) {
+        if (status != GameStatus.FINISHED) {
+            throw new IllegalStateException("Rematch is available after the game finishes");
+        }
+        if (!Objects.equals(hostPlayerId, playerId)) {
+            throw new IllegalStateException("Only host can start a rematch");
+        }
+        resetToLobbyState();
+        if (players.size() >= 2) {
+            start(playerId);
+        } else {
+            touch();
+        }
     }
 
     public synchronized void attack(String playerId, Card card) {
@@ -475,6 +529,14 @@ public class Game implements Serializable {
         return loserPlayerId;
     }
 
+    public String getLoserPlayerName() {
+        return loserPlayerName;
+    }
+
+    public Integer getLoserTeam() {
+        return loserTeam;
+    }
+
     public synchronized long getVersion() {
         return version;
     }
@@ -537,7 +599,9 @@ public class Game implements Serializable {
                 Set.copyOf(endRoundApprovals),
                 List.copyOf(discardedCards),
                 knownCardsSnapshots,
-                publicRoom
+                publicRoom,
+                loserPlayerName,
+                loserTeam
         );
     }
 
@@ -578,6 +642,17 @@ public class Game implements Serializable {
         game.attackerIndex = snapshot.attackerIndex();
         game.defenderIndex = snapshot.defenderIndex();
         game.loserPlayerId = snapshot.loserPlayerId();
+        game.loserPlayerName = snapshot.loserPlayerName();
+        game.loserTeam = snapshot.loserTeam();
+        if (game.loserPlayerId != null && game.loserPlayerName == null) {
+            game.players.stream()
+                    .filter(player -> Objects.equals(player.getId(), game.loserPlayerId))
+                    .findFirst()
+                    .ifPresent(player -> {
+                        game.loserPlayerName = player.getName();
+                        game.loserTeam = player.getTeam();
+                    });
+        }
         game.takingCardsInProgress = snapshot.takingCardsInProgress();
         game.takeLimit = snapshot.takeLimit();
         game.version = snapshot.version();
@@ -844,6 +919,8 @@ public class Game implements Serializable {
         attackerIndex = -1;
         defenderIndex = -1;
         loserPlayerId = null;
+        loserPlayerName = null;
+        loserTeam = null;
     }
 
     /**
@@ -948,8 +1025,7 @@ public class Game implements Serializable {
                 .filter(player -> player.handSize() > 0)
                 .toList();
         if (remaining.size() <= 1) {
-            status = GameStatus.FINISHED;
-            loserPlayerId = remaining.isEmpty() ? null : remaining.getFirst().getId();
+            finishWithLoser(remaining.isEmpty() ? null : remaining.getFirst());
             return;
         }
         /*
@@ -960,9 +1036,15 @@ public class Game implements Serializable {
         Integer remainingTeam = remaining.getFirst().getTeam();
         if (remainingTeam != null
                 && remaining.stream().allMatch(player -> Objects.equals(player.getTeam(), remainingTeam))) {
-            status = GameStatus.FINISHED;
-            loserPlayerId = remaining.getFirst().getId();
+            finishWithLoser(remaining.getFirst());
         }
+    }
+
+    private void finishWithLoser(Player loser) {
+        status = GameStatus.FINISHED;
+        loserPlayerId = loser == null ? null : loser.getId();
+        loserPlayerName = loser == null ? null : loser.getName();
+        loserTeam = loser == null ? null : loser.getTeam();
     }
 
     private boolean isTeammate(int firstIndex, int secondIndex) {

@@ -283,6 +283,14 @@ public class GameService {
         return game;
     }
 
+    public Game rematch(String gameCode, String playerId) {
+        Game game = mutateGame(gameCode, g -> g.rematch(playerId));
+        log.info("game_rematched code={} hostPlayerId={} players={}",
+                game.getCode(), playerId, game.getPlayers().size());
+        scheduleAutoPlay(game.getCode());
+        return game;
+    }
+
     public Game attack(String gameCode, String playerId, Card card) {
         Game game = mutateGame(gameCode, g -> g.attack(playerId, card));
         log.debug("game_action code={} action=attack playerId={} card={} tableSize={}",
@@ -335,8 +343,9 @@ public class GameService {
 
     /**
      * Intentionally leave a room. Browser disconnects do not call this operation: the
-     * player session remains reconnectable. A started game returns to the lobby after a
-     * departure, and ownership transfers when the departing player was the host.
+     * player session remains reconnectable. An in-progress game returns to the lobby after a
+     * departure. A completed game keeps its result until the host chooses a rematch, and ownership
+     * transfers when the departing player was the host.
      * Returns true when no human player remains and the room is removed.
      */
     public boolean leaveGame(String gameCode, String playerId) {
@@ -344,8 +353,13 @@ public class GameService {
         return withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
 
-            if (game.getStatus() != GameStatus.LOBBY) {
+            if (game.getStatus() == GameStatus.IN_PROGRESS) {
                 boolean removed = game.removePlayerAndResetToLobby(playerId);
+                if (!removed) {
+                    throw new NoSuchElementException("Player not found in this game");
+                }
+            } else if (game.getStatus() == GameStatus.FINISHED) {
+                boolean removed = game.removePlayerFromFinishedGame(playerId);
                 if (!removed) {
                     throw new NoSuchElementException("Player not found in this game");
                 }

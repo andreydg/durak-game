@@ -223,6 +223,90 @@ describe("roleTags", () => {
     });
 });
 
+describe("gameResult", () => {
+    const players = [
+        { id: "a", name: "Alice", team: null },
+        { id: "b", name: "Boris", team: null }
+    ];
+
+    it("returns a personal win for a non-loser", () => {
+        const result = L.gameResult({ status: "FINISHED", loserPlayerId: "b", players }, "a");
+        expect(result.outcome).toBe("win");
+        expect(result.title).toBe("You won!");
+        expect(result.summary).toContain("Boris");
+    });
+
+    it("returns a personal loss for the durak", () => {
+        const result = L.gameResult({ status: "FINISHED", loserPlayerId: "b", players }, "b");
+        expect(result.outcome).toBe("loss");
+        expect(result.title).toContain("durak");
+    });
+
+    it("reports a draw when nobody is left holding cards", () => {
+        const result = L.gameResult({ status: "FINISHED", loserPlayerId: null, players }, "a");
+        expect(result.outcome).toBe("draw");
+        expect(result.title).toContain("Nobody");
+    });
+
+    it("scores four-player results by team", () => {
+        const teamPlayers = [
+            { id: "a", name: "A", team: 0 },
+            { id: "b", name: "B", team: 1 },
+            { id: "c", name: "C", team: 0 },
+            { id: "d", name: "D", team: 1 }
+        ];
+        const game = { status: "FINISHED", loserPlayerId: "d", players: teamPlayers };
+        expect(L.gameResult(game, "a").outcome).toBe("win");
+        expect(L.gameResult(game, "b").outcome).toBe("loss");
+    });
+
+    it("preserves a personal win after the loser leaves", () => {
+        const result = L.gameResult({
+            status: "FINISHED",
+            loserPlayerId: "b",
+            loserPlayerName: "Boris",
+            loserTeam: null,
+            players: [players[0]]
+        }, "a");
+
+        expect(result.outcome).toBe("win");
+        expect(result.title).toBe("You won!");
+        expect(result.summary).toContain("Boris");
+    });
+
+    it("scores a shrunken team roster from the durable losing team", () => {
+        const game = {
+            status: "FINISHED",
+            loserPlayerId: "d",
+            loserPlayerName: "D",
+            loserTeam: 1,
+            players: [
+                { id: "a", name: "A", team: 0 },
+                { id: "b", name: "B", team: 1 },
+                { id: "c", name: "C", team: 0 }
+            ]
+        };
+
+        expect(L.gameResult(game, "a").outcome).toBe("win");
+        expect(L.gameResult(game, "b").outcome).toBe("loss");
+    });
+
+    it("does not misreport a legacy dangling loser as a draw", () => {
+        const result = L.gameResult({
+            status: "FINISHED",
+            loserPlayerId: "departed",
+            players: [players[0]]
+        }, "a");
+
+        expect(result.outcome).not.toBe("draw");
+        expect(result.title).toContain("left the table");
+    });
+
+    it("returns null before a game is finished", () => {
+        expect(L.gameResult({ status: "IN_PROGRESS", players }, "a")).toBeNull();
+    });
+});
+
 describe("lobbyRowsHtml", () => {
     const rows = [
         { code: "ABC123", playerNames: ["Alice", "Bob"], playerCount: 2, maxPlayers: 4 },

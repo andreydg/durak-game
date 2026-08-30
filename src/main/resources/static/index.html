@@ -106,6 +106,19 @@
         </div>
     </div>
 
+    <section id="resultPanel" class="panel result-panel hidden" aria-live="polite">
+        <div id="resultIcon" class="result-icon" aria-hidden="true">🏆</div>
+        <div class="result-copy">
+            <p class="result-eyebrow">Game complete</p>
+            <h2 id="resultTitle">Round finished</h2>
+            <p id="resultSummary" class="muted"></p>
+            <p id="rematchWaiting" class="result-waiting muted hidden">Waiting for the host to deal the next game.</p>
+        </div>
+        <div class="result-actions">
+            <button id="rematchBtn" class="btn btn-accent">Play again</button>
+        </div>
+    </section>
+
     <div id="playingArea" class="table-shell">
         <div class="hud">
             <span class="pill" title="Attacker"><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
