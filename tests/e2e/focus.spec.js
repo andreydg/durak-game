@@ -19,18 +19,32 @@ function focused(page) {
  * and the realtime socket is captured so tests can push BOT_THINKING / GAME_UPDATED messages.
  */
 async function table(page, initial, onPost = () => null) {
-    const ctx = {game: initial, socket: null};
+    const ctx = {game: initial, socket: null, reads: 0, pending: 0};
     await seedSession(page);
     await page.routeWebSocket("**/ws/games/**", socket => { ctx.socket = socket; });
     await page.route(`**/api/games/${CODE}**`, async route => {
         const request = route.request();
-        if (request.method() === "POST") {
+        const isRead = request.method() === "GET";
+        if (!isRead) {
             const next = onPost(new URL(request.url()).pathname, ctx);
             if (next) ctx.game = next;
         }
-        await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify(ctx.game)});
+        if (isRead) ctx.pending++;
+        try {
+            await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify(ctx.game)});
+        } finally {
+            if (isRead) {
+                ctx.pending--;
+                ctx.reads++;
+            }
+        }
     });
     return ctx;
+}
+
+/** Start-up reads done (restore + socket catch-up), so no older snapshot is still in flight. */
+async function settled(ctx) {
+    await expect.poll(() => ctx.socket !== null && ctx.reads >= 2 && ctx.pending === 0).toBe(true);
 }
 
 function attacking(overrides = {}) {
@@ -63,7 +77,7 @@ test.describe("Keyboard focus survives game updates", () => {
     test("bot thinking and game updates do not steal focus", async ({ page }) => {
         const ctx = await table(page, attacking());
         await page.goto("/");
-        await expect.poll(() => ctx.socket !== null).toBe(true);
+        await settled(ctx);
         await page.locator('#myHand [data-card-code="9S"]').focus();
         await page.keyboard.press("Enter");
 

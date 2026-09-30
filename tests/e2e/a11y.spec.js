@@ -4,15 +4,28 @@ import { seedSession, syntheticGame } from "./support/synthetic.js";
 const CODE = "SYNTH2";
 
 async function table(page, initial) {
-    const ctx = {game: initial, socket: null};
+    const ctx = {game: initial, socket: null, reads: 0, pending: 0};
     await seedSession(page);
     await page.routeWebSocket("**/ws/games/**", socket => { ctx.socket = socket; });
-    await page.route(`**/api/games/${CODE}**`, route => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(ctx.game)
-    }));
+    await page.route(`**/api/games/${CODE}**`, async route => {
+        ctx.pending++;
+        const body = JSON.stringify(ctx.game);
+        try {
+            await route.fulfill({status: 200, contentType: "application/json", body});
+        } finally {
+            ctx.pending--;
+            ctx.reads++;
+        }
+    });
     return ctx;
+}
+
+/**
+ * Waits for the start-up reads (initial restore + the catch-up read when the socket opens) to
+ * finish, so an older in-flight snapshot cannot land after a message the test pushes next.
+ */
+async function settled(ctx) {
+    await expect.poll(() => ctx.socket !== null && ctx.reads >= 2 && ctx.pending === 0).toBe(true);
 }
 
 function defendingThree(overrides = {}) {
@@ -71,7 +84,7 @@ test.describe("Screen reader support", () => {
         const attackerFirst = syntheticGame({version: 20, hand: ["6C", "8H", "9S", "JC", "QD", "KS"]});
         const ctx = await table(page, attackerFirst);
         await page.goto("/");
-        await expect.poll(() => ctx.socket !== null).toBe(true);
+        await settled(ctx);
         const live = page.locator("#liveAnnouncer");
         await expect(live).toHaveAttribute("aria-live", "polite");
 
@@ -102,7 +115,7 @@ test.describe("Screen reader support", () => {
     test("bot status text is not followed by doubled dots", async ({ page }) => {
         const ctx = await table(page, syntheticGame());
         await page.goto("/");
-        await expect.poll(() => ctx.socket !== null).toBe(true);
+        await settled(ctx);
         await expect(page.locator("#seatTop1 .seat-title")).toBeVisible();
 
         // Like the real server, later snapshots carry the same thinking state as the socket.
@@ -120,7 +133,7 @@ test.describe("Screen reader support", () => {
         await page.emulateMedia({reducedMotion: "reduce"});
         const ctx = await table(page, syntheticGame({botThinking: {p2: "planning attack..."}}));
         await page.goto("/");
-        await expect.poll(() => ctx.socket !== null).toBe(true);
+        await settled(ctx);
 
         const dots = page.locator("#seatTop1 .bot-thinking-dots");
         await expect(dots).toHaveCount(1);
