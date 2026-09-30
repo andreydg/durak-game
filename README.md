@@ -106,7 +106,9 @@ autoplay_llm_call code=… player=… model=… thinkingLevel=… latencyMs=… 
 autoplay_decision code=… player=… source=llm|plan_cache|forced|heuristic reason=… action=… card=… attackCard=… options=…
 ```
 
-`reason` says why the heuristic was used (`disabled`, `circuit_open`, `budget_exhausted`, `primary_model_failed`, `unparseable`, `illegal_model_action`) and is `none` otherwise. The API key and player names are never logged.
+`reason` says why the heuristic was used (`disabled`, `circuit_open`, `budget_exhausted`, `primary_model_failed`, `unparseable`, `illegal_model_action`, `no_legal_moves`) or why no call was needed (`single_legal_option`, `already_passed`), and is `none` for model and plan-cache decisions. An illegal model answer is echoed as `model=TYPE/card/attackCard`. The API key and player names are never logged.
+
+The heuristic bot is deterministic and also sees only its own seat's information. It compares the cheapest complete defence with transferring and with taking the table, weighted by game phase (it takes a low card early rather than burn a high trump, but not once the talon is empty); it keeps trumps and aces while the talon still has cards, only dumps low non-trumps on a defender who is taking, and in the endgame plays to run out of cards, including leading cards that public card counting shows nobody can beat.
 
 API endpoint:
 
