@@ -90,6 +90,7 @@ public class GameController {
             @RequestParam(required = false) String viewerPlayerId,
             @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
         Game game = gameService.getGame(code);
+        gameService.resumeAutoPlayIfStalled(game);
         // Reveal the viewer's hand and legal moves only when the token proves ownership.
         String authorizedViewer = gameService.isAuthorized(game, viewerPlayerId, token) ? viewerPlayerId : null;
         return toResponse(game, authorizedViewer);

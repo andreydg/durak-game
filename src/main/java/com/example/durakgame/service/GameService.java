@@ -8,6 +8,7 @@ import com.example.durakgame.model.Player;
 import com.example.durakgame.model.ViewerLegalMoves;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
+import com.example.durakgame.service.autoplay.HeuristicAutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
 import com.example.durakgame.service.store.LobbyProjection;
 import com.example.durakgame.service.store.StaleGameWriteException;
@@ -32,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -53,16 +55,29 @@ public class GameService {
     /* Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. */
     private static final long AUTO_PLAY_MIN_THINK_MS = 2000;
     private static final int AUTO_PLAY_THINK_JITTER_MS = 1001;
+    /* Re-plans allowed per pass when a bot decision goes stale because another player moved first. */
+    private static final int AUTO_PLAY_MAX_STALE_REPLANS = 5;
+    /* Delayed retries after an unexpected failure (e.g. a store outage) before waiting for a read to resume the bot. */
+    private static final int AUTO_PLAY_MAX_FAILURE_RETRIES = 3;
+    private static final long AUTO_PLAY_FAILURE_RETRY_DELAY_MS = 2000;
     /* One retry covers a cross-instance lost-update race; the per-code lock prevents same-JVM races. */
     private static final int MUTATE_RETRY_ATTEMPTS = 2;
 
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
     private final AutoPlayDecisionEngine autoPlayDecisionEngine;
+    /* Last resort when the engine returns nothing usable: a bot with a legal move must always move. */
+    private final AutoPlayDecisionEngine heuristicFallback;
     private final GameWebSocketHandler webSocketHandler;
     private final GameExpiryPolicy expiryPolicy;
     private final LobbyUpdatePublisher lobbyUpdatePublisher;
-    private final Set<String> autoPlayRunning = ConcurrentHashMap.newKeySet();
+    /*
+     * Games with a bot pass in flight. The value records whether another pass was requested while it
+     * ran: a human move that lands while the bot deliberates must not be dropped, or the bot can end
+     * up owing a move that nothing will ever schedule.
+     */
+    private final ConcurrentHashMap<String, Boolean> autoPlayRuns = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> autoPlayFailures = new ConcurrentHashMap<>();
     /*
      * Serializes load->mutate->save per game code so concurrent actions (human + bot,
      * two humans) cannot clobber each other through separate decoded copies of the game.
@@ -92,15 +107,28 @@ public class GameService {
     public GameService(
             GameStore gameStore,
             AutoPlayDecisionEngine autoPlayDecisionEngine,
+            HeuristicAutoPlayDecisionEngine heuristicFallback,
             GameWebSocketHandler webSocketHandler,
             GameExpiryPolicy expiryPolicy,
             LobbyUpdatePublisher lobbyUpdatePublisher
     ) {
         this.gameStore = gameStore;
         this.autoPlayDecisionEngine = autoPlayDecisionEngine;
+        this.heuristicFallback = heuristicFallback;
         this.webSocketHandler = webSocketHandler;
         this.expiryPolicy = expiryPolicy;
         this.lobbyUpdatePublisher = lobbyUpdatePublisher;
+    }
+
+    GameService(
+            GameStore gameStore,
+            AutoPlayDecisionEngine autoPlayDecisionEngine,
+            GameWebSocketHandler webSocketHandler,
+            GameExpiryPolicy expiryPolicy,
+            LobbyUpdatePublisher lobbyUpdatePublisher
+    ) {
+        this(gameStore, autoPlayDecisionEngine, new HeuristicAutoPlayDecisionEngine(), webSocketHandler,
+                expiryPolicy, lobbyUpdatePublisher);
     }
 
     GameService(
@@ -172,23 +200,25 @@ public class GameService {
 
     public Game heartbeat(String gameCode, String playerId) {
         String normalizedCode = normalizeCode(gameCode);
-        return withGameLockRetryingStale(normalizedCode, () -> {
-            Game game = getGame(normalizedCode);
-            boolean seated = game.getPlayers().stream().anyMatch(player -> player.getId().equals(playerId));
+        Game game = withGameLockRetryingStale(normalizedCode, () -> {
+            Game g = getGame(normalizedCode);
+            boolean seated = g.getPlayers().stream().anyMatch(player -> player.getId().equals(playerId));
             if (!seated) {
                 throw new NoSuchElementException("Player not found in this game");
             }
-            if (game.getStatus() != GameStatus.FINISHED) {
-                game.markActive();
-                gameStore.save(game);
-                if (game.isPublicRoom() && game.getStatus() == GameStatus.LOBBY) {
+            if (g.getStatus() != GameStatus.FINISHED) {
+                g.markActive();
+                gameStore.save(g);
+                if (g.isPublicRoom() && g.getStatus() == GameStatus.LOBBY) {
                     // Expiry metadata changed, so bypass this instance's short projection cache.
                     // The visible lobby roster did not change, so avoid broadcasting to every client.
                     invalidateLobbyCache();
                 }
             }
-            return game;
+            return g;
         });
+        resumeAutoPlayIfStalled(game);
+        return game;
     }
 
     /**
@@ -555,31 +585,98 @@ public class GameService {
         });
     }
 
+    /** Requests a bot pass for the game; if one is already running, it runs once more when it finishes. */
     private void scheduleAutoPlay(String gameCode) {
         String normalizedCode = normalizeCode(gameCode);
-        if (normalizedCode.isBlank() || !autoPlayRunning.add(normalizedCode)) {
+        if (normalizedCode.isBlank()) {
             return;
         }
-        CompletableFuture.runAsync(() -> {
-            boolean continueLater = false;
+        boolean[] start = {false};
+        autoPlayRuns.compute(normalizedCode, (code, rerunRequested) -> {
+            if (rerunRequested == null) {
+                start[0] = true;
+                return Boolean.FALSE;
+            }
+            return Boolean.TRUE;
+        });
+        if (start[0]) {
+            startAutoPlay(normalizedCode);
+        }
+    }
+
+    /**
+     * Restarts a bot turn that nothing is driving any more — e.g. the instance restarted mid-turn or
+     * the pass gave up after repeated failures. Read paths (game fetch, heartbeat) call this, so a
+     * stalled table recovers as soon as anyone looks at it. No-op while a pass is in flight.
+     */
+    public void resumeAutoPlayIfStalled(Game game) {
+        if (game.getStatus() != GameStatus.IN_PROGRESS || autoPlayRuns.containsKey(game.getCode())) {
+            return;
+        }
+        boolean botOwesMove = game.getPlayers().stream()
+                .filter(Player::isBot)
+                .map(bot -> game.computeViewerLegalMoves(bot.getId()))
+                .anyMatch(moves -> hasAnyPlayableMove(moves) && !shouldWaitForDefender(game, moves));
+        if (botOwesMove && autoPlayRuns.putIfAbsent(game.getCode(), Boolean.FALSE) == null) {
+            log.info("autoplay_resumed code={}", game.getCode());
+            startAutoPlay(game.getCode());
+        }
+    }
+
+    private void startAutoPlay(String code) {
+        try {
+            autoPlayExecutor.execute(() -> runAutoPlay(code));
+        } catch (RejectedExecutionException ex) {
+            autoPlayRuns.remove(code);
+            log.warn("autoplay_rejected code={} message={}", code, ex.getMessage());
+        }
+    }
+
+    private void runAutoPlayLater(String code, long delayMs) {
+        CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS, autoPlayExecutor)
+                .execute(() -> runAutoPlay(code));
+    }
+
+    /** Runs bot passes while this task owns the game's {@link #autoPlayRuns} entry, then releases it. */
+    private void runAutoPlay(String code) {
+        while (true) {
+            boolean yielded;
             try {
-                continueLater = runAutoPlayLoop(normalizedCode);
-            } catch (NoSuchElementException ignored) {
-                // Room may have been closed before the background bot turn started.
+                yielded = runAutoPlayLoop(code);
+                autoPlayFailures.remove(code);
+            } catch (NoSuchElementException | RoomExpiredException ignored) {
+                // The room closed or expired; there is no bot turn left to drive.
+                autoPlayFailures.remove(code);
+                yielded = false;
             } catch (RuntimeException ex) {
-                log.warn("autoplay_background_failed code={} message={}", normalizedCode, ex.getMessage(), ex);
-            } finally {
-                autoPlayRunning.remove(normalizedCode);
+                int failures = autoPlayFailures.merge(code, 1, Integer::sum);
+                log.warn("autoplay_background_failed code={} failures={} message={}",
+                        code, failures, ex.getMessage(), ex);
+                if (failures <= AUTO_PLAY_MAX_FAILURE_RETRIES) {
+                    // Keep ownership through the back-off so a concurrent request cannot double-run.
+                    runAutoPlayLater(code, AUTO_PLAY_FAILURE_RETRY_DELAY_MS * failures);
+                    return;
+                }
+                autoPlayFailures.remove(code);
+                log.warn("autoplay_gave_up code={} failures={}", code, failures);
+                yielded = false;
             }
-            if (continueLater) {
-                CompletableFuture.delayedExecutor(AUTO_PLAY_RESCHEDULE_DELAY_MS, TimeUnit.MILLISECONDS, autoPlayExecutor)
-                        .execute(() -> scheduleAutoPlay(normalizedCode));
+            if (yielded) {
+                // A bout just ended: pause so clients can render it, keeping ownership meanwhile.
+                runAutoPlayLater(code, AUTO_PLAY_RESCHEDULE_DELAY_MS);
+                return;
             }
-        }, autoPlayExecutor);
+            boolean rerun = autoPlayRuns.compute(code, (key, rerunRequested) ->
+                    Boolean.TRUE.equals(rerunRequested) ? Boolean.FALSE : null) != null;
+            if (!rerun) {
+                return;
+            }
+        }
     }
 
     /** Returns true when the loop should be rescheduled after a pause (yield after END_ROUND). */
     private boolean runAutoPlayLoop(String code) {
+        int staleReplans = 0;
         for (int i = 0; i < AUTO_PLAY_MAX_ITERATIONS; i++) {
             /* Fresh load each iteration: humans may act while the bot deliberates. */
             Game game = getGame(code);
@@ -615,30 +712,51 @@ public class GameService {
                 webSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), true, thinkingMessage);
                 long thinkingStartedAtMs = System.currentTimeMillis();
                 AutoPlayAction action;
+                String source;
                 try {
                     /* The slow part (LLM call) runs without the game lock. */
                     action = forcedLocalAction(game, legalMoves);
+                    source = "forced";
                     if (action == null) {
-                        action = autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
+                        action = chooseWithEngine(game, player, legalMoves);
+                        source = "engine";
                     } else {
                         log.info("autoplay_local_forced_action code={} playerId={} playerName={} action={}",
                                 game.getCode(), player.getId(), player.getName(), action);
+                    }
+                    if (!isLegal(action, legalMoves)) {
+                        // Never let an unusable decision end the bot's turn: nothing else would retry it.
+                        log.warn("autoplay_invalid_decision code={} playerId={} source={} action={}",
+                                game.getCode(), player.getId(), source, action);
+                        action = heuristicFallback.choose(game, player.getId(), legalMoves);
+                        source = "fallback";
                     }
                 } finally {
                     ensureMinimumThinkingPause(thinkingStartedAtMs);
                     webSocketHandler.broadcastBotThinking(game.getCode(), player.getId(), false);
                 }
-                if (action == null) {
-                    log.info("autoplay_skip code={} playerId={} playerName={} reason=no_action",
-                            game.getCode(), player.getId(), player.getName());
+                if (!isLegal(action, legalMoves)) {
+                    log.warn("autoplay_skip code={} playerId={} playerName={} reason=no_legal_action action={}",
+                            game.getCode(), player.getId(), player.getName(), action);
                     continue;
                 }
                 boolean applied = applyAutoPlayAction(code, player, action);
                 if (!applied) {
-                    continue;
+                    /*
+                     * Someone else moved while the bot deliberated, so its decision no longer fits.
+                     * Re-plan against fresh state instead of ending the pass: the other player's own
+                     * scheduling request may have been absorbed by this still-running pass.
+                     */
+                    if (++staleReplans > AUTO_PLAY_MAX_STALE_REPLANS) {
+                        log.warn("autoplay_replan_limit code={} playerId={} replans={}",
+                                game.getCode(), player.getId(), staleReplans);
+                        return false;
+                    }
+                    advanced = true;
+                    break;
                 }
-                log.info("autoplay_applied code={} playerId={} playerName={} action={}",
-                        game.getCode(), player.getId(), player.getName(), action);
+                log.info("autoplay_applied code={} playerId={} playerName={} source={} action={}",
+                        game.getCode(), player.getId(), player.getName(), source, action);
                 if (action.type() == AutoPlayAction.Type.END_ROUND) {
                     return true;
                 }
@@ -657,7 +775,7 @@ public class GameService {
      * fresh state before applying, so a stale LLM decision can't revert human moves.
      */
     private boolean applyAutoPlayAction(String code, Player player, AutoPlayAction action) {
-        return withGameLock(code, () -> {
+        return withGameLockRetryingStale(code, () -> {
             Game fresh = getGame(code);
             if (fresh.getStatus() != GameStatus.IN_PROGRESS) {
                 return false;
@@ -679,6 +797,17 @@ public class GameService {
             webSocketHandler.broadcastGameUpdated(fresh.getCode(), fresh.getVersion());
             return true;
         });
+    }
+
+    /** An engine failure yields no decision (so the heuristic takes over) instead of aborting the turn. */
+    private AutoPlayAction chooseWithEngine(Game game, Player player, ViewerLegalMoves legalMoves) {
+        try {
+            return autoPlayDecisionEngine.choose(game, player.getId(), legalMoves);
+        } catch (RuntimeException ex) {
+            log.warn("autoplay_engine_failed code={} playerId={} message={}",
+                    game.getCode(), player.getId(), ex.getMessage());
+            return null;
+        }
     }
 
     private AutoPlayAction forcedLocalAction(Game game, ViewerLegalMoves legalMoves) {
