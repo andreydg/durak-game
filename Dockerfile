@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Maven build (Java 25 matches pom.xml) ---
-FROM maven:3.9.14-eclipse-temurin-25-noble AS build
+FROM maven:3.9.15-eclipse-temurin-26-noble AS build
 WORKDIR /app
 
 COPY pom.xml .
