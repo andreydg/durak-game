@@ -395,9 +395,10 @@ public class HeuristicAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 return false;
             }
             long undefended = table.stream().filter(entry -> !entry.isDefended()).count();
+            // Only what the table shows: opponents' counts of six or more read as "at least six".
             int capacity = taking
-                    ? game.getTakeLimit() - table.size()
-                    : defenderHandSize - (int) undefended;
+                    ? VisibleHandSize.lowerBound(game.getTakeLimit()) - table.size()
+                    : VisibleHandSize.lowerBound(defenderHandSize) - (int) undefended;
             return capacity >= hand.size();
         }
 

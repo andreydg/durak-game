@@ -116,10 +116,10 @@ final class GeminiPrompt {
     private static final String USER_PREFIX_AFTER_BUDGET = """
 
             Game state fields:
-            - seats: every seat in turn order starting with you. role is attacker (leads this bout), defender, thrower (may throw in), partner_of_defender (team games: sits this bout out) or out (no cards left, talon empty); relation is self, partner or opponent.
+            - seats: every seat in turn order starting with you. role is attacker (leads this bout), defender, thrower (may throw in), partner_of_defender (team games: sits this bout out) or out (no cards left, talon empty); relation is self, partner or opponent. handSize is exact for you; for other seats it is exact below 6 and "6+" otherwise, as the table shows it.
             - talonEmpty and onlyTrumpCardLeftInTalon describe the talon as everyone sees it; the exact count is not shown.
             - boutsCompleted: bouts finished so far in this game.
-            - takingCardsInProgress and takeLimit: the defender is taking; the attacking side may throw in until the table holds takeLimit attack cards.
+            - takingCardsInProgress and takeLimit: the defender is taking; the attacking side may throw in until the table holds takeLimit attack cards ("6+" means at least six; legalMoves shows whether another card still fits).
             - publicCardMemory.discarded: cards that have left the game. publicCardMemory.pickedUpBySeat: cards a seat picked up from the table and has not played since.
 
             Game state:
@@ -173,7 +173,8 @@ final class GeminiPrompt {
             seat.put("seat", labels.get(player.getId()));
             seat.put("relation", relation(self, player));
             seat.put("role", role(game, player, defender, teams, talonEmpty));
-            seat.put("handSize", player.handSize());
+            // Own count is exact; other seats are shown as the table shows them (exact below 6, else "6+").
+            seat.put("handSize", player == self ? player.handSize() : VisibleHandSize.describe(player.handSize()));
             seats.add(seat);
         }
 
@@ -197,7 +198,8 @@ final class GeminiPrompt {
         state.put("seats", seats);
         state.put("table", table);
         state.put("takingCardsInProgress", game.isTakingCardsInProgress());
-        state.put("takeLimit", game.getTakeLimit());
+        // The limit is the defender's hand at the start of the bout, so it is capped the same way.
+        state.put("takeLimit", VisibleHandSize.describe(game.getTakeLimit()));
         if (publicCardMemoryEnabled) {
             Map<String, Object> memory = new LinkedHashMap<>();
             memory.put("discarded", game.getDiscardedCards().stream().map(Card::code).toList());

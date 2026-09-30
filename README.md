@@ -97,7 +97,7 @@ Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` deri
 
 Gemini 3 and newer keep their default sampling settings; `temperature: 0` is only pinned for Gemini 1.x/2.x and Gemma models.
 
-The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, public hand sizes, whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so Gemini's implicit prompt caching can reuse the prefix (visible as `cachedTokens` in the logs).
+The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, other seats' hand sizes as the table shows them (exact below six, otherwise `6+`, the same for the take limit), whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so Gemini's implicit prompt caching can reuse the prefix (visible as `cachedTokens` in the logs).
 
 Each model call logs one line, and each bot decision logs one line:
 

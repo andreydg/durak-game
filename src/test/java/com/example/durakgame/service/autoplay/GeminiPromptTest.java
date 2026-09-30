@@ -149,6 +149,31 @@ class GeminiPromptTest {
     }
 
     @Test
+    void otherSeatsHandSizesAreCappedAtSixLikeTheTableShowsThem() throws Exception {
+        // Humans see at most six card backs per opponent, so the bot gets the same view.
+        Game game = new GameBuilder()
+                .player("seat-0-" + HUMAN, "Alice", false, "6C", "7C", "8C", "9C", "10C", "JC", "QC", "KC", "AC")
+                .player(BOT, "Robo Elektronik", true, "6H", "7H", "8H", "9H", "10H", "JH", "QH", "KH")
+                .player("seat-2-" + HUMAN, "Carol", false, "6D", "7D", "8D")
+                .talon("JD", "8S", "KS")
+                .roles(0, 1)
+                .undefended("6S", "seat-0-" + HUMAN)
+                .taking(9)
+                .build();
+
+        JsonNode state = state(game, BOT);
+        JsonNode seats = state.path("seats");
+
+        assertEquals("you", seats.get(0).path("seat").asText());
+        assertEquals(8, seats.get(0).path("handSize").asInt(), "the bot sees its own count exactly");
+        // Other seats in turn order: nine cards look like "6+", three cards show exactly.
+        List<String> others = List.of(seats.get(1).path("handSize").asText(), seats.get(2).path("handSize").asText());
+        assertEquals(java.util.Set.of("6+", "3"), java.util.Set.copyOf(others));
+        assertEquals("6+", state.path("takeLimit").asText(), "the limit is the defender's hand size");
+        assertFalse(objectMapper.writeValueAsString(state).contains("\"handSize\":9"));
+    }
+
+    @Test
     void publicCardMemoryCanBeTurnedOff() throws Exception {
         GeminiPrompt withoutMemory = new GeminiPrompt(objectMapper, false, "");
         Game game = teamGame();
