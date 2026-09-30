@@ -64,6 +64,8 @@ export function syntheticGame({
         hand: index === 0 ? myHand : []
     }));
     const loser = seats.find(seat => seat.id === loserPlayerId) || null;
+    // Like the server: a host waiting with two or more players may start.
+    const canStart = status === "LOBBY" && hostPlayerId === "me" && seats.length >= 2;
     return {
         code,
         status,
@@ -88,7 +90,7 @@ export function syntheticGame({
         table: table.map(pair => ({attackerId: attackerPlayerId, defenseCard: null, ...pair})),
         players: seats,
         botThinking,
-        legalMoves: {...emptyLegalMoves(), ...legalMoves}
+        legalMoves: {...emptyLegalMoves(), canStart, ...legalMoves}
     };
 }
 

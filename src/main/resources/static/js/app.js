@@ -1474,6 +1474,7 @@ async function runAction(name, fn, trigger = null) {
         return false;
     }
     state.actionInFlight = {name};
+    state.lastPlayedCard = null;
     clearError();
     const key = sessionKey();
     const previousText = trigger ? trigger.textContent : "";
