@@ -48,7 +48,7 @@ The Firestore emulator tests run automatically in CI (against the emulator Docke
 
 ## Logging
 
-On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every log event is one JSON object with a Cloud Logging `severity`, `message` and `time` (stack traces stay in their entry and reach Error Reporting). Messages are `key=value` style, so they work well in Logs Explorer queries and log-based metrics, for example `jsonPayload.message:"autoplay_applied"` (each bot move, with `source=forced|engine|fallback`) or `jsonPayload.message:"auth_rejected"`. Local runs keep Spring's readable console format.
+On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every log event is one JSON object with a Cloud Logging `severity`, `message` and `time` (stack traces stay in their entry and reach Error Reporting). Messages are `key=value` style, so they work well in Logs Explorer queries and log-based metrics, for example `jsonPayload.message:"autoplay_decision"` (every engine decision, with `source=llm|plan_cache|forced|heuristic` and the fallback `reason` — the LLM vs heuristic ratio), `jsonPayload.message:"autoplay_applied"` (each bot move actually played, with `source=forced|engine|fallback|last_resort`) or `jsonPayload.message:"auth_rejected"`. Local runs keep Spring's readable console format.
 
 ## Realtime updates and fallback reads
 
