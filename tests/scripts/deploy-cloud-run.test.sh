@@ -104,6 +104,11 @@ assert_contains "${DEFAULT_CALLS}" $'--service-account\t629903314059-compute@dev
 assert_contains "${DEFAULT_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.7-flash'
 assert_contains "${DEFAULT_CALLS}" $'--update-secrets\tGEMINI_API_KEY=projects/629903314059/secrets/gemini-api-key:latest'
 assert_not_contains "${DEFAULT_CALLS}" $'secrets\tversions\taccess'
+assert_contains "${DEFAULT_CALLS}" $'--max-instances\t1'
+assert_contains "${DEFAULT_CALLS}" $'--min-instances\t0'
+assert_contains "${DEFAULT_CALLS}" $'--concurrency\t200'
+assert_contains "${DEFAULT_CALLS}" $'--timeout\t3600'
+assert_contains "${DEFAULT_CALLS}" $'--cpu-boost'
 
 PRODUCTION_CALLS="${TMP_DIR}/production.calls"
 run_deploy "${PRODUCTION_CALLS}" \
@@ -132,6 +137,17 @@ run_deploy "${CUSTOM_CALLS}" \
 assert_contains "${CUSTOM_CALLS}" $'--member\tserviceAccount:durak-runtime@andreyg-main.iam.gserviceaccount.com'
 assert_contains "${CUSTOM_CALLS}" $'--update-secrets\tGEMINI_API_KEY=projects/777777777777/secrets/alternate-key:7'
 assert_not_contains "${CUSTOM_CALLS}" $'run\tservices\tdescribe'
+
+TUNED_CALLS="${TMP_DIR}/tuned.calls"
+run_deploy "${TUNED_CALLS}" \
+  CONCURRENCY="500" \
+  REQUEST_TIMEOUT="1800" \
+  MIN_INSTANCES="1" \
+  >"${TMP_DIR}/tuned.out"
+assert_contains "${TUNED_CALLS}" $'--concurrency\t500'
+assert_contains "${TUNED_CALLS}" $'--timeout\t1800'
+assert_contains "${TUNED_CALLS}" $'--min-instances\t1'
+assert_contains "${TUNED_CALLS}" $'--max-instances\t1'
 
 FALLBACK_CALLS="${TMP_DIR}/fallback.calls"
 run_deploy "${FALLBACK_CALLS}" FAIL_SERVICE_DESCRIBE="true" >"${TMP_DIR}/fallback.out"

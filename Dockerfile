@@ -22,6 +22,8 @@ USER spring
 
 EXPOSE 8080
 
-# Render sets PORT; $JAVA_OPTS is a common hook for heap tuning
-ENV JAVA_OPTS=""
+# Render sets PORT; $JAVA_OPTS is a common hook for heap tuning. The JVM defaults the heap to
+# 25% of the container limit (128 MiB of Cloud Run's 512 MiB); leave the rest for metaspace,
+# threads and network buffers.
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
