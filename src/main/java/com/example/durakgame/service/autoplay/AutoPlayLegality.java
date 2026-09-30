@@ -13,11 +13,11 @@ import java.util.TreeMap;
  * Legality checks and option enumeration shared by the auto-play engines. Every check is null-safe:
  * {@link ViewerLegalMoves} holds immutable collections, whose {@code contains(null)} throws.
  */
-final class AutoPlayLegality {
+public final class AutoPlayLegality {
     private AutoPlayLegality() {
     }
 
-    static boolean isLegal(AutoPlayAction action, ViewerLegalMoves moves) {
+    public static boolean isLegal(AutoPlayAction action, ViewerLegalMoves moves) {
         if (action == null || action.type() == null || moves == null) {
             return false;
         }
@@ -49,7 +49,7 @@ final class AutoPlayLegality {
     }
 
     /** Every legal action in a deterministic order. */
-    static List<AutoPlayAction> enumerate(ViewerLegalMoves moves) {
+    public static List<AutoPlayAction> enumerate(ViewerLegalMoves moves) {
         List<AutoPlayAction> options = new ArrayList<>();
         if (moves == null) {
             return options;

@@ -16,7 +16,7 @@ set -euo pipefail
 #   GEMINI_SECRET=gemini-api-key
 #   GEMINI_SECRET_PROJECT=my-secret-project (defaults to PROJECT_ID)
 #   GEMINI_SECRET_VERSION=latest
-#   AUTOPLAY_GEMINI_MODEL=gemini-3.7-flash
+#   AUTOPLAY_GEMINI_MODEL=gemini-3.8-flash
 #   RUNTIME_SERVICE_ACCOUNT=service-account@project.iam.gserviceaccount.com
 #   CONCURRENCY=200          (max concurrent requests on the single instance; each open tab holds a websocket)
 #   REQUEST_TIMEOUT=3600     (seconds; Cloud Run closes websockets at this limit, default would be 300)
@@ -34,7 +34,7 @@ CONFIGURE_FIRESTORE_TTL="${CONFIGURE_FIRESTORE_TTL:-true}"
 GEMINI_SECRET="${GEMINI_SECRET:-gemini-api-key}"
 GEMINI_SECRET_PROJECT="${GEMINI_SECRET_PROJECT:-${PROJECT_ID}}"
 GEMINI_SECRET_VERSION="${GEMINI_SECRET_VERSION:-latest}"
-AUTOPLAY_GEMINI_MODEL="${AUTOPLAY_GEMINI_MODEL:-gemini-3.7-flash}"
+AUTOPLAY_GEMINI_MODEL="${AUTOPLAY_GEMINI_MODEL:-gemini-3.8-flash}"
 RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
 CONCURRENCY="${CONCURRENCY:-200}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-3600}"

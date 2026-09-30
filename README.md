@@ -151,7 +151,7 @@ Optional environment variables:
 - `GEMINI_SECRET` (default `gemini-api-key`)
 - `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
 - `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
-- `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.7-flash`)
+- `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.8-flash`)
 - `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
 - `CONCURRENCY` (default `200`; every open tab holds a websocket that counts against it)
 - `REQUEST_TIMEOUT` (default `3600` seconds; Cloud Run closes websockets at this limit)

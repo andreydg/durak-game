@@ -101,7 +101,7 @@ assert_contains "${DEFAULT_CALLS}" $'secrets\tversions\tdescribe\tlatest\t--secr
 assert_contains "${DEFAULT_CALLS}" $'--member\tserviceAccount:629903314059-compute@developer.gserviceaccount.com'
 assert_contains "${DEFAULT_CALLS}" $'--role\troles/secretmanager.secretAccessor'
 assert_contains "${DEFAULT_CALLS}" $'--service-account\t629903314059-compute@developer.gserviceaccount.com'
-assert_contains "${DEFAULT_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.7-flash'
+assert_contains "${DEFAULT_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.8-flash'
 assert_contains "${DEFAULT_CALLS}" $'--update-secrets\tGEMINI_API_KEY=projects/629903314059/secrets/gemini-api-key:latest'
 assert_not_contains "${DEFAULT_CALLS}" $'secrets\tversions\taccess'
 assert_contains "${DEFAULT_CALLS}" $'--max-instances\t1'
@@ -135,6 +135,7 @@ run_deploy "${CUSTOM_CALLS}" \
   RUNTIME_SERVICE_ACCOUNT="durak-runtime@andreyg-main.iam.gserviceaccount.com" \
   AUTOPLAY_GEMINI_MODEL="gemini-3.7-flash" \
   >"${TMP_DIR}/custom.out"
+assert_contains "${CUSTOM_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.7-flash,'
 assert_contains "${CUSTOM_CALLS}" $'--member\tserviceAccount:durak-runtime@andreyg-main.iam.gserviceaccount.com'
 assert_contains "${CUSTOM_CALLS}" $'--update-secrets\tGEMINI_API_KEY=projects/777777777777/secrets/alternate-key:7'
 assert_not_contains "${CUSTOM_CALLS}" $'run\tservices\tdescribe'

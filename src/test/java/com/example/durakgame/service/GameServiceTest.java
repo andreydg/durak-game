@@ -817,6 +817,32 @@ class GameServiceTest {
     }
 
     @Test
+    void aBotThatAlreadyPassedIsNotDrivenAgain() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        AtomicInteger calls = new AtomicInteger();
+        GameService service = newService(store, (game, playerId, legalMoves) -> {
+            calls.incrementAndGet();
+            return AutoPlayAction.attack("6D");
+        });
+        // c beat a's six; bot b already approved ending the bout and could only throw in 6D optionally.
+        long now = Instant.now().toEpochMilli();
+        store.put(Game.fromSnapshot(new Game.Snapshot(
+                "TEST01", now, now, "a", GameStatus.IN_PROGRESS, Suit.SPADES, null, 0, 2, null, false, 0, 0L,
+                List.of(playerSnapshot("a", false, "9C", "10C"),
+                        playerSnapshot("b", true, "6D", "KD"),
+                        playerSnapshot("c", false, "8D", "9D")),
+                cards("8S", "10S"),
+                List.of(new Game.AttackSnapshot(Card.fromCode("6H"), Card.fromCode("7H"), "a")),
+                Set.of("b"), List.of(), List.of())));
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+        service.heartbeat("TEST01", "a");
+        Thread.sleep(300);
+
+        assertEquals(0, calls.get(), "an optional throw-in after passing is not a move the table waits on");
+    }
+
+    @Test
     void botTakesAtOnceWhenAnAttackCannotBeBeaten() throws InterruptedException {
         SnapshotGameStore store = new SnapshotGameStore();
         AtomicInteger calls = new AtomicInteger();
