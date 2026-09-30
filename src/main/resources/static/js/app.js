@@ -55,6 +55,8 @@ const state = {
     playerToken: savedSession.playerToken,
     /* Set when the server no longer accepts this browser's seat (wrong/missing token, not seated). */
     seatInvalid: false,
+    /* {name} of the one user action whose request is pending; repeat activations are ignored. */
+    actionInFlight: null,
     game: null,
     selectedHandCard: null,
     showGameplayHelp: false,
@@ -149,6 +151,8 @@ const addBotBtn = document.getElementById("addBotBtn");
 const quickPlayBtn = document.getElementById("quickPlayBtn");
 const shareBtn = document.getElementById("shareBtn");
 const rematchBtn = document.getElementById("rematchBtn");
+const createBtn = document.getElementById("createBtn");
+const joinBtn = document.getElementById("joinBtn");
 
 function log(message) {
     if (!debugUi || !messages) return;
@@ -181,6 +185,35 @@ function gamePath(code, suffix = "") {
     return `/api/games/${encodeURIComponent(code)}${suffix}`;
 }
 
+const API_TIMEOUT_MS = 20_000;
+
+function isBusy() {
+    return Boolean(state.actionInFlight);
+}
+
+/**
+ * Enables or disables an action control. While a request is pending, the control that has
+ * keyboard focus is only marked aria-disabled: a disabled button drops focus to <body>.
+ */
+function setControlEnabled(btn, enabled) {
+    if (!btn) return;
+    if (enabled) {
+        btn.disabled = false;
+        btn.removeAttribute("aria-disabled");
+    } else if (isBusy() && document.activeElement === btn) {
+        btn.disabled = false;
+        btn.setAttribute("aria-disabled", "true");
+    } else {
+        btn.disabled = true;
+        btn.removeAttribute("aria-disabled");
+    }
+}
+
+function lobbyActionButtons() {
+    const listButtons = lobbyGameList ? [...lobbyGameList.querySelectorAll(".lobby-list-join")] : [];
+    return [quickPlayBtn, createBtn, joinBtn, ...listButtons];
+}
+
 /** A failed request; `status` is the HTTP status, or 0 when the server could not be reached. */
 class ApiError extends Error {
     constructor(status, message) {
@@ -196,21 +229,31 @@ class ApiError extends Error {
  * non-JSON error pages from a proxy.
  */
 async function api(path, method, body) {
+    /* A request that never settles would otherwise keep the one-action-at-a-time guard busy. */
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
     let res;
-    try {
-        res = await fetch(path, {
-            method,
-            headers: {"Content-Type": "application/json", ...authHeaders()},
-            body: body ? JSON.stringify(body) : undefined
-        });
-    } catch (_) {
-        throw new ApiError(0, apiErrorMessage(0, null));
-    }
     let text = "";
     try {
-        text = await res.text();
-    } catch (_) {
-        text = "";
+        try {
+            res = await fetch(path, {
+                method,
+                headers: {"Content-Type": "application/json", ...authHeaders()},
+                body: body ? JSON.stringify(body) : undefined,
+                signal: controller.signal
+            });
+        } catch (_) {
+            throw new ApiError(0, controller.signal.aborted
+                ? "The server took too long to respond. Please try again."
+                : apiErrorMessage(0, null));
+        }
+        try {
+            text = await res.text();
+        } catch (_) {
+            text = "";
+        }
+    } finally {
+        window.clearTimeout(timeout);
     }
     const parsed = parseJsonBody(res.headers.get("content-type"), text);
     if (!res.ok) {
@@ -351,6 +394,7 @@ async function refreshLobbyLists() {
             /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
             if (lobbyGameList) {
                 lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
+                syncLobbyBusyState();
             }
             if (gameLobbyGameList) {
                 const code = state.gameCode || "";
@@ -707,6 +751,7 @@ function renderBattle(game) {
 function renderMyHand(game, me) {
     myHand.innerHTML = "";
     const hand = sortCardCodesByRank(me?.hand || []);
+    const busy = isBusy();
     for (const code of hand) {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -716,14 +761,21 @@ function renderMyHand(game, me) {
         btn.appendChild(img);
         btn.setAttribute("aria-label", `Play ${prettyCard(code)}`);
         btn.setAttribute("aria-pressed", String(state.selectedHandCard === code));
-        btn.draggable = true;
+        /* While a request is pending the hand stays focusable but cannot be changed or dragged. */
+        btn.draggable = !busy;
+        if (busy) btn.setAttribute("aria-disabled", "true");
         btn.dataset.cardCode = code;
         btn.addEventListener("click", () => {
+            if (isBusy()) return;
             state.selectedHandCard = state.selectedHandCard === code ? null : code;
             renderActionState(game);
             renderMyHand(game, me);
         });
         btn.addEventListener("dragstart", (e) => {
+            if (isBusy()) {
+                e.preventDefault();
+                return;
+            }
             btn.classList.add("dragging");
             e.dataTransfer.setData("text/plain", code);
             e.dataTransfer.effectAllowed = "move";
@@ -781,12 +833,13 @@ function renderActionState(game) {
         (defensesByAttack[chosenAttack] || []).includes(selected)
     );
 
-    startBtn.disabled = !lm.canStart;
-    attackBtn.disabled = !(lm.canAttack && selected && attackable.includes(selected));
-    transferBtn.disabled = !(lm.canTransfer && selected && transferable.includes(selected));
-    defendBtn.disabled = !canDefendSelected;
-    takeBtn.disabled = !lm.canTake;
-    endRoundBtn.disabled = !lm.canEndRound;
+    const idle = !isBusy();
+    setControlEnabled(startBtn, idle && Boolean(lm.canStart));
+    setControlEnabled(attackBtn, idle && Boolean(lm.canAttack && selected && attackable.includes(selected)));
+    setControlEnabled(transferBtn, idle && Boolean(lm.canTransfer && selected && transferable.includes(selected)));
+    setControlEnabled(defendBtn, idle && canDefendSelected);
+    setControlEnabled(takeBtn, idle && Boolean(lm.canTake));
+    setControlEnabled(endRoundBtn, idle && Boolean(lm.canEndRound));
 
     if (game.takingCardsInProgress) {
         actionHint.textContent = "See the message on the table. Use buttons or drag cards.";
@@ -829,7 +882,7 @@ function renderActionState(game) {
  */
 async function playCardToTable(cardCode, preferredAttackCard) {
     const game = state.game;
-    if (!game || game.status !== "IN_PROGRESS" || !cardCode) return;
+    if (!game || game.status !== "IN_PROGRESS" || !cardCode || isBusy()) return;
     const lm = game.legalMoves || {};
     const attackable = lm.attackableCardCodes || [];
     const transferable = lm.transferableCardCodes || [];
@@ -875,9 +928,14 @@ function playerAction(suffix, extra = {}, {clearSelection = true} = {}) {
     };
 }
 
+function syncLobbyBusyState() {
+    for (const btn of lobbyActionButtons()) setControlEnabled(btn, !isBusy());
+}
+
 function render() {
     const game = state.game;
     const hasSession = Boolean(state.gameCode && state.playerId && game);
+    syncLobbyBusyState();
     lobbyView.classList.toggle("hidden", hasSession);
     gameView.classList.toggle("hidden", !hasSession);
 
@@ -934,6 +992,7 @@ function render() {
         resultSummary.textContent = result?.summary || "The game is complete.";
         const canRematch = game.hostPlayerId === state.playerId;
         rematchBtn.classList.toggle("hidden", !canRematch);
+        setControlEnabled(rematchBtn, !isBusy());
         rematchWaiting.classList.toggle("hidden", canRematch);
     }
 
@@ -1005,7 +1064,7 @@ function render() {
             game.playerCount < game.maxPlayers
         );
         addBotBtn.classList.toggle("hidden", !isHostLobby || hasBot);
-        addBotBtn.disabled = !canAddBot;
+        setControlEnabled(addBotBtn, canAddBot && !isBusy());
     }
 
     if (game.status === "FINISHED") {
@@ -1175,47 +1234,61 @@ function looksLikeGame(value) {
 }
 
 /**
- * Runs one user action. `fn` may resolve to a game snapshot, which is applied through the same
- * version check as refreshes, so a delayed response can never roll back newer state.
+ * Runs one user action. At most one runs at a time: while its request is pending, every other
+ * activation (double clicks, Enter repeats, drops) is ignored and the action controls render
+ * disabled. `fn` may resolve to a game snapshot, which is applied through the same version check
+ * as refreshes, so a delayed response can never roll back newer state.
  */
 async function runAction(name, fn, trigger = null) {
+    if (isBusy()) {
+        log(`${name} ignored: ${state.actionInFlight.name} is still pending.`);
+        return false;
+    }
+    state.actionInFlight = {name};
     clearError();
     const key = sessionKey();
     const previousText = trigger ? trigger.textContent : "";
     if (trigger) {
-        trigger.disabled = true;
         trigger.setAttribute("aria-busy", "true");
         trigger.textContent = `${name}…`;
     }
+    render();
+
+    let result = null;
+    let error = null;
     try {
-        const result = await fn();
-        if (!(looksLikeGame(result) && applyGameSnapshot(result, key))) {
-            render();
-        }
-        // The action response already carries updated game state.
-        // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
-        state.suppressWsRefreshUntilMs = Date.now() + 1200;
-        scheduleGameRefresh();
-        log(`${name} success.`);
-        return true;
+        result = await fn();
     } catch (err) {
-        log(`${name} failed: ${err?.message}`);
-        if (handleSessionError(err, key)) {
+        error = err || new Error("Something went wrong. Please try again.");
+    }
+    state.actionInFlight = null;
+    if (trigger) {
+        trigger.removeAttribute("aria-busy");
+        trigger.textContent = previousText;
+    }
+
+    if (error) {
+        log(`${name} failed: ${error.message}`);
+        if (handleSessionError(error, key)) {
             return false;
         }
-        showError(`${name}: ${err?.message || "Something went wrong. Please try again."}`);
-        if (err?.status === 409 && isCurrentSession(key)) {
+        render();
+        showError(`${name}: ${error.message || "Something went wrong. Please try again."}`);
+        if (error.status === 409 && isCurrentSession(key)) {
             // The move was rejected against newer server state: resynchronise promptly.
             scheduleGameRefresh(0, true);
         }
         return false;
-    } finally {
-        if (trigger) {
-            trigger.disabled = false;
-            trigger.removeAttribute("aria-busy");
-            trigger.textContent = previousText;
-        }
     }
+    if (!(looksLikeGame(result) && applyGameSnapshot(result, key))) {
+        render();
+    }
+    // The action response already carries updated game state.
+    // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
+    state.suppressWsRefreshUntilMs = Date.now() + 1200;
+    scheduleGameRefresh();
+    log(`${name} success.`);
+    return true;
 }
 
 function beginPolling() {
@@ -1414,7 +1487,6 @@ function clearSession() {
 
 document.getElementById("hostForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const createBtn = document.getElementById("createBtn");
     await runAction("Create room", async () => {
         const created = await api("/api/games", "POST", {
             hostName: hostNameInput.value.trim(),
@@ -1464,7 +1536,6 @@ if (shareBtn) {
 
 document.getElementById("joinForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const joinBtn = document.getElementById("joinBtn");
     await runAction("Join game", () => performJoin(null), joinBtn);
 });
 

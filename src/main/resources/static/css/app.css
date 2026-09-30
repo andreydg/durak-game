@@ -66,6 +66,9 @@ input, button, select {
 input::placeholder { color: var(--text-dim); }
 button { cursor: pointer; color: var(--text); background: var(--surface-strong); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
+/* A focused control that is only busy keeps focus (aria-disabled) but looks disabled. */
+button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-allowed; }
+.hand-card-btn[aria-disabled="true"] { cursor: progress; }
 .btn {
     border-radius: 999px;
     padding: 0.48rem 0.82rem;
@@ -1137,7 +1140,8 @@ pre {
 .btn-primary:hover:not(:disabled) {
     filter: brightness(1.06);
 }
-.btn-primary:disabled {
+.btn-primary:disabled,
+button.btn-primary[aria-disabled="true"] {
     opacity: 0.5;
 }
 @media (max-width: 470px) {
