@@ -226,6 +226,87 @@ describe("seatProblem", () => {
     });
 });
 
+describe("neighborCardCode", () => {
+    const before = ["6C", "7D", "8H", "9S", "JC"];
+
+    it("keeps a card that is still in the hand", () => {
+        expect(L.neighborCardCode(before, "8H", ["6C", "8H", "9S"])).toBe("8H");
+    });
+
+    it("moves to the card that slid into the played card's slot", () => {
+        expect(L.neighborCardCode(before, "8H", ["6C", "7D", "9S", "JC"])).toBe("9S");
+        expect(L.neighborCardCode(before, "6C", ["7D", "8H", "9S", "JC"])).toBe("7D");
+    });
+
+    it("falls back to the left neighbour at the end of the hand", () => {
+        expect(L.neighborCardCode(before, "JC", ["6C", "7D", "8H", "9S"])).toBe("9S");
+    });
+
+    it("skips neighbours that also left the hand", () => {
+        expect(L.neighborCardCode(before, "8H", ["6C", "JC", "AS"])).toBe("JC");
+    });
+
+    it("handles unknown cards and empty hands", () => {
+        expect(L.neighborCardCode(before, "AS", ["7D", "8H"])).toBe("7D");
+        expect(L.neighborCardCode(before, "8H", [])).toBeNull();
+        expect(L.neighborCardCode(null, "8H", ["QD"])).toBe("QD");
+    });
+});
+
+describe("focusRecoveryTarget", () => {
+    const handBefore = ["6C", "7D", "8H"];
+
+    it("sends a removed card's focus to its neighbour", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "card", code: "7D" }, handBefore, handAfter: ["6C", "8H"]
+        })).toEqual({ kind: "card", code: "8H" });
+    });
+
+    it("sends a disabled play button's focus next to the card that was played", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "attackBtn" },
+            handBefore,
+            handAfter: ["6C", "8H"],
+            lastPlayedCard: "7D"
+        })).toEqual({ kind: "card", code: "8H" });
+    });
+
+    it("sends Take/End round focus to the hand, not to another action", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "takeBtn" },
+            handBefore,
+            handAfter: handBefore,
+            availableControls: ["shareBtn"]
+        })).toEqual({ kind: "card", code: "6C" });
+    });
+
+    it("keeps a control that is still usable", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "endRoundBtn" }, stillAvailable: true
+        })).toEqual({ kind: "control", id: "endRoundBtn" });
+    });
+
+    it("moves a vanished room control to the next safe control, then the heading", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "addBotBtn" }, availableControls: ["startBtn", "shareBtn"]
+        })).toEqual({ kind: "control", id: "startBtn" });
+        expect(L.focusRecoveryTarget({ lost: { kind: "control", id: "addBotBtn" } }))
+            .toEqual({ kind: "heading" });
+        expect(L.focusRecoveryTarget({ lost: { kind: "card", code: "6C" }, handBefore: ["6C"], handAfter: [] }))
+            .toEqual({ kind: "heading" });
+    });
+});
+
+describe("viewKey", () => {
+    it("names each screen", () => {
+        expect(L.viewKey({ hasSession: false })).toBe("lobby");
+        expect(L.viewKey({ hasSession: false, reconnecting: true })).toBe("reconnecting");
+        expect(L.viewKey({ hasSession: true, status: "LOBBY" })).toBe("room");
+        expect(L.viewKey({ hasSession: true, status: "IN_PROGRESS" })).toBe("table");
+        expect(L.viewKey({ hasSession: true, status: "FINISHED" })).toBe("result");
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
         expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");

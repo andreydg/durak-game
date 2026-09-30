@@ -14,6 +14,8 @@ const {
     apiErrorMessage,
     sessionErrorKind,
     seatProblem,
+    focusRecoveryTarget,
+    viewKey,
     shouldReplaceRefreshTimer,
     lobbyRefreshDelayMs,
     escapeHtml,
@@ -61,6 +63,10 @@ const state = {
     leaveInFlight: false,
     /* True while a saved seat is being restored after a reload (its first refresh is pending). */
     reconnecting: false,
+    /* Current screen (see viewKey); null until the first render. */
+    view: null,
+    /* Card used by the last play action, so focus can land on its neighbour afterwards. */
+    lastPlayedCard: null,
     game: null,
     selectedHandCard: null,
     showGameplayHelp: false,
@@ -401,7 +407,20 @@ async function refreshLobbyLists() {
 
             /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
             if (lobbyGameList) {
+                const focusedCode = lobbyGameList.contains(document.activeElement)
+                    ? document.activeElement.getAttribute("data-code")
+                    : null;
                 lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
+                if (focusedCode !== null) {
+                    // The list was rebuilt under a keyboard user: keep them on the same table's
+                    // Join button, or the first one, or the list heading if the list emptied.
+                    const buttons = [...lobbyGameList.querySelectorAll(".lobby-list-join")];
+                    const again = buttons.find(btn => btn.getAttribute("data-code") === focusedCode)
+                        || buttons[0]
+                        || document.getElementById("openTablesHeading");
+                    again?.focus();
+                }
+                // After restoring focus, so a pending join keeps its (focused) button aria-disabled.
                 syncBusyControls();
             }
             if (gameLobbyGameList) {
@@ -697,8 +716,10 @@ function cardImg(code, className) {
 function renderSeat(el, player, game) {
     if (!player) {
         el.innerHTML = "";
+        delete el.dataset.playerId;
         return;
     }
+    el.dataset.playerId = player.id;
     const backCount = Math.min(Math.max(player.handSize, 0), 6);
     const fewFan = player.handSize < 6;
     let backs = "";
@@ -714,12 +735,40 @@ function renderSeat(el, player, game) {
         ? ` seat-title--team${player.team}` : "";
     const tags = roleTags(player, game);
     const aiBadge = player.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
-    const thinking = state.botThinking[player.id]
-        ? `<span class="bot-thinking-inline">${escapeHtml(state.botThinking[player.id]).replace(/\\.\\.\\.$/, "")}<span class="bot-thinking-dots"></span></span>` : "";
     const tagHtml = tags ? `<span class="seat-role-inline">${escapeHtml(tags)}</span>` : "";
     /* <wbr>: narrow seats may wrap between the name and its badges instead of mid-word. */
-    el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}<wbr>${tagHtml}<wbr>${thinking}</div>
+    el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}<wbr>${tagHtml}<wbr></div>
         <div class="${fanClass}">${backs}</div>`;
+    syncSeatThinking(el);
+}
+
+/** Shows or clears the "planning attack..." note of the bot in this seat, in place. */
+function syncSeatThinking(el) {
+    const title = el.querySelector(".seat-title");
+    if (!title) return;
+    const message = el.dataset.playerId ? state.botThinking[el.dataset.playerId] : "";
+    let note = title.querySelector(".bot-thinking-inline");
+    if (!message) {
+        note?.remove();
+        return;
+    }
+    if (!note) {
+        note = document.createElement("span");
+        note.className = "bot-thinking-inline";
+        note.append(document.createTextNode(""), Object.assign(document.createElement("span"), {className: "bot-thinking-dots"}));
+        title.appendChild(note);
+    }
+    note.firstChild.textContent = String(message).replace(/\\.\\.\\.$/, "");
+}
+
+/**
+ * BOT_THINKING only changes these notes. Updating them in place (instead of a full render)
+ * keeps keyboard focus and selection untouched while a bot deliberates.
+ */
+function updateBotThinkingIndicators() {
+    for (const seat of [seatTop1, seatTop2, seatTop3]) {
+        if (seat) syncSeatThinking(seat);
+    }
 }
 
 function updateBattleTableBanner(game) {
@@ -759,43 +808,71 @@ function renderBattle(game) {
     }
 }
 
+function currentHandCodes() {
+    return [...myHand.querySelectorAll(".hand-card-btn")].map(btn => btn.dataset.cardCode);
+}
+
+function createHandCardButton(code) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hand-card-btn";
+    btn.dataset.cardCode = code;
+    const img = cardImg(code);
+    img.draggable = false;
+    btn.appendChild(img);
+    btn.setAttribute("aria-label", `Play ${prettyCard(code)}`);
+    btn.addEventListener("click", () => toggleHandCard(code));
+    btn.addEventListener("dragstart", (e) => {
+        if (isBusy()) {
+            e.preventDefault();
+            return;
+        }
+        btn.classList.add("dragging");
+        e.dataTransfer.setData("text/plain", code);
+        e.dataTransfer.effectAllowed = "move";
+    });
+    btn.addEventListener("dragend", () => {
+        btn.classList.remove("dragging");
+        clearBattleDropUi();
+    });
+    return btn;
+}
+
+function toggleHandCard(code) {
+    if (isBusy() || !state.game) return;
+    state.selectedHandCard = state.selectedHandCard === code ? null : code;
+    renderActionState(state.game);
+    renderMyHand(state.game, state.game.players.find(p => p.id === state.playerId));
+}
+
+/**
+ * Keyed update of the hand: buttons are reused per card code and existing ones are never moved
+ * (the sort order is stable), so the focused card keeps focus through every re-render.
+ */
 function renderMyHand(game, me) {
-    myHand.innerHTML = "";
     const hand = sortCardCodesByRank(me?.hand || []);
     const busy = isBusy();
+    const existing = new Map([...myHand.querySelectorAll(".hand-card-btn")].map(btn => [btn.dataset.cardCode, btn]));
+    const wanted = new Set(hand);
+    for (const [code, btn] of existing) {
+        if (!wanted.has(code)) btn.remove();
+    }
+    for (const node of [...myHand.childNodes]) {
+        if (!(node instanceof HTMLElement && node.classList.contains("hand-card-btn"))) node.remove();
+    }
+    let previous = null;
     for (const code of hand) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "hand-card-btn" + (state.selectedHandCard === code ? " selected" : "");
-        const img = cardImg(code);
-        img.draggable = false;
-        btn.appendChild(img);
-        btn.setAttribute("aria-label", `Play ${prettyCard(code)}`);
-        btn.setAttribute("aria-pressed", String(state.selectedHandCard === code));
+        const btn = existing.get(code) || createHandCardButton(code);
+        const selected = state.selectedHandCard === code;
+        btn.classList.toggle("selected", selected);
+        btn.setAttribute("aria-pressed", String(selected));
         /* While a request is pending the hand stays focusable but cannot be changed or dragged. */
         btn.draggable = !busy;
         if (busy) btn.setAttribute("aria-disabled", "true");
-        btn.dataset.cardCode = code;
-        btn.addEventListener("click", () => {
-            if (isBusy()) return;
-            state.selectedHandCard = state.selectedHandCard === code ? null : code;
-            renderActionState(game);
-            renderMyHand(game, me);
-        });
-        btn.addEventListener("dragstart", (e) => {
-            if (isBusy()) {
-                e.preventDefault();
-                return;
-            }
-            btn.classList.add("dragging");
-            e.dataTransfer.setData("text/plain", code);
-            e.dataTransfer.effectAllowed = "move";
-        });
-        btn.addEventListener("dragend", () => {
-            btn.classList.remove("dragging");
-            clearBattleDropUi();
-        });
-        myHand.appendChild(btn);
+        else btn.removeAttribute("aria-disabled");
+        const slot = previous ? previous.nextElementSibling : myHand.firstElementChild;
+        if (btn !== slot) myHand.insertBefore(btn, slot);
+        previous = btn;
     }
 }
 
@@ -933,6 +1010,7 @@ async function playCardToTable(cardCode, preferredAttackCard) {
  */
 function playerAction(suffix, extra = {}, {clearSelection = true} = {}) {
     return async () => {
+        state.lastPlayedCard = extra.card || extra.defenseCard || null;
         const game = await api(gamePath(state.gameCode, suffix), "POST", {playerId: state.playerId, ...extra});
         if (clearSelection) state.selectedHandCard = null;
         return game;
@@ -944,7 +1022,79 @@ function syncBusyControls() {
     setControlEnabled(leaveBtn, !state.leaveInFlight);
 }
 
+/** Renders the current state, then puts keyboard focus somewhere meaningful (see settleFocus). */
 function render() {
+    const focusBefore = describeFocus();
+    const handBefore = currentHandCodes();
+    renderView();
+    settleFocus(focusBefore, handBefore);
+}
+
+/** What has focus, in terms that survive a re-render: a card code or a control id. */
+function describeFocus() {
+    const active = document.activeElement;
+    if (!active || active === document.body) return null;
+    if (active.classList.contains("hand-card-btn") && myHand.contains(active)) {
+        return {kind: "card", code: active.dataset.cardCode};
+    }
+    return active.id ? {kind: "control", id: active.id} : null;
+}
+
+function canTakeFocus(el) {
+    return Boolean(el && el.isConnected && !el.disabled && el.getClientRects().length > 0);
+}
+
+const VIEW_HEADINGS = {lobby: "lobbyHeading", room: "roomHeading", table: "roomHeading", result: "resultTitle"};
+
+/** Safe places to move focus to when the focused control goes away (never Leave or Take). */
+const FALLBACK_CONTROL_IDS = ["startBtn", "addBotBtn", "shareBtn", "rematchBtn"];
+
+/**
+ * After a render: a new view (lobby -> game, game -> result, ...) focuses its heading; otherwise,
+ * if the focused card or control was removed, hidden or disabled, focus moves to its nearest
+ * neighbour in the hand or another sensible control instead of falling back to <body>.
+ */
+function settleFocus(before, handBefore) {
+    const view = viewKey({
+        reconnecting: state.reconnecting,
+        hasSession: Boolean(state.gameCode && state.playerId && state.game),
+        status: state.game?.status
+    });
+    const previousView = state.view;
+    state.view = view;
+    if (previousView && previousView !== view) {
+        const heading = document.getElementById(VIEW_HEADINGS[view] || "");
+        if (canTakeFocus(heading)) {
+            heading.focus();
+            return;
+        }
+    }
+    if (!before) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && canTakeFocus(active)) return;
+
+    const handAfter = currentHandCodes();
+    const lostEl = before.kind === "control" ? document.getElementById(before.id) : null;
+    const target = focusRecoveryTarget({
+        lost: before,
+        handBefore,
+        handAfter,
+        lastPlayedCard: state.lastPlayedCard,
+        stillAvailable: canTakeFocus(lostEl),
+        availableControls: FALLBACK_CONTROL_IDS.filter(id => canTakeFocus(document.getElementById(id)))
+    });
+    let el = null;
+    if (target.kind === "card") {
+        el = [...myHand.querySelectorAll(".hand-card-btn")].find(btn => btn.dataset.cardCode === target.code);
+    } else if (target.kind === "control") {
+        el = document.getElementById(target.id);
+    } else {
+        el = document.getElementById(VIEW_HEADINGS[view] || "");
+    }
+    if (canTakeFocus(el)) el.focus();
+}
+
+function renderView() {
     const game = state.game;
     const hasSession = Boolean(state.gameCode && state.playerId && game);
     const reconnecting = Boolean(state.reconnecting && !hasSession);
@@ -1451,7 +1601,7 @@ function connectWebSocket() {
                     delete state.botThinking[data.playerId];
                     delete state.botThinkingEventAt[data.playerId];
                 }
-                render();
+                updateBotThinkingIndicators();
                 return;
             }
             if (typeof data.version === "number" && Number.isFinite(data.version)) {

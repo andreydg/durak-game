@@ -9,6 +9,8 @@ body {
 }
 /* Must win over .stack etc., or #gameView stays visible and the table leaks onto the lobby. */
 .hidden { display: none !important; }
+/* View headings take focus on view changes; show a ring only for keyboard users. */
+[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
 .app-alert {
     position: fixed;
     z-index: 1000;

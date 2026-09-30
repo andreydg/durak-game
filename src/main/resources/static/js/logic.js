@@ -182,6 +182,67 @@
         return null;
     }
 
+    /**
+     * The card that should take focus when `lost` leaves the hand: itself if still held, else its
+     * nearest surviving neighbour in the previous order (right first, so focus keeps its slot),
+     * else the card now at that position. Null when the hand is empty.
+     */
+    function neighborCardCode(previousCodes, lost, currentCodes) {
+        const next = Array.isArray(currentCodes) ? currentCodes : [];
+        if (!next.length) return null;
+        if (lost && next.includes(lost)) return lost;
+        const prev = Array.isArray(previousCodes) ? previousCodes : [];
+        const index = prev.indexOf(lost);
+        if (index < 0) return next[0];
+        for (let distance = 1; distance < prev.length; distance++) {
+            for (const candidate of [prev[index + distance], prev[index - distance]]) {
+                if (candidate && next.includes(candidate)) return candidate;
+            }
+        }
+        return next[Math.min(index, next.length - 1)];
+    }
+
+    /** Controls whose use is about the hand: when they lose focus, the hand is the natural next stop. */
+    const HAND_ACTION_IDS = ["attackBtn", "defendBtn", "transferBtn", "takeBtn", "endRoundBtn", "defendTargetSelect"];
+
+    /**
+     * Decides where keyboard focus goes after a re-render removed, hid or disabled the focused
+     * element. `lost` is {kind: "card", code} or {kind: "control", id}; `availableControls` lists
+     * safe fallback control ids in preference order (never destructive ones such as Leave or Take).
+     * Returns {kind: "card", code} | {kind: "control", id} | {kind: "heading"}.
+     */
+    function focusRecoveryTarget({
+        lost,
+        handBefore = [],
+        handAfter = [],
+        lastPlayedCard = null,
+        availableControls = [],
+        stillAvailable = false
+    } = {}) {
+        const firstControl = availableControls.length ? { kind: "control", id: availableControls[0] } : null;
+        const firstCard = handAfter.length ? { kind: "card", code: handAfter[0] } : null;
+        if (!lost) return { kind: "heading" };
+        if (lost.kind === "card") {
+            const code = neighborCardCode(handBefore, lost.code, handAfter);
+            return code ? { kind: "card", code } : firstControl || { kind: "heading" };
+        }
+        if (stillAvailable) return { kind: "control", id: lost.id };
+        if (HAND_ACTION_IDS.includes(lost.id)) {
+            const code = lastPlayedCard ? neighborCardCode(handBefore, lastPlayedCard, handAfter) : null;
+            if (code) return { kind: "card", code };
+            return firstCard || firstControl || { kind: "heading" };
+        }
+        return firstControl || firstCard || { kind: "heading" };
+    }
+
+    /** Which screen is showing; a change of view moves focus to that view's heading. */
+    function viewKey({ reconnecting = false, hasSession = false, status = null } = {}) {
+        if (!hasSession) return reconnecting ? "reconnecting" : "lobby";
+        if (status === "IN_PROGRESS") return "table";
+        if (status === "FINISHED") return "result";
+        return "room";
+    }
+
     /** Preserve a pending prompt refresh unless the new deadline is earlier or explicitly replaces it. */
     function shouldReplaceRefreshTimer(existingDueAt, requestedDueAt, replaceExisting = false) {
         if (replaceExisting) return true;
@@ -349,6 +410,9 @@
         apiErrorMessage,
         sessionErrorKind,
         seatProblem,
+        neighborCardCode,
+        focusRecoveryTarget,
+        viewKey,
         shouldReplaceRefreshTimer,
         lobbyRefreshDelayMs,
         escapeHtml,

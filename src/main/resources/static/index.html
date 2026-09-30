@@ -27,7 +27,7 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css?v=a7ed9f34f34c">
-    <link rel="stylesheet" href="/css/app.css?v=0d0b75d00e62">
+    <link rel="stylesheet" href="/css/app.css?v=651016ba30f4">
     <link rel="stylesheet" href="/css/content.css?v=915568db78e3">
     <script type="application/ld+json">
     {
@@ -66,7 +66,7 @@
                 <span class="card-back-face"></span>
             </div>
             <div>
-                <h1 class="lobby-title">Durak <span>Дурак</span></h1>
+                <h1 id="lobbyHeading" class="lobby-title" tabindex="-1">Durak <span>Дурак</span></h1>
                 <p class="lobby-tagline">Create a room or join with a code.</p>
                 <div class="lobby-suits" aria-hidden="true">♠ ♥ ♦ ♣</div>
             </div>
@@ -108,7 +108,7 @@
         </form>
     </div>
     <div class="lobby-open-tables panel" id="lobbyOpenTables">
-        <h2>Open tables</h2>
+        <h2 id="openTablesHeading" tabindex="-1">Open tables</h2>
         <p class="lobby-hint muted" style="margin-top:-0.35rem;margin-bottom:0.75rem;">Rooms stay listed until four players join, the host starts, the table is inactive for 30 minutes, or it has waited for 2 hours. A completed round that returns to the lobby starts a fresh waiting window. Tap Join to use your name from the form above (or a random name if empty).</p>
         <div id="lobbyGameList" class="lobby-list-host" aria-live="polite"></div>
     </div>
@@ -141,7 +141,7 @@
     <div class="panel room-header">
         <div>
             <div class="room-title-row">
-                <h2 class="room-title">Game <span id="gameCodeLabel" class="room-code"></span></h2>
+                <h2 id="roomHeading" class="room-title" tabindex="-1">Game <span id="gameCodeLabel" class="room-code"></span></h2>
                 <span id="statusLabel" class="status-pill"></span>
                 <span id="visibilityLabel" class="visibility-pill"></span>
             </div>
@@ -170,7 +170,7 @@
         <div id="resultIcon" class="result-icon" aria-hidden="true">🏆</div>
         <div class="result-copy">
             <p class="result-eyebrow">Game complete</p>
-            <h2 id="resultTitle">Round finished</h2>
+            <h2 id="resultTitle" tabindex="-1">Round finished</h2>
             <p id="resultSummary" class="muted"></p>
             <p id="rematchWaiting" class="result-waiting muted hidden">Waiting for the host to deal the next game.</p>
         </div>
@@ -244,7 +244,7 @@
     <pre id="messages">Ready.</pre>
 </section>
 
-<script src="/js/logic.js?v=4062a264dc31"></script>
-<script src="/js/app.js?v=45671bf0b541"></script>
+<script src="/js/logic.js?v=343df05ca19d"></script>
+<script src="/js/app.js?v=33822b9ce00b"></script>
 </body>
 </html>
