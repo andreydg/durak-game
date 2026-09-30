@@ -620,6 +620,19 @@ describe("isCardCode", () => {
     });
 });
 
+describe("cardImage", () => {
+    it("points a card code at its WebP face", () => {
+        expect(L.cardImage("AS")).toBe("/cards/AS.webp");
+        expect(L.cardImage("10H")).toBe("/cards/10H.webp");
+    });
+
+    it("shows the back for anything that is not a card code", () => {
+        for (const other of ["", "BACK", "../AS", "as", "AS.png", null, undefined]) {
+            expect(L.cardImage(other)).toBe("/cards/BACK.webp");
+        }
+    });
+});
+
 describe("playerTeam", () => {
     const game = {
         players: [

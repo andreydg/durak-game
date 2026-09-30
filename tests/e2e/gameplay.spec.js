@@ -32,6 +32,15 @@ test.describe("Gameplay against a bot", () => {
         await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6, { timeout: 10_000 });
         // Trump suit indicator is shown.
         await expect(page.locator("#trumpSuitHud")).toBeVisible();
+
+        // Card faces are WebP, served as such, and every dealt card and the trump actually decodes.
+        const faces = page.locator("#myHand img, #trumpUnderImg");
+        await expect.poll(() => faces.evaluateAll(imgs => imgs.map(img =>
+            new URL(img.src).pathname.endsWith(".webp") && img.complete && img.naturalWidth === 222
+        ))).toEqual(Array(7).fill(true));
+        const back = await page.request.get("/cards/BACK.webp");
+        expect(back.ok()).toBe(true);
+        expect(back.headers()["content-type"]).toBe("image/webp");
     });
 
     test("host can reload an active game without deleting it", async ({ page }) => {

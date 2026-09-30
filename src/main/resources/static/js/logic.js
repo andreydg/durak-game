@@ -281,6 +281,11 @@ export function isCardCode(code) {
     return typeof code === "string" && CARD_CODE_PATTERN.test(code);
 }
 
+/** Image URL for a card; only real card codes reach a URL, anything else shows the back. */
+export function cardImage(code) {
+    return isCardCode(code) ? `/cards/${code}.webp` : "/cards/BACK.webp";
+}
+
 const SUIT_NAMES = { C: "clubs", D: "diamonds", H: "hearts", S: "spades" };
 const FULL_SUIT_CODES = { CLUBS: "C", DIAMONDS: "D", HEARTS: "H", SPADES: "S" };
 const RANK_NAMES = { J: "jack", Q: "queen", K: "king", A: "ace" };

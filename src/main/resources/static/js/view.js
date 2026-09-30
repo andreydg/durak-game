@@ -5,6 +5,7 @@
 import {
     actionAvailability,
     actionHint,
+    cardImage,
     cardName,
     defenceChoice,
     displayStatus,
@@ -13,7 +14,6 @@ import {
     fanLayout,
     focusRecoveryTarget,
     gameResult,
-    isCardCode,
     roleDescription,
     roleTags,
     seatRotation,
@@ -103,11 +103,6 @@ export function syncBusyControls() {
 }
 
 /* ---- cards ---- */
-
-/** Only real card codes reach a URL; anything else shows a card back. */
-export function cardImage(code) {
-    return isCardCode(code) ? `/cards/${code}.png` : "/cards/BACK.png";
-}
 
 /** Card image; `alt` defaults to the spoken card name ("" when a parent already names it). */
 function cardImg(code, className, alt = cardName(code)) {
