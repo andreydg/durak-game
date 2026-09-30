@@ -59,6 +59,8 @@ const state = {
     actionInFlight: null,
     /* True while a /leave request is pending. */
     leaveInFlight: false,
+    /* True while a saved seat is being restored after a reload (its first refresh is pending). */
+    reconnecting: false,
     game: null,
     selectedHandCard: null,
     showGameplayHelp: false,
@@ -91,6 +93,8 @@ const state = {
     botThinkingEventAt: {}
 };
 
+const reconnectView = document.getElementById("reconnectView");
+const reconnectCode = document.getElementById("reconnectCode");
 const lobbyView = document.getElementById("lobbyView");
 const gameView = document.getElementById("gameView");
 const appAlert = document.getElementById("appAlert");
@@ -441,6 +445,9 @@ async function refreshLobbyLists() {
 }
 
 function shouldPollOpenTables() {
+    if (state.reconnecting) {
+        return false;
+    }
     if (!state.gameCode || !state.playerId || !state.game) {
         return true;
     }
@@ -940,8 +947,13 @@ function syncBusyControls() {
 function render() {
     const game = state.game;
     const hasSession = Boolean(state.gameCode && state.playerId && game);
+    const reconnecting = Boolean(state.reconnecting && !hasSession);
     syncBusyControls();
-    lobbyView.classList.toggle("hidden", hasSession);
+    if (reconnectView) {
+        reconnectView.classList.toggle("hidden", !reconnecting);
+        if (reconnectCode) reconnectCode.textContent = reconnecting ? state.gameCode : "";
+    }
+    lobbyView.classList.toggle("hidden", hasSession || reconnecting);
     gameView.classList.toggle("hidden", !hasSession);
 
     const showPlayingArea = hasSession && game && game.status === "IN_PROGRESS";
@@ -1198,7 +1210,10 @@ async function refreshGame(showMessage = false) {
             if (handleSessionError(err, key)) {
                 return false;
             }
-            showError(`Connection problem: ${err.message}`, "connection");
+            // No game on screen yet means the saved seat is still being restored after a reload.
+            showError(!state.game
+                ? `Could not reconnect to room ${requestedGameCode}: ${err.message} Retrying in the background.`
+                : `Connection problem: ${err.message}`, "connection");
             log(`Refresh failed: ${err.message}`);
             return false;
         }
@@ -1712,10 +1727,23 @@ battleCards.addEventListener("drop", async (e) => {
         state.playerToken = "";
     }
     if (!hasDifferentInvite && state.gameCode && state.playerId) {
+        /*
+         * Until the saved seat's first refresh settles, show "Reconnecting…" instead of the lobby:
+         * otherwise Quick Play / Create are clickable and would overwrite the saved seat.
+         */
+        const code = state.gameCode;
+        state.reconnecting = true;
+        render();
         beginPolling();
         connectWebSocket();
         await refreshGame();
-        log("Session restored.");
+        state.reconnecting = false;
+        if (state.seatInvalid && !state.game) {
+            abandonInvalidSeat();
+            showError(`This browser's seat in room ${code} is no longer valid. Join the room again or start a new game.`, "session");
+        }
+        render();
+        log(state.game ? "Session restored." : "Session not restored.");
     } else {
         if (invitedCode) {
             gameCodeInput.value = invitedCode;
