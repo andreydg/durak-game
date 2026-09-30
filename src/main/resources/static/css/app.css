@@ -105,7 +105,6 @@ body {
     padding: 0.9rem;
     box-shadow: var(--shadow-soft);
 }
-.row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
 input, button, select {
     font-family: var(--font-mono);
     border: 1px solid var(--border);
@@ -423,9 +422,7 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     grid-template-rows: auto auto auto;
     gap: 0.7rem;
 }
-/* 2 players: opponent / battle / you; no side columns */
-.table-grid.players-2 .seat.left,
-.table-grid.players-2 .seat.right { display: none !important; }
+/* 2 players: opponent / battle / you */
 .table-grid.players-2 {
     grid-template-columns: minmax(0, 1fr);
 }
@@ -445,8 +442,6 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     margin-top: 0.2rem;
 }
 /* 3 players: two opponents across top; battle + hand full width */
-.table-grid.players-3 .seat.left,
-.table-grid.players-3 .seat.right { display: none !important; }
 .table-grid.players-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -462,8 +457,6 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     grid-row: 3;
 }
 /* 4 players: three opponents across the top; battle + hand full width */
-.table-grid.players-4 .seat.left,
-.table-grid.players-4 .seat.right { display: none !important; }
 .table-grid.players-4 .seat-top-1 { grid-column: 1; grid-row: 1; }
 .table-grid.players-4 .seat-top-2 { grid-column: 2; grid-row: 1; }
 .table-grid.players-4 .seat-top-3 { grid-column: 3; grid-row: 1; }
@@ -594,8 +587,6 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
 .seat-top-1 { grid-column: 2; grid-row: 1; }
 .seat-top-2,
 .seat-top-3 { grid-column: 2; grid-row: 1; }
-.seat.left { grid-column: 1; grid-row: 2; }
-.seat.right { grid-column: 3; grid-row: 2; }
 .seat.bottom { grid-column: 2; grid-row: 3; }
 .seat.center {
     grid-column: 2;
