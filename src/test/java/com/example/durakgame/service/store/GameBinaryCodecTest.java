@@ -129,6 +129,54 @@ class GameBinaryCodecTest {
     }
 
     @Test
+    void roundTripPreservesBoutsCompleted() {
+        Game.Snapshot original = new Game.Snapshot(
+                "BOUTS9",
+                1_700_000_000_000L,
+                1_700_000_123_000L,
+                1_700_000_060_000L,
+                "host",
+                GameStatus.IN_PROGRESS,
+                Suit.CLUBS,
+                Card.fromCode("7C"),
+                1,
+                0,
+                null,
+                false,
+                0,
+                23L,
+                List.of(
+                        new Game.PlayerSnapshot("host", "Host", 1L, false, null, cards("6H", "9D"), "sec-host"),
+                        new Game.PlayerSnapshot("bot", "Bot Elektronik", 2L, true, null, cards("QS"), "sec-bot")
+                ),
+                cards("7C"),
+                List.of(new Game.AttackSnapshot(Card.fromCode("QS"), null, "bot")),
+                Set.of(),
+                cards("6S", "8S"),
+                List.of(),
+                true,
+                null,
+                null,
+                7
+        );
+
+        Game decoded = codec.decode(codec.encode(Game.fromSnapshot(original)));
+
+        assertEquals(7, decoded.getBoutsCompleted());
+        assertEquals(original, decoded.toSnapshot());
+    }
+
+    @Test
+    void decodesVersionEightPayloadWithZeroBoutsCompleted() throws Exception {
+        Game decoded = codec.decode(encodeV8SinglePlayerLobby("LEGCY8", "host", "Host", "secret-v8"));
+
+        assertEquals("LEGCY8", decoded.getCode());
+        assertEquals("secret-v8", decoded.getPlayers().getFirst().getSecret());
+        assertFalse(decoded.isPublicRoom());
+        assertEquals(0, decoded.getBoutsCompleted(), "games persisted before v9 have no bout history");
+    }
+
+    @Test
     void rejectsForeignPayloads() {
         assertFalse(codec.isCodecPayload(new byte[]{1, 2, 3, 4}));
         assertThrows(IllegalStateException.class, () -> codec.decode(new byte[]{1, 2, 3, 4}));
@@ -148,6 +196,7 @@ class GameBinaryCodecTest {
         assertEquals(decoded.getCreatedAt(), decoded.getLastActivityAt());
         assertEquals(decoded.getCreatedAt(), decoded.getLobbyStartedAt());
         assertTrue(decoded.isPublicRoom(), "rooms persisted before visibility existed remain discoverable");
+        assertEquals(0, decoded.getBoutsCompleted());
     }
 
     @Test
@@ -180,6 +229,7 @@ class GameBinaryCodecTest {
         assertEquals(1_700_000_060_000L, decoded.getLobbyStartedAt().toEpochMilli());
         assertEquals("secret-v6", decoded.getPlayers().getFirst().getSecret());
         assertTrue(decoded.isPublicRoom(), "v6 rooms written before visibility existed remain public");
+        assertEquals(0, decoded.getBoutsCompleted());
     }
 
     /** Hand-writes a minimal version-3 lobby payload (the format before the player-secret field). */
@@ -302,6 +352,52 @@ class GameBinaryCodecTest {
             out.writeInt(0);                        // endRoundApprovals
             out.writeInt(0);                        // discarded
             out.writeInt(0);                        // knownCardsByPlayer
+        }
+        return bos.toByteArray();
+    }
+
+    /** Hand-writes the v8 layout immediately before the completed-bout counter was added. */
+    private static byte[] encodeV8SinglePlayerLobby(
+            String code,
+            String playerId,
+            String name,
+            String secret
+    ) throws Exception {
+        var bos = new java.io.ByteArrayOutputStream();
+        try (var out = new java.io.DataOutputStream(bos)) {
+            out.write(new byte[]{'D', 'G', '1'});
+            out.writeByte(8);                       // payload version
+            out.writeUTF(code);
+            out.writeLong(1_700_000_000_000L);      // createdAt
+            out.writeLong(1_700_000_123_000L);      // lastActivityAt
+            out.writeLong(1_700_000_060_000L);      // lobbyStartedAt
+            out.writeBoolean(false);                // publicRoom
+            out.writeUTF(playerId);                 // hostPlayerId
+            out.writeByte(GameStatus.LOBBY.ordinal());
+            out.writeBoolean(false);                // trumpSuit absent
+            out.writeBoolean(false);                // trumpCard absent
+            out.writeInt(-1);                       // attackerIndex
+            out.writeInt(-1);                       // defenderIndex
+            out.writeBoolean(false);                // loserPlayerId absent
+            out.writeBoolean(false);                // takingCardsInProgress
+            out.writeInt(0);                        // takeLimit
+            out.writeLong(8L);                      // game version
+            out.writeInt(1);                        // playerCount
+            out.writeUTF(playerId);
+            out.writeUTF(name);
+            out.writeLong(1_700_000_000_001L);      // joinedAt
+            out.writeBoolean(false);                // bot
+            out.writeUTF(secret);
+            out.writeBoolean(false);                // team absent
+            out.writeInt(0);                        // hand size
+            out.writeInt(0);                        // talon
+            out.writeInt(0);                        // table
+            out.writeInt(0);                        // endRoundApprovals
+            out.writeInt(0);                        // discarded
+            out.writeInt(0);                        // knownCardsByPlayer
+            out.writeBoolean(false);                // loserPlayerName absent
+            out.writeBoolean(false);                // loserTeam absent
+            // (no boutsCompleted field in v8)
         }
         return bos.toByteArray();
     }

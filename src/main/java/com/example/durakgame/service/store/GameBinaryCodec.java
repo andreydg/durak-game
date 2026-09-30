@@ -18,7 +18,7 @@ import java.util.Set;
 
 final class GameBinaryCodec {
     private static final byte[] MAGIC = new byte[]{'D', 'G', '1'};
-    private static final int VERSION = 8;
+    private static final int VERSION = 9;
     /** Oldest format this decoder can still read, so a version bump never destroys in-flight games. */
     private static final int MIN_SUPPORTED_VERSION = 3;
     /** Player secret field was introduced in this version; older payloads decode with a blank secret. */
@@ -31,6 +31,8 @@ final class GameBinaryCodec {
     private static final int VERSION_WITH_ROOM_VISIBILITY = 7;
     /** Durable result identity was introduced in v8 so departures cannot erase the outcome. */
     private static final int VERSION_WITH_RESULT_IDENTITY = 8;
+    /** Completed-bout counter was introduced in v9; older games decode as if no bout had finished. */
+    private static final int VERSION_WITH_BOUTS_COMPLETED = 9;
 
     byte[] encode(Game game) {
         Game.Snapshot snapshot = game.toSnapshot();
@@ -122,6 +124,8 @@ final class GameBinaryCodec {
             if (snapshot.loserTeam() != null) {
                 out.writeInt(snapshot.loserTeam());
             }
+
+            out.writeInt(snapshot.boutsCompleted());
 
             out.flush();
             return bos.toByteArray();
@@ -221,6 +225,7 @@ final class GameBinaryCodec {
                 loserPlayerName = in.readBoolean() ? in.readUTF() : null;
                 loserTeam = in.readBoolean() ? in.readInt() : null;
             }
+            int boutsCompleted = formatVersion >= VERSION_WITH_BOUTS_COMPLETED ? in.readInt() : 0;
 
             return Game.fromSnapshot(new Game.Snapshot(
                     code,
@@ -245,7 +250,8 @@ final class GameBinaryCodec {
                     knownCardsByPlayer,
                     publicRoom,
                     loserPlayerName,
-                    loserTeam
+                    loserTeam,
+                    boutsCompleted
             ));
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to decode game snapshot", ex);

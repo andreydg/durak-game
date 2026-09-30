@@ -12,14 +12,25 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class GeminiConfigurationTest {
 
     @Test
-    void productionDefaultsToStableGemini37Flash() throws IOException {
+    void productionDefaultsToStableGemini38Flash() throws IOException {
         Properties properties = applicationProperties();
 
-        assertEquals("gemini-3.7-flash", GeminiAutoPlayDecisionEngine.DEFAULT_MODEL);
+        assertEquals("gemini-3.8-flash", GeminiAutoPlayDecisionEngine.DEFAULT_MODEL);
         assertEquals(
-                "${AUTOPLAY_GEMINI_MODEL:gemini-3.7-flash}",
+                "${AUTOPLAY_GEMINI_MODEL:gemini-3.8-flash}",
                 properties.getProperty("autoplay.gemini.model")
         );
+    }
+
+    @Test
+    void simpleDecisionsThinkLessByDefault() throws IOException {
+        Properties properties = applicationProperties();
+
+        assertEquals("${AUTOPLAY_GEMINI_THINKING_LEVEL:HIGH}", properties.getProperty("autoplay.gemini.thinking-level"));
+        assertEquals("${AUTOPLAY_GEMINI_SIMPLE_THINKING_LEVEL:LOW}",
+                properties.getProperty("autoplay.gemini.simple-thinking-level"));
+        assertEquals("HIGH", GeminiSettings.DEFAULT_THINKING_LEVEL);
+        assertEquals("LOW", GeminiSettings.DEFAULT_SIMPLE_THINKING_LEVEL);
     }
 
     @Test

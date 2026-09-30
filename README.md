@@ -48,7 +48,7 @@ The Firestore emulator tests run automatically in CI (against the emulator Docke
 
 ## Logging
 
-On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every log event is one JSON object with a Cloud Logging `severity`, `message` and `time` (stack traces stay in their entry and reach Error Reporting). Messages are `key=value` style, so they work well in Logs Explorer queries and log-based metrics, for example `jsonPayload.message:"autoplay_applied"` (each bot move, with `source=forced|engine|fallback`) or `jsonPayload.message:"auth_rejected"`. Local runs keep Spring's readable console format.
+On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every log event is one JSON object with a Cloud Logging `severity`, `message` and `time` (stack traces stay in their entry and reach Error Reporting). Messages are `key=value` style, so they work well in Logs Explorer queries and log-based metrics, for example `jsonPayload.message:"autoplay_decision"` (every engine decision, with `source=llm|plan_cache|forced|heuristic` and the fallback `reason` — the LLM vs heuristic ratio), `jsonPayload.message:"autoplay_applied"` (each bot move actually played, with `source=forced|engine|fallback|last_resort`) or `jsonPayload.message:"auth_rejected"`. Local runs keep Spring's readable console format.
 
 ## Realtime updates and fallback reads
 
@@ -72,24 +72,43 @@ The API and lobby list enforce expiration immediately. Firestore documents also 
 
 ## Auto-play (Gemini)
 
-The host can add bot players in the lobby. Bots use the primary LLM to choose moves, and every move is validated server-side. If the model is unavailable or returns invalid output, bots use a deterministic heuristic fallback.
+The host can add bot players in the lobby. Bots use the primary LLM to choose moves. Every move the engine returns is checked against the bot's legal moves: card codes are normalized (`6c` is `6C`), and an answer that is still illegal (or missing, or unparseable) is replaced by the deterministic heuristic's move. The heuristic is also used whenever the model is disabled or unavailable. A decision with a single forced option never calls the model, and neither does a bot that already passed in the current bout: nothing has changed since (any new card clears passes), so it waits for the other players instead of being pushed into a throw-in it just declined. When the model defends against several attacks at once it returns a plan for all of them; the bot replays the rest of that plan on its next defend decisions in the same bout (while the table still matches it exactly) instead of asking again.
 
 Environment variables:
 
 - `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback; Cloud Run receives this from Secret Manager)
 - `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
-- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.7-flash` by default)
+- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.8-flash` by default; a `models/` prefix is accepted)
 - `AUTOPLAY_GEMINI_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta` by default)
-- `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default)
+- `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default; decisions with three or more legal options)
+- `AUTOPLAY_GEMINI_SIMPLE_THINKING_LEVEL` (`LOW` by default; decisions with at most two legal options, such as one throw-in card vs pass or one beating card vs take; empty means the same level as above)
 - `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
 - `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default)
+- `AUTOPLAY_GEMINI_CIRCUIT_BREAKER_FAILURE_THRESHOLD` (`3` by default; after this many consecutive timeouts, I/O errors or HTTP 429/5xx responses, bots stop calling the model; `0` disables the breaker)
+- `AUTOPLAY_GEMINI_CIRCUIT_BREAKER_COOLDOWN_MS` (`60000` by default; how long the breaker stays open before a single probe call decides whether to resume)
+- `AUTOPLAY_GEMINI_MAX_CALLS_PER_MINUTE` (`120` by default; global token bucket across all games with a burst of ten seconds' worth of calls, so spend stays capped even if request-level rate limiting is bypassed; `0` disables the cap)
 
-Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` derives the value from the model name):
+Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` derives the value from the model family and version parsed from the id, so future Gemini versions are handled without code changes):
 
 - `AUTOPLAY_GEMINI_JSON_MODE` (`auto`: enabled except for Gemma 3 models)
 - `AUTOPLAY_GEMINI_SYSTEM_INSTRUCTION` (`auto`: enabled except for Gemma 3 models)
-- `AUTOPLAY_GEMINI_THINKING_CONFIG` (`auto`: enabled for Gemini 3 models)
+- `AUTOPLAY_GEMINI_THINKING_CONFIG` (`auto`: enabled for Gemini 3 and newer)
 - `AUTOPLAY_GEMINI_PROMPT_REASONING_BUDGET` (`auto`: enabled for Gemma models)
+
+Gemini 3 and newer keep their default sampling settings; `temperature: 0` is only pinned for Gemini 1.x/2.x and Gemma models.
+
+The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, other seats' hand sizes as the table shows them (exact below six, otherwise `6+`, the same for the take limit), whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so Gemini's implicit prompt caching can reuse the prefix (visible as `cachedTokens` in the logs).
+
+Each model call logs one line, and each bot decision logs one line:
+
+```text
+autoplay_llm_call code=… player=… model=… thinkingLevel=… latencyMs=… httpStatus=… promptTokens=… cachedTokens=… outputTokens=… thoughtTokens=… totalTokens=… finishReason=… error=…
+autoplay_decision code=… player=… source=llm|plan_cache|forced|heuristic reason=… action=… card=… attackCard=… options=…
+```
+
+`reason` says why the heuristic was used (`disabled`, `circuit_open`, `budget_exhausted`, `primary_model_failed`, `unparseable`, `illegal_model_action`, `no_legal_moves`) or why no call was needed (`single_legal_option`, `already_passed`), and is `none` for model and plan-cache decisions. An illegal model answer is echoed as `model=TYPE/card/attackCard`. The API key and player names are never logged.
+
+The heuristic bot is deterministic and also sees only its own seat's information. It compares the cheapest complete defence with transferring and with taking the table, weighted by game phase (it takes a low card early rather than burn a high trump, but not once the talon is empty); it keeps trumps and aces while the talon still has cards, only dumps low non-trumps on a defender who is taking, and in the endgame plays to run out of cards, including leading cards that public card counting shows nobody can beat.
 
 API endpoint:
 
@@ -132,7 +151,7 @@ Optional environment variables:
 - `GEMINI_SECRET` (default `gemini-api-key`)
 - `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
 - `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
-- `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.7-flash`)
+- `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.8-flash`)
 - `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
 - `CONCURRENCY` (default `200`; every open tab holds a websocket that counts against it)
 - `REQUEST_TIMEOUT` (default `3600` seconds; Cloud Run closes websockets at this limit)

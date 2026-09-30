@@ -36,6 +36,8 @@ public class Game implements Serializable {
     private final Map<String, List<Card>> knownCardsByPlayer = new LinkedHashMap<>();
     private boolean takingCardsInProgress = false;
     private int takeLimit = 0;
+    /** Bouts finished in the current deal (defended and discarded, or taken); a public game-phase signal. */
+    private int boutsCompleted = 0;
 
     private GameStatus status = GameStatus.LOBBY;
     private Suit trumpSuit;
@@ -70,8 +72,41 @@ public class Game implements Serializable {
             List<KnownCardsSnapshot> knownCardsByPlayer,
             boolean publicRoom,
             String loserPlayerName,
-            Integer loserTeam
+            Integer loserTeam,
+            int boutsCompleted
     ) {
+        /** Source-compatible constructor for snapshots before completed bouts were tracked. */
+        public Snapshot(
+                String code,
+                long createdAtEpochMs,
+                long lastActivityAtEpochMs,
+                long lobbyStartedAtEpochMs,
+                String hostPlayerId,
+                GameStatus status,
+                Suit trumpSuit,
+                Card trumpCard,
+                int attackerIndex,
+                int defenderIndex,
+                String loserPlayerId,
+                boolean takingCardsInProgress,
+                int takeLimit,
+                long version,
+                List<PlayerSnapshot> players,
+                List<Card> talon,
+                List<AttackSnapshot> table,
+                Set<String> endRoundApprovals,
+                List<Card> discardedCards,
+                List<KnownCardsSnapshot> knownCardsByPlayer,
+                boolean publicRoom,
+                String loserPlayerName,
+                Integer loserTeam
+        ) {
+            this(code, createdAtEpochMs, lastActivityAtEpochMs, lobbyStartedAtEpochMs, hostPlayerId, status,
+                    trumpSuit, trumpCard, attackerIndex, defenderIndex, loserPlayerId, takingCardsInProgress,
+                    takeLimit, version, players, talon, table, endRoundApprovals, discardedCards,
+                    knownCardsByPlayer, publicRoom, loserPlayerName, loserTeam, 0);
+        }
+
         /** Source-compatible constructor for snapshots before lobby phases and visibility were tracked. */
         public Snapshot(
                 String code,
@@ -466,6 +501,8 @@ public class Game implements Serializable {
             defenderIndex = nextEligibleDefenderIndex(attackerIndex);
             updateFinishState();
         }
+        /* Both branches above close the bout (taken or discarded), so it counts exactly once. */
+        boutsCompleted++;
         touch();
     }
 
@@ -545,6 +582,15 @@ public class Game implements Serializable {
         return version;
     }
 
+    /**
+     * Bouts finished in the current deal, whether defended (cards discarded) or taken. Every player
+     * can count these at the table, so bots may use it to judge the game phase; it resets whenever the
+     * room returns to the lobby, so every deal (first start or rematch) starts from zero.
+     */
+    public synchronized int getBoutsCompleted() {
+        return boutsCompleted;
+    }
+
     public synchronized Instant getLastActivityAt() {
         return lastActivityAt;
     }
@@ -605,7 +651,8 @@ public class Game implements Serializable {
                 knownCardsSnapshots,
                 publicRoom,
                 loserPlayerName,
-                loserTeam
+                loserTeam,
+                boutsCompleted
         );
     }
 
@@ -659,6 +706,7 @@ public class Game implements Serializable {
         }
         game.takingCardsInProgress = snapshot.takingCardsInProgress();
         game.takeLimit = snapshot.takeLimit();
+        game.boutsCompleted = Math.max(0, snapshot.boutsCompleted());
         game.version = snapshot.version();
         game.talon.clear();
         game.talon.addAll(snapshot.talon());
@@ -923,6 +971,8 @@ public class Game implements Serializable {
         clearTable();
         discardedCards.clear();
         knownCardsByPlayer.clear();
+        /* Every path into start() passes through a fresh game or this reset, so each deal counts from 0. */
+        boutsCompleted = 0;
         status = GameStatus.LOBBY;
         lobbyStartedAt = Instant.now();
         trumpSuit = null;

@@ -8,6 +8,7 @@ import com.example.durakgame.model.Player;
 import com.example.durakgame.model.ViewerLegalMoves;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
+import com.example.durakgame.service.autoplay.AutoPlayLegality;
 import com.example.durakgame.service.autoplay.HeuristicAutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
 import com.example.durakgame.service.store.LobbyProjection;
@@ -54,9 +55,13 @@ public class GameService {
     private static final int AUTO_PLAY_MAX_ITERATIONS = 48;
     /* Pause before the loop reschedules itself after a bout-ending move, so clients can render it. */
     private static final long AUTO_PLAY_RESCHEDULE_DELAY_MS = 250;
-    /* Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. */
+    /*
+     * Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. The
+     * wide jitter also blurs the gap between instant (forced) and deliberated moves, which would
+     * otherwise hint at what the bot holds.
+     */
     private static final long AUTO_PLAY_MIN_THINK_MS = 2000;
-    private static final int AUTO_PLAY_THINK_JITTER_MS = 1001;
+    private static final int AUTO_PLAY_THINK_JITTER_MS = 2001;
     /* Re-plans allowed per pass when a bot decision goes stale because another player moved first. */
     private static final int AUTO_PLAY_MAX_STALE_REPLANS = 5;
     /* Delayed retries after an unexpected failure (e.g. a store outage) before waiting for a read to resume the bot. */
@@ -664,7 +669,7 @@ public class GameService {
         boolean botOwesMove = game.getPlayers().stream()
                 .filter(Player::isBot)
                 .map(bot -> game.computeViewerLegalMoves(bot.getId()))
-                .anyMatch(moves -> hasAnyPlayableMove(moves) && !shouldWaitForDefender(game, moves));
+                .anyMatch(moves -> owesMove(game, moves));
         if (botOwesMove && autoPlayRuns.putIfAbsent(game.getCode(), Boolean.FALSE) == null) {
             log.info("autoplay_resumed code={}", game.getCode());
             startAutoPlay(game.getCode());
@@ -747,6 +752,12 @@ public class GameService {
                             game.getCode(), player.getId(), player.getName());
                     continue;
                 }
+                if (!owesMove(game, legalMoves)) {
+                    // Only optional throw-ins are left (e.g. the bot already passed): let the others act.
+                    log.info("autoplay_skip code={} playerId={} playerName={} reason=optional_only",
+                            game.getCode(), player.getId(), player.getName());
+                    continue;
+                }
                 log.info("autoplay_consider code={} playerId={} playerName={} canAttack={} canDefend={} canTransfer={} canTake={} canEndRound={}",
                         game.getCode(),
                         player.getId(),
@@ -773,11 +784,16 @@ public class GameService {
                                 game.getCode(), player.getId(), player.getName(), action);
                     }
                     if (!isLegal(action, legalMoves)) {
-                        // Never let an unusable decision end the bot's turn: nothing else would retry it.
+                        // The table is waiting on this bot, so an empty or unusable decision must not end
+                        // its turn: nothing else would retry it.
                         log.warn("autoplay_invalid_decision code={} playerId={} source={} action={}",
                                 game.getCode(), player.getId(), source, action);
                         action = heuristicFallback.choose(game, player.getId(), legalMoves);
                         source = "fallback";
+                        if (!isLegal(action, legalMoves)) {
+                            action = AutoPlayLegality.enumerate(legalMoves).stream().findFirst().orElse(null);
+                            source = "last_resort";
+                        }
                     }
                 } finally {
                     ensureMinimumThinkingPause(thinkingStartedAtMs);
@@ -877,19 +893,22 @@ public class GameService {
     }
 
     private AutoPlayAction forcedDefenseDisciplineAction(Game game, ViewerLegalMoves legalMoves) {
-        if (game.isTakingCardsInProgress() || !legalMoves.canTake()) {
+        // A legal transfer is a real alternative to taking, so that choice stays with the engine.
+        if (game.isTakingCardsInProgress() || !legalMoves.canTake() || legalMoves.canTransfer()) {
             return null;
         }
         boolean hasDefendedCardOnTable = game.getTable().stream().anyMatch(entry -> entry.getDefenseCard() != null);
         if (!hasDefendedCardOnTable && legalMoves.canDefend()
-                && !canDefendAllCurrentAttacks(legalMoves.defensesByAttackCard())) {
+                && !canDefendAllCurrentAttacks(game, legalMoves.defensesByAttackCard())) {
             return AutoPlayAction.take();
         }
         return null;
     }
 
-    private boolean canDefendAllCurrentAttacks(Map<String, List<String>> defensesByAttackCard) {
-        if (defensesByAttackCard.isEmpty()) {
+    private boolean canDefendAllCurrentAttacks(Game game, Map<String, List<String>> defensesByAttackCard) {
+        long undefended = game.getTable().stream().filter(entry -> !entry.isDefended()).count();
+        // Attacks that nothing in hand can beat have no entry in the map at all.
+        if (defensesByAttackCard.isEmpty() || defensesByAttackCard.size() < undefended) {
             return false;
         }
         List<Map.Entry<String, List<String>>> attacks = defensesByAttackCard.entrySet().stream()
@@ -931,17 +950,16 @@ public class GameService {
         }
     }
 
+    /**
+     * Shown to every player while a bot deliberates, so it may only reflect public facts (the bot's
+     * role). While the defender takes, whether an attacker can still throw in depends on its hand,
+     * so every attacking-side bot shows the same neutral text.
+     */
     private String thinkingMessage(Game game, ViewerLegalMoves legalMoves) {
         if (legalMoves.canDefend() || legalMoves.canTransfer() || legalMoves.canTake()) {
             return "planning defence...";
         }
-        if (legalMoves.canAttack()) {
-            return game.isTakingCardsInProgress() ? "planning throw-in..." : "planning attack...";
-        }
-        if (legalMoves.canEndRound()) {
-            return game.isTakingCardsInProgress() ? "planning end round..." : "planning attack...";
-        }
-        return "thinking...";
+        return game.isTakingCardsInProgress() ? "thinking..." : "planning attack...";
     }
 
     private boolean shouldWaitForDefender(Game game, ViewerLegalMoves legalMoves) {
@@ -969,19 +987,18 @@ public class GameService {
                 || legalMoves.canEndRound();
     }
 
-    private boolean isLegal(AutoPlayAction action, ViewerLegalMoves legalMoves) {
-        if (action == null) {
-            return false;
-        }
-        return switch (action.type()) {
-            case ATTACK -> legalMoves.canAttack() && legalMoves.attackableCardCodes().contains(action.cardCode());
-            case DEFEND -> legalMoves.canDefend()
-                    && legalMoves.defensesByAttackCard().containsKey(action.attackCardCode())
-                    && legalMoves.defensesByAttackCard().get(action.attackCardCode()).contains(action.cardCode());
-            case TRANSFER -> legalMoves.canTransfer() && legalMoves.transferableCardCodes().contains(action.cardCode());
-            case TAKE -> legalMoves.canTake();
-            case END_ROUND -> legalMoves.canEndRound();
-        };
+    private static boolean isLegal(AutoPlayAction action, ViewerLegalMoves legalMoves) {
+        return AutoPlayLegality.isLegal(action, legalMoves);
+    }
+
+    /**
+     * Whether the table is waiting on this bot: a defender must beat, transfer or take; an attacker
+     * must open an empty table or settle a bout (end it or throw in). An optional throw-in while
+     * others still act — after the bot already passed, or before the defender answers — is not owed.
+     */
+    private static boolean owesMove(Game game, ViewerLegalMoves moves) {
+        return moves.canDefend() || moves.canTransfer() || moves.canTake() || moves.canEndRound()
+                || (moves.canAttack() && game.getTable().isEmpty());
     }
 
     private void applyAction(Game game, String playerId, AutoPlayAction action) {
