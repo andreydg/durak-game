@@ -362,6 +362,107 @@ class GameTest {
     }
 
     @Test
+    void boutsCompletedCountsDefendedAndTakenBoutsButNotTransfers() {
+        Game game = inProgress(
+                List.of(
+                        player("a", null, "6H", "8C", "6D", "9S"),
+                        player("b", null, "7H", "9D", "JC", "QC"),
+                        player("c", null, "6S", "9H", "10D", "KD")
+                ),
+                Suit.SPADES, cards("7C", "7D", "8D", "10C", "JD", "QD", "KC", "AC"), 0, 2);
+        assertEquals(0, game.getBoutsCompleted());
+
+        // Transfer keeps the bout alive: nothing is counted yet.
+        game.attack("a", Card.fromCode("6H"));
+        game.transfer("c", Card.fromCode("6S"));
+        assertEquals(0, game.getBoutsCompleted());
+
+        // b takes both cards; the bout ends once every attacking-side player passes.
+        game.takeCards("b");
+        game.endRound("c");
+        assertEquals(0, game.getBoutsCompleted(), "one of two required passes must not end the bout");
+        game.endRound("a");
+        assertEquals(1, game.getBoutsCompleted());
+
+        // Next bout: a leads against c (b took, so b is skipped), c beats it and the cards are discarded.
+        assertEquals("a", game.getAttackerPlayerId());
+        assertEquals("c", game.getDefenderPlayerId());
+        game.attack("a", Card.fromCode("6D"));
+        game.defend("c", Card.fromCode("6D"), Card.fromCode("8D"));
+        game.endRound("a");
+        assertEquals(1, game.getBoutsCompleted());
+        game.endRound("b");
+        assertEquals(2, game.getBoutsCompleted());
+        assertTrue(game.getDiscardedCards().containsAll(cards("6D", "8D")));
+    }
+
+    @Test
+    void boutsCompletedCountsTheBoutThatFinishesTheGame() {
+        Game game = inProgress(
+                List.of(
+                        player("a", null, "6H"),
+                        player("b", null, "7H", "8C")
+                ),
+                Suit.SPADES, List.of(), 0, 1);
+
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        game.endRound("a");
+
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertEquals(1, game.getBoutsCompleted());
+    }
+
+    @Test
+    void boutsCompletedResetsForEveryNewDeal() {
+        Game finished = Game.fromSnapshot(new Game.Snapshot(
+                "BOUTS1", 1L, 2L, 1L, "host", GameStatus.FINISHED,
+                Suit.HEARTS, Card.fromCode("6H"), -1, -1, "guest", false, 0, 9L,
+                List.of(
+                        new Game.PlayerSnapshot("host", "Host", 1L, false, null, List.of(), "host-secret"),
+                        new Game.PlayerSnapshot("guest", "Guest", 2L, false, null, cards("9C"), "guest-secret")
+                ),
+                List.of(), List.of(), Set.of(), List.of(), List.of(), false, "Guest", null, 12
+        ));
+        assertEquals(12, finished.getBoutsCompleted());
+
+        finished.rematch("host");
+        assertEquals(GameStatus.IN_PROGRESS, finished.getStatus());
+        assertEquals(0, finished.getBoutsCompleted(), "a rematch deals a fresh game");
+
+        Game started = inProgress(
+                List.of(player("a", null, "6H", "7H"), player("b", null, "8H", "9C")),
+                Suit.SPADES, cards("10C"), 0, 1);
+        started.attack("a", Card.fromCode("6H"));
+        started.defend("b", Card.fromCode("6H"), Card.fromCode("8H"));
+        started.endRound("a");
+        assertEquals(1, started.getBoutsCompleted());
+
+        started.removePlayerAndResetToLobby("b");
+        assertEquals(GameStatus.LOBBY, started.getStatus());
+        assertEquals(0, started.getBoutsCompleted(), "returning to the lobby clears the finished deal");
+
+        Game fresh = new Game("BOUTS2", new Player("Host"));
+        fresh.addPlayer("Guest", 4);
+        fresh.start(fresh.getHostPlayerId());
+        assertEquals(0, fresh.getBoutsCompleted());
+    }
+
+    @Test
+    void snapshotRoundTripPreservesBoutsCompleted() {
+        Game game = inProgress(
+                List.of(player("a", null, "6H", "7H"), player("b", null, "8H", "9C")),
+                Suit.SPADES, cards("10C", "JC"), 0, 1);
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("8H"));
+        game.endRound("a");
+
+        Game.Snapshot snapshot = game.toSnapshot();
+        assertEquals(1, snapshot.boutsCompleted());
+        assertEquals(1, Game.fromSnapshot(snapshot).getBoutsCompleted());
+    }
+
+    @Test
     void advertisedLegalMovesAlwaysApply() {
         HeuristicAutoPlayDecisionEngine engine = new HeuristicAutoPlayDecisionEngine();
         for (int run = 0; run < 10; run++) {
