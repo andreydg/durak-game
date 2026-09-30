@@ -1503,6 +1503,10 @@ async function runAction(name, fn, trigger = null) {
             return false;
         }
         render();
+        if (sessionKey() !== key) {
+            // The player left or switched rooms meanwhile; this failure no longer concerns them.
+            return false;
+        }
         showError(`${name}: ${error.message || "Something went wrong. Please try again."}`);
         if (error.status === 409 && isCurrentSession(key)) {
             // The move was rejected against newer server state: resynchronise promptly.
@@ -1711,6 +1715,8 @@ function clearSession() {
     saveSession();
     stopPolling();
     closeWebSocket();
+    // A pending "Leave this game?" question is moot once the seat is gone (closes as "stay").
+    if (leaveDialog?.open) leaveDialog.close();
     render();
     log("Session cleared.");
 }

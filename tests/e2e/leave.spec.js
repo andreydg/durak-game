@@ -79,6 +79,61 @@ test.describe("Leaving a room", () => {
         await expect(page.locator("#appAlert")).toBeHidden();
     });
 
+    test("the question goes away if the room disappears while it is open", async ({ page }) => {
+        let gone = false;
+        await seedSession(page);
+        await page.routeWebSocket("**/ws/games/**", () => {});
+        await page.route(`**/api/games/${CODE}**`, route => route.fulfill(gone
+            ? {status: 404, contentType: "application/json", body: JSON.stringify({message: "Game not found"})}
+            : {status: 200, contentType: "application/json", body: JSON.stringify(syntheticGame())}));
+        await page.goto("/");
+        await page.click("#leaveBtn");
+        await expect(page.getByRole("dialog")).toBeVisible();
+
+        gone = true;
+        await page.evaluate(() => window.refreshGame(false));
+
+        await expect(page.getByRole("dialog")).toBeHidden();
+        await expect(page.locator("#lobbyView")).toBeVisible();
+        await expect(page.locator("#appAlert")).toContainText(`Room ${CODE} no longer exists.`);
+    });
+
+    test("an action that fails after the player left does not raise a stale error", async ({ page }) => {
+        let releaseAttack;
+        const attackHeld = new Promise(resolve => { releaseAttack = resolve; });
+        await seedSession(page);
+        await page.routeWebSocket("**/ws/games/**", () => {});
+        await page.route(`**/api/games/${CODE}**`, async route => {
+            const path = new URL(route.request().url()).pathname;
+            if (path.endsWith("/attack")) {
+                await attackHeld;
+                await route.fulfill({status: 404, contentType: "application/json", body: JSON.stringify({message: "Game not found"})});
+                return;
+            }
+            if (path.endsWith("/leave")) {
+                await emptyOk(route);
+                return;
+            }
+            await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify(syntheticGame({
+                attackerPlayerId: "me",
+                defenderPlayerId: "p2",
+                hand: ["6C", "7D", "8H", "9S", "JC", "QD"],
+                legalMoves: {canAttack: true, attackableCardCodes: ["6C"]}
+            }))});
+        });
+        await page.goto("/");
+        await page.locator('#myHand [data-card-code="6C"]').click();
+        await page.click("#attackBtn");
+        await page.click("#leaveBtn");
+        await page.getByRole("button", {name: "Leave game"}).click();
+        await expect(page.locator("#lobbyView")).toBeVisible();
+
+        releaseAttack();
+        await page.waitForTimeout(300);
+        await expect(page.locator("#appAlert")).toBeHidden();
+        await expect(page.locator("#lobbyView")).toBeVisible();
+    });
+
     test("the Stay button keeps the seat", async ({ page }) => {
         const leaves = await serveWithLeave(page, syntheticGame(), emptyOk);
         await page.goto("/");
