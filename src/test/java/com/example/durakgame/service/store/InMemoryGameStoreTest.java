@@ -25,6 +25,31 @@ class InMemoryGameStoreTest {
     }
 
     @Test
+    void readsReturnCopiesSoUnsavedChangesNeverLeak() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        store.save(new Game("CODE01", new Player("Host")));
+
+        Game read = store.findByCode("CODE01").orElseThrow();
+        read.addPlayer("Guest", 4);   // e.g. a request that fails before it saves
+
+        assertEquals(1, store.findByCode("CODE01").orElseThrow().getPlayers().size());
+        assertEquals(1, store.listAll().iterator().next().getPlayers().size());
+    }
+
+    @Test
+    void savePublishesChangesAndRejectsResavingTheSameVersion() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        store.save(new Game("CODE01", new Player("Host")));
+
+        Game read = store.findByCode("CODE01").orElseThrow();
+        read.addPlayer("Guest", 4);
+        store.save(read);
+
+        assertEquals(2, store.findByCode("CODE01").orElseThrow().getPlayers().size());
+        assertThrows(StaleGameWriteException.class, () -> store.save(read));
+    }
+
+    @Test
     void deleteRemovesGame() {
         InMemoryGameStore store = new InMemoryGameStore();
         store.save(new Game("CODE01", new Player("Host")));

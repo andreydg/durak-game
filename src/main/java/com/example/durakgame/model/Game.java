@@ -264,6 +264,10 @@ public class Game implements Serializable {
         if (players.size() < 2) {
             throw new IllegalStateException("At least 2 players are required");
         }
+        // Every seat is dealt a full hand and one card must remain to turn up as trump.
+        if (players.size() * MAX_HAND_SIZE >= Suit.values().length * Rank.values().length) {
+            throw new IllegalStateException("Too many players for one 36-card deck");
+        }
 
         assignTeamsIfNeeded();
         discardedCards.clear();
@@ -291,9 +295,12 @@ public class Game implements Serializable {
         }
     }
 
+    /*
+     * Player actions validate everything before changing any state, so a rejected request leaves the
+     * game exactly as it was (cards stay in hand, other players' end-of-bout approvals survive).
+     */
     public synchronized void attack(String playerId, Card card) {
         ensureInProgress();
-        endRoundApprovals.clear();
         Player attacker = getPlayerById(playerId);
         int attackerSeat = indexOfPlayer(playerId);
         if (attackerSeat == defenderIndex || isTeammate(attackerSeat, defenderIndex)) {
@@ -318,18 +325,16 @@ public class Game implements Serializable {
         if (!takingCardsInProgress && table.isEmpty() && attackerSeat != attackerIndex) {
             throw new IllegalStateException("Only the opening attacker may play the first card this bout");
         }
-        if (!attacker.removeCard(card)) {
+        if (!attacker.getHand().contains(card)) {
             throw new IllegalStateException("Card is not in player's hand");
         }
-        boolean wasKnownCard = forgetKnownCard(playerId, card);
         if (!table.isEmpty() && !tableRanks.contains(card.rank())) {
-            attacker.addCard(card);
-            if (wasKnownCard) {
-                rememberKnownCard(playerId, card);
-            }
-            throw new IllegalStateException("Podkidnoy attack must match an existing rank on table");
+            throw new IllegalStateException("Thrown-in card must match a rank already on the table");
         }
 
+        endRoundApprovals.clear();
+        attacker.removeCard(card);
+        forgetKnownCard(playerId, card);
         table.add(new AttackEntry(card, playerId));
         tableRanks.add(card.rank());
         touch();
@@ -338,26 +343,22 @@ public class Game implements Serializable {
     public synchronized void defend(String playerId, Card attackCard, Card defenseCard) {
         ensureInProgress();
         ensureDefender(playerId);
-        endRoundApprovals.clear();
+        ensureNotTaking();
         Player defender = getPlayerById(playerId);
-        if (!defender.removeCard(defenseCard)) {
+        if (!defender.getHand().contains(defenseCard)) {
             throw new IllegalStateException("Card is not in defender hand");
         }
-        boolean wasKnownCard = forgetKnownCard(playerId, defenseCard);
-
         AttackEntry entry = table.stream()
                 .filter(it -> !it.isDefended() && it.getAttackCard().equals(attackCard))
                 .findFirst()
-                .orElseThrow(() -> new NoSuchElementException("Attack card to defend not found"));
-
+                .orElseThrow(() -> new IllegalStateException("Attack card to defend not found"));
         if (!canBeat(entry.getAttackCard(), defenseCard)) {
-            defender.addCard(defenseCard);
-            if (wasKnownCard) {
-                rememberKnownCard(playerId, defenseCard);
-            }
             throw new IllegalStateException("Defense card does not beat attack card");
         }
 
+        endRoundApprovals.clear();
+        defender.removeCard(defenseCard);
+        forgetKnownCard(playerId, defenseCard);
         entry.defendWith(defenseCard);
         tableRanks.add(defenseCard.rank());
         touch();
@@ -366,7 +367,7 @@ public class Game implements Serializable {
     public synchronized void transfer(String playerId, Card transferCard) {
         ensureInProgress();
         ensureDefender(playerId);
-        endRoundApprovals.clear();
+        ensureNotTaking();
         if (table.isEmpty()) {
             throw new IllegalStateException("Cannot transfer before first attack");
         }
@@ -390,11 +391,13 @@ public class Game implements Serializable {
         }
 
         Player defender = players.get(defenderIndex);
-        if (!defender.removeCard(transferCard)) {
+        if (!defender.getHand().contains(transferCard)) {
             throw new IllegalStateException("Card is not in defender hand");
         }
-        forgetKnownCard(playerId, transferCard);
 
+        endRoundApprovals.clear();
+        defender.removeCard(transferCard);
+        forgetKnownCard(playerId, transferCard);
         table.add(new AttackEntry(transferCard, defender.getId()));
         tableRanks.add(transferCard.rank());
         attackerIndex = defenderIndex;
@@ -405,10 +408,7 @@ public class Game implements Serializable {
     public synchronized void takeCards(String playerId) {
         ensureInProgress();
         ensureDefender(playerId);
-        endRoundApprovals.clear();
-        if (takingCardsInProgress) {
-            throw new IllegalStateException("Defender is already taking");
-        }
+        ensureNotTaking();
         if (table.isEmpty()) {
             throw new IllegalStateException("No cards on table");
         }
@@ -417,6 +417,7 @@ public class Game implements Serializable {
         }
         Player defender = players.get(defenderIndex);
         long defendedOnTable = table.stream().filter(AttackEntry::isDefended).count();
+        endRoundApprovals.clear();
         takingCardsInProgress = true;
         /*
          * Throw-in cap during take phase must use defender's bout-start hand size.
@@ -837,6 +838,13 @@ public class Game implements Serializable {
     private void ensureDefender(String playerId) {
         if (!Objects.equals(getDefenderPlayerId(), playerId)) {
             throw new IllegalStateException("Only defender can perform this action");
+        }
+    }
+
+    /* Choosing to take is final for the bout: no defending or transferring afterwards. */
+    private void ensureNotTaking() {
+        if (takingCardsInProgress) {
+            throw new IllegalStateException("Defender already chose to take the cards");
         }
     }
 
