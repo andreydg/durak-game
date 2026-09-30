@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -171,6 +172,34 @@ class GeminiAutoPlayDecisionEngineTest {
             assertEquals("/v1beta/models/gemini-3.8-flash:generateContent", seenPath.get());
         } finally {
             server.stop(0);
+        }
+    }
+
+    @Test
+    void requestsShareAByteIdenticalPrefixAndCarryNoNamesOrIds() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings());
+        Game first = openingAttack();
+        Game second = defenceWithOneBeatingCard();
+
+        transport.respond(200, answer("{\"type\":\"ATTACK\",\"cardCode\":\"7C\"}"));
+        engine.choose(first, BOT, first.computeViewerLegalMoves(BOT));
+        JsonNode firstRequest = transport.lastRequest();
+        String firstRaw = transport.lastRawRequest();
+        transport.respond(200, answer("{\"type\":\"TAKE\"}"));
+        engine.choose(second, BOT, second.computeViewerLegalMoves(BOT));
+        JsonNode secondRequest = transport.lastRequest();
+        String secondRaw = transport.lastRawRequest();
+
+        assertEquals(firstRequest.path("systemInstruction"), secondRequest.path("systemInstruction"));
+        String firstText = firstRequest.path("contents").path(0).path("parts").path(0).path("text").asText();
+        String secondText = secondRequest.path("contents").path(0).path("parts").path(0).path("text").asText();
+        int stateStart = firstText.indexOf("Game state:\n") + "Game state:\n".length();
+        assertEquals(firstText.substring(0, stateStart), secondText.substring(0, stateStart));
+        assertNotEquals(firstText, secondText);
+        for (String raw : List.of(firstRaw, secondRaw)) {
+            for (String secret : List.of(HUMAN_NAME, BOT_NAME, HUMAN, BOT, API_KEY)) {
+                assertFalse(raw.contains(secret), "request leaked " + secret);
+            }
         }
     }
 
@@ -684,6 +713,10 @@ class GeminiAutoPlayDecisionEngineTest {
 
         JsonNode lastRequest() throws IOException {
             return objectMapper.readTree(requests.getLast());
+        }
+
+        String lastRawRequest() {
+            return requests.getLast();
         }
 
         @Override

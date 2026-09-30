@@ -97,6 +97,17 @@ Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` deri
 
 Gemini 3 and newer keep their default sampling settings; `temperature: 0` is only pinned for Gemini 1.x/2.x and Gemma models.
 
+The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, public hand sizes, whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so Gemini's implicit prompt caching can reuse the prefix (visible as `cachedTokens` in the logs).
+
+Each model call logs one line, and each bot decision logs one line:
+
+```text
+autoplay_llm_call code=… player=… model=… thinkingLevel=… latencyMs=… httpStatus=… promptTokens=… cachedTokens=… outputTokens=… thoughtTokens=… totalTokens=… finishReason=… error=…
+autoplay_decision code=… player=… source=llm|plan_cache|forced|heuristic reason=… action=… card=… attackCard=… options=…
+```
+
+`reason` says why the heuristic was used (`disabled`, `circuit_open`, `budget_exhausted`, `primary_model_failed`, `unparseable`, `illegal_model_action`) and is `none` otherwise. The API key and player names are never logged.
+
 API endpoint:
 
 - `POST /api/games/{code}/bots` with body `{ "playerId": "<hostPlayerId>", "botName": "optional" }`

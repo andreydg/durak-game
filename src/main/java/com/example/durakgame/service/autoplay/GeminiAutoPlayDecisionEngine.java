@@ -1,9 +1,7 @@
 package com.example.durakgame.service.autoplay;
 
 import com.example.durakgame.model.AttackEntry;
-import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
-import com.example.durakgame.model.Player;
 import com.example.durakgame.model.ViewerLegalMoves;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -17,12 +15,10 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
@@ -54,15 +50,13 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final String thinkingLevel;
     private final String simpleThinkingLevel;
     private final Duration timeout;
-    private final long reasoningBudgetSeconds;
-    private final boolean publicCardMemoryEnabled;
     private final boolean jsonModeSupported;
     private final boolean systemInstructionSupported;
     private final boolean thinkingConfigSupported;
-    private final boolean promptReasoningBudgetUsed;
     private final LlmCircuitBreaker circuitBreaker;
     private final LlmCallBudget callBudget;
     private final DefencePlanCache planCache;
+    private final GeminiPrompt prompt;
 
     @Autowired
     public GeminiAutoPlayDecisionEngine(
@@ -117,20 +111,20 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         this.thinkingLevel = blankToNull(settings.thinkingLevel());
         this.simpleThinkingLevel = blankToNull(settings.simpleThinkingLevel());
         this.timeout = Duration.ofMillis(Math.max(1, settings.requestTimeoutMs()));
-        this.reasoningBudgetSeconds = Math.max(1L, settings.reasoningBudgetSeconds());
-        this.publicCardMemoryEnabled = settings.publicCardMemoryEnabled();
         /* Model capabilities: derived from the model version, overridable per property (auto|true|false). */
         this.jsonModeSupported = resolveCapability(settings.jsonModeFlag(), model.defaultJsonMode());
         this.systemInstructionSupported = resolveCapability(settings.systemInstructionFlag(),
                 model.defaultSystemInstruction());
         this.thinkingConfigSupported = resolveCapability(settings.thinkingConfigFlag(), model.defaultThinkingConfig());
-        this.promptReasoningBudgetUsed = resolveCapability(settings.promptReasoningBudgetFlag(),
+        boolean promptReasoningBudgetUsed = resolveCapability(settings.promptReasoningBudgetFlag(),
                 model.defaultPromptReasoningBudget());
         this.circuitBreaker = new LlmCircuitBreaker(settings.circuitBreakerFailureThreshold(),
                 Duration.ofMillis(Math.max(0, settings.circuitBreakerCooldownMs())), nanoClock);
         this.callBudget = new LlmCallBudget(settings.maxCallsPerMinute(), nanoClock);
         this.planCache = new DefencePlanCache(DefencePlanCache.DEFAULT_MAX_PLANS, DefencePlanCache.DEFAULT_TTL,
                 nanoClock);
+        this.prompt = new GeminiPrompt(objectMapper, settings.publicCardMemoryEnabled(),
+                promptReasoningBudgetUsed ? reasoningBudgetInstruction(settings.reasoningBudgetSeconds()) : "");
         log.info("autoplay_gemini_config enabled={} apiKeyPresent={} model={} modelFamily={} jsonMode={} "
                         + "systemInstruction={} thinkingConfig={} thinkingLevel={} simpleThinkingLevel={} "
                         + "temperature={} timeoutMs={} circuitBreakerFailureThreshold={} circuitBreakerCooldownMs={} "
@@ -326,22 +320,26 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         return model.id();
     }
 
-    private String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves, String level)
-            throws IOException {
-        String prompt = buildPrompt(game, playerId, legalMoves);
+    /**
+     * The request body. The system instruction and the static part of the user message come first and
+     * never change between turns, so Gemini's implicit caching can reuse them; per-turn state is last.
+     * Package-private for request-contract tests.
+     */
+    String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves, String level) throws IOException {
+        String userPrompt = prompt.userPrompt(game, playerId, legalMoves);
         Map<String, Object> body = new LinkedHashMap<>();
         if (systemInstructionSupported) {
             body.put("systemInstruction", Map.of(
-                    "parts", List.of(Map.of("text", systemInstruction()))
+                    "parts", List.of(Map.of("text", prompt.systemInstruction()))
             ));
             body.put("contents", List.of(Map.of(
                     "role", "user",
-                    "parts", List.of(Map.of("text", prompt))
+                    "parts", List.of(Map.of("text", userPrompt))
             )));
         } else {
             body.put("contents", List.of(Map.of(
                     "role", "user",
-                    "parts", List.of(Map.of("text", systemInstruction() + "\n\n" + prompt))
+                    "parts", List.of(Map.of("text", prompt.systemInstruction() + "\n\n" + userPrompt))
             )));
         }
         body.put("generationConfig", generationConfig(level));
@@ -373,177 +371,10 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         return generationConfig;
     }
 
-    private String buildPrompt(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
-        Player me = game.getPlayers().stream()
-                .filter(p -> Objects.equals(p.getId(), playerId))
-                .findFirst()
-                .orElse(null);
-        List<String> hand = me == null ? List.of() : me.getHand().stream().map(c -> c.code()).toList();
-        List<Map<String, Object>> players = new ArrayList<>();
-        for (Player player : game.getPlayers()) {
-            Map<String, Object> visiblePlayer = new LinkedHashMap<>();
-            visiblePlayer.put("id", player.getId());
-            visiblePlayer.put("name", player.getName());
-            visiblePlayer.put("bot", player.isBot());
-            visiblePlayer.put("team", player.getTeam());
-            visiblePlayer.put("handSize", player.handSize());
-            visiblePlayer.put("self", Objects.equals(player.getId(), playerId));
-            players.add(visiblePlayer);
-        }
-        List<Map<String, String>> table = new ArrayList<>();
-        game.getTable().forEach(entry -> table.add(Map.of(
-                "attackCard", entry.getAttackCard().code(),
-                "defenseCard", entry.getDefenseCard() == null ? "" : entry.getDefenseCard().code()
-        )));
-        Map<String, Object> gameState = new LinkedHashMap<>();
-        gameState.put("playerId", playerId);
-        gameState.put("ownHand", hand);
-        gameState.put("playersInSeatOrder", players);
-        gameState.put("playerCount", game.getPlayers().size());
-        gameState.put("attackerPlayerId", game.getAttackerPlayerId());
-        gameState.put("defenderPlayerId", game.getDefenderPlayerId());
-        gameState.put("trumpSuit", game.getTrumpSuit() == null ? null : game.getTrumpSuit().code());
-        gameState.put("trumpCard", game.getTrumpCard() == null ? null : game.getTrumpCard().code());
-        gameState.put("onlyTrumpCardLeftInTalon", game.getTalonSize() == 1);
-        gameState.put("takingCardsInProgress", game.isTakingCardsInProgress());
-        gameState.put("takeLimit", game.getTakeLimit());
-        gameState.put("table", table);
-        if (publicCardMemoryEnabled) {
-            gameState.put("publicCardMemory", publicCardMemory(game));
-        }
-        gameState.put("legalMoves", legalMoves);
-        String reasoningBudgetInstruction = reasoningBudgetInstruction();
-        return """
-                Choose the next move for playerId using the game state below.
-                You must choose only from legalMoves.
-                The game state contains only information visible to this bot as a human player:
-                its own hand, seat order, public hand sizes, trump, whether only the visible trump card remains in the talon, table cards, current roles, and legal moves.
-                Do not assume hidden opponent hands or hidden talon cards.
-                %s
-                Return exactly one JSON object and no extra text.
-                JSON schema:
-                {"strategy":"reasoning based on team/FFA and cards remaining","defensePlan":"optional plan for all undefended attacks","action":"Attack|Beat|Transfer|Pass|Take","cards":["6S","10D"],"type":"ATTACK|DEFEND|TRANSFER|TAKE|END_ROUND","cardCode":"optional","attackCardCode":"optional"}
-                The cards field must describe only this response's single machine action. Put multi-card defense plans only in defensePlan, not cards.
-
-                Mapping from strategy terms to JSON:
-                - Attack -> ATTACK with cardCode
-                - Beat -> DEFEND with attackCardCode and cardCode
-                - Transfer -> TRANSFER with cardCode
-                - Take -> TAKE with cards=[]
-                - Pass -> END_ROUND only when canEndRound is true
-                If choosing TAKE, do not reveal cards you could have used to defend in cards, defensePlan, or strategy.
-
-                Role discipline:
-                - If canAttack is false, do not return ATTACK.
-                - If you are the defender and play a same-rank card from transferableCardCodes, that is TRANSFER, not ATTACK.
-                - If you are the defender and play a card from defensesByAttackCard, that is DEFEND with the matching attackCardCode.
-
-                Attack pacing:
-                - Unless takingCardsInProgress is true, choose exactly one ATTACK card per response.
-                - For normal attacks, set cards to a single-card list matching cardCode.
-                - Playing one attack card at a time lets you observe the defender's response and improve the next decision.
-                - When takingCardsInProgress is true, you may plan multiple final throw-ins in strategy, but still return only the next single ATTACK card in cardCode.
-
-                If defending and multiple attack cards are undefended, reason holistically:
-                - First determine whether all undefended attacks can be beaten with the available defense options.
-                - Prefer a defense assignment that preserves trumps, aces, and flexible cards for later attacks.
-                - Choose this response's single DEFEND action as the next step from that full defense plan.
-                - Include the full plan in defensePlan or strategy.
-                - If the whole set cannot be defended, choose TAKE instead of wasting a good card on a partial defense.
-                - You may still choose TAKE for strategic reasons even if defense is possible, but then reveal no defense cards.
-
-                Use human-like card-counting in strategy:
-                - When publicCardMemory is present, use it as public table history available to all players.
-                - discardedOutOfPlay cards cannot appear again and cannot be used by any player.
-                - knownCardsByPlayer lists cards that were publicly picked up from the table and are known to be in that player's hand unless they have since been played.
-                - Use known opponent cards to anticipate defenses, future transfers, and throw-in ranks.
-                - In strategy, briefly refer to the public-card memory or card-counting inference that influenced the move.
-
-                Populate strategy/action/cards for debug logging, but type/cardCode/attackCardCode are the authoritative machine fields.
-
-                Current game state:
-                %s
-                """.formatted(reasoningBudgetInstruction, objectMapper.writeValueAsString(gameState));
-    }
-
-    private String reasoningBudgetInstruction() {
-        if (!promptReasoningBudgetUsed) {
-            return "";
-        }
-        return "Budgeted reasoning: reason for no more than " + reasoningBudgetSeconds
+    private static String reasoningBudgetInstruction(long reasoningBudgetSeconds) {
+        return "Budgeted reasoning: reason for no more than " + Math.max(1L, reasoningBudgetSeconds)
                 + " seconds. If still uncertain, stop reasoning and return the best legal move immediately."
                 + " Do not spend extra time seeking a perfect move.";
-    }
-
-    private Map<String, Object> publicCardMemory(Game game) {
-        List<Map<String, Object>> knownCardsByPlayer = new ArrayList<>();
-        game.getKnownCardsByPlayer().forEach((knownPlayerId, cards) -> {
-            Map<String, Object> known = new LinkedHashMap<>();
-            known.put("playerId", knownPlayerId);
-            known.put("playerName", game.getPlayers().stream()
-                    .filter(player -> Objects.equals(player.getId(), knownPlayerId))
-                    .map(Player::getName)
-                    .findFirst()
-                    .orElse("?"));
-            known.put("cards", cards.stream().map(Card::code).toList());
-            knownCardsByPlayer.add(known);
-        });
-        Map<String, Object> memory = new LinkedHashMap<>();
-        memory.put("discardedOutOfPlay", game.getDiscardedCards().stream().map(Card::code).toList());
-        memory.put("knownCardsByPlayer", knownCardsByPlayer);
-        return memory;
-    }
-
-    private String systemInstruction() {
-        return """
-                Role: You are a master Durak strategist. You play with precision and aggressive card-counting.
-
-                Card counting: Infer from visible information only. Track your own hand, the visible trump card, cards currently on the table, and any public played/discarded cards if provided. Use those observations to estimate suit pressure, remaining trump risk, and which ranks are safe to throw in. Never assume hidden opponent hands or hidden talon cards.
-
-                1. Game Flow & Direction
-
-                Direction: Counter-Clockwise (to your right).
-
-                The Bout: The player to the right of the attacker is the defender.
-
-                Throw-ins: Once the primary attacker is finished, the right to "throw in" additional cards passes to the player to the right of the defender.
-
-                2. Multi-Mode Logic (Teams vs. FFA)
-
-                IF 4 Players (Team Play): You and the player sitting opposite you are partners.
-
-                STRICT RULE: You are strictly forbidden from attacking your partner. Even if your partner has decided to "Take" (Беру), you may not throw in cards to their hand. You only attack the two opponents.
-
-                IF 2 or 3 Players (all against all): Every other player is an enemy. Your only goal is to empty your hand first.
-
-                3. Advanced Gameplay Mechanics
-
-                Perevodnoy (Transferable):
-
-                As a defender, you can play a card of the same rank as the attack to transfer the bout to the player on your right.
-
-                Constraint: You cannot transfer if the next defender has fewer cards in their hand than the total cards currently on the table.
-
-                Podkidnoy (Throw-in) & The "Take" Window:
-
-                If a defender says "Take" (Беру), the table remains open. Other valid attackers may continue to "throw in" matching ranks until the limit is reached (6 cards or the defender's hand size).
-
-                The defender must pick up every card played during the window.
-
-                4. Decision Priorities
-
-                Safety First: Protect high trumps and Aces for the end-game.
-
-                Partner Awareness (4-player): Watch your partner's hand size. If they are low, play aggressively against the opponent to your right to ensure your partner gets to shed their last cards.
-
-                5. Public Card Memory
-
-                Use publicCardMemory when it is provided. Cards discarded after a defended bout are out of play and cannot be played again. Cards picked up by a player are publicly known to be in that player's hand until they are later played. Reason about these known cards when choosing attacks, defenses, transfers, and throw-ins. Refer to this card-counting memory in your strategy explanation when it affects the move, but never invent card history that is not visible or otherwise provided.
-
-                6. Attack Pacing
-
-                Prefer one-card attacks. Outside of the final throw-in window after a defender takes, return one ATTACK card at a time so you can observe whether the defender beats, transfers, or takes before choosing the next attack. During the take window, you may plan several throw-ins, but the machine action must still be the next single card.
-                """;
     }
 
     /* ------------------------------------------------------------------ logging */
@@ -582,7 +413,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         if (!apiKey.isBlank()) {
             cleaned = cleaned.replace(apiKey, "[redacted]");
         }
-        cleaned = cleaned.replaceAll("[\\r\\n\\t]+", " ").replace('"', '\'').trim();
+        cleaned = cleaned.replaceAll("\\p{Cntrl}+", " ").replace('"', '\'').trim();
         return cleaned.length() > LOG_TEXT_LIMIT ? cleaned.substring(0, LOG_TEXT_LIMIT) + "..." : cleaned;
     }
 
