@@ -92,7 +92,7 @@ public class GameController {
         Game game = gameService.getGame(code);
         gameService.resumeAutoPlayIfStalled(game);
         // Reveal the viewer's hand and legal moves only when the token proves ownership.
-        String authorizedViewer = gameService.isAuthorized(game, viewerPlayerId, token) ? viewerPlayerId : null;
+        String authorizedViewer = gameService.authorizedViewer(game, viewerPlayerId, token);
         return toResponse(game, authorizedViewer);
     }
 
@@ -183,9 +183,7 @@ public class GameController {
             @PathVariable String code,
             @Valid @RequestBody PlayerActionRequest request,
             @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
-        // The leave-beacon cannot set headers, so fall back to a token carried in the body.
-        String effectiveToken = token != null ? token : request.token();
-        gameService.requireAuthorized(code, request.playerId(), effectiveToken);
+        gameService.requireAuthorized(code, request.playerId(), token);
         gameService.leaveGame(code, request.playerId());
         webSocketHandler.broadcastGameUpdated(code);
     }

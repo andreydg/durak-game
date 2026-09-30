@@ -3,6 +3,7 @@ package com.example.durakgame.model;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -17,6 +18,8 @@ import java.util.Set;
 
 public class Game implements Serializable {
     public static final int MAX_HAND_SIZE = 6;
+    /* Deals must not be predictable from earlier ones (java.util.Random's state is recoverable). */
+    private static final SecureRandom SHUFFLE_RANDOM = new SecureRandom();
 
     private final String code;
     private final Instant createdAt;
@@ -867,7 +870,7 @@ public class Game implements Serializable {
                 deck.add(new Card(rank, suit));
             }
         }
-        Collections.shuffle(deck);
+        Collections.shuffle(deck, SHUFFLE_RANDOM);
 
         for (int round = 0; round < MAX_HAND_SIZE; round++) {
             for (Player player : players) {

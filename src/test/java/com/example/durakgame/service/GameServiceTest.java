@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -252,27 +253,43 @@ class GameServiceTest {
     }
 
     @Test
-    void isAuthorizedAcceptsPlayerIdForLegacyBlankSecret() {
-        // Games persisted before tokens decode with a blank secret; the id acts as the token.
+    void playerIdIsNotAcceptedAsAToken() {
+        // Seats from before per-player tokens decode with a blank secret; their public id no longer works.
         Game legacy = inProgress(
                 List.of(playerSnapshot("h", false, "9H"), playerSnapshot("b", false, "7D")),
                 Suit.SPADES, cards("8D"), 0, 1);
         GameService service = newService(new InMemoryGameStore());
 
-        assertTrue(service.isAuthorized(legacy, "h", "h"));
-        assertFalse(service.isAuthorized(legacy, "h", "not-h"));
+        assertFalse(service.isAuthorized(legacy, "h", "h"));
+        assertFalse(service.isAuthorized(legacy, "h", ""));
     }
 
     @Test
-    void requireAuthorizedThrowsOnBadToken() {
-        SnapshotGameStore store = new SnapshotGameStore();
+    void requireAuthorizedAcceptsOnlyTheSeatsSecret() {
+        InMemoryGameStore store = new InMemoryGameStore();
         GameService service = newService(store);
-        store.put(twoPlayerBoutOnEmptyTable());
+        Game game = service.createGame("Host");
+        Player host = game.getPlayers().getFirst();
 
+        service.requireAuthorized(game.getCode(), host.getId(), host.getSecret());
         assertThrows(UnauthorizedActionException.class,
-                () -> service.requireAuthorized("TEST01", "h", "bad-token"));
-        // Legacy fixture: the id is accepted, so this must not throw.
-        service.requireAuthorized("TEST01", "h", "h");
+                () -> service.requireAuthorized(game.getCode(), host.getId(), "bad-token"));
+        assertThrows(UnauthorizedActionException.class,
+                () -> service.requireAuthorized(game.getCode(), host.getId(), host.getId()));
+        assertThrows(UnauthorizedActionException.class,
+                () -> service.requireAuthorized(game.getCode(), host.getId(), null));
+    }
+
+    @Test
+    void authorizedViewerRevealsThePrivateViewOnlyWithTheSecret() {
+        GameService service = newService(new InMemoryGameStore());
+        Game game = service.createGame("Host");
+        Player host = game.getPlayers().getFirst();
+
+        assertEquals(host.getId(), service.authorizedViewer(game, host.getId(), host.getSecret()));
+        assertNull(service.authorizedViewer(game, host.getId(), "stale-token"));
+        assertNull(service.authorizedViewer(game, host.getId(), null));
+        assertNull(service.authorizedViewer(game, null, host.getSecret()));
     }
 
     // --- joinGame ---------------------------------------------------------

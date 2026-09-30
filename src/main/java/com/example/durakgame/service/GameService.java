@@ -18,6 +18,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -62,6 +64,8 @@ public class GameService {
     private static final long AUTO_PLAY_FAILURE_RETRY_DELAY_MS = 2000;
     /* One retry covers a cross-instance lost-update race; the per-code lock prevents same-JVM races. */
     private static final int MUTATE_RETRY_ATTEMPTS = 2;
+    private static final long AUTH_REJECTION_LOG_INTERVAL_MS = 60_000;
+    private static final int AUTH_REJECTION_LOG_KEYS = 10_000;
 
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
@@ -78,6 +82,7 @@ public class GameService {
      */
     private final ConcurrentHashMap<String, Boolean> autoPlayRuns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Integer> autoPlayFailures = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> authRejectionsLoggedAt = new ConcurrentHashMap<>();
     /*
      * Serializes load->mutate->save per game code so concurrent actions (human + bot,
      * two humans) cannot clobber each other through separate decoded copies of the game.
@@ -221,35 +226,78 @@ public class GameService {
         return game;
     }
 
-    /**
-     * True when {@code token} proves ownership of {@code playerId} in {@code game}. For games
-     * persisted before per-player tokens existed (blank stored secret), the player id itself is
-     * accepted as the token, so sessions and rooms in flight across the upgrade keep working.
-     */
+    /** True when {@code token} proves ownership of {@code playerId} in {@code game}. */
     public boolean isAuthorized(Game game, String playerId, String token) {
-        if (playerId == null || token == null || token.isBlank()) {
-            return false;
+        return authorizationFailure(game, playerId, token) == null;
+    }
+
+    /** Loads the game and rejects the request unless {@code token} proves ownership of {@code playerId}. */
+    public void requireAuthorized(String gameCode, String playerId, String token) {
+        Game game = getGame(gameCode);
+        String failure = authorizationFailure(game, playerId, token);
+        if (failure != null) {
+            logAuthRejection(game.getCode(), playerId, failure, "action");
+            throw new UnauthorizedActionException();
+        }
+    }
+
+    /**
+     * The player whose private view (hand, legal moves) a game fetch may include, or null for the
+     * public view. A seat claimed with a missing or wrong token is logged, since the client then
+     * silently sees no hand.
+     */
+    public String authorizedViewer(Game game, String viewerPlayerId, String token) {
+        if (viewerPlayerId == null || viewerPlayerId.isBlank()) {
+            return null;
+        }
+        String failure = authorizationFailure(game, viewerPlayerId, token);
+        if (failure == null) {
+            return viewerPlayerId;
+        }
+        logAuthRejection(game.getCode(), viewerPlayerId, failure, "view");
+        return null;
+    }
+
+    /** Why {@code token} does not prove ownership of the seat, or null when it does. */
+    private static String authorizationFailure(Game game, String playerId, String token) {
+        if (playerId == null || playerId.isBlank()) {
+            return "missing_player";
+        }
+        if (token == null || token.isBlank()) {
+            return "missing_token";
         }
         Player player = game.getPlayers().stream()
                 .filter(p -> p.getId().equals(playerId))
                 .findFirst()
                 .orElse(null);
         if (player == null) {
-            return false;
+            return "unknown_player";
         }
         String secret = player.getSecret();
         if (secret == null || secret.isBlank()) {
-            return token.equals(playerId);
+            // Seats from before per-player tokens: the (public) player id is no longer accepted.
+            return "no_secret";
         }
-        return token.equals(secret);
+        boolean matches = MessageDigest.isEqual(
+                token.getBytes(StandardCharsets.UTF_8), secret.getBytes(StandardCharsets.UTF_8));
+        return matches ? null : "token_mismatch";
     }
 
-    /** Loads the game and rejects the request unless {@code token} proves ownership of {@code playerId}. */
-    public void requireAuthorized(String gameCode, String playerId, String token) {
-        Game game = getGame(gameCode);
-        if (!isAuthorized(game, playerId, token)) {
-            throw new UnauthorizedActionException();
+    /* Clients retry and poll, so log each (seat, reason) at most once per interval. Never logs tokens. */
+    private void logAuthRejection(String code, String playerId, String reason, String request) {
+        String seat = playerId == null ? "" : playerId.replaceAll("[^A-Za-z0-9-]", "");
+        seat = seat.length() > 64 ? seat.substring(0, 64) : seat;
+        long now = System.currentTimeMillis();
+        String key = code + '|' + seat + '|' + reason + '|' + request;
+        Long previous = authRejectionsLoggedAt.get(key);
+        if (previous != null && now - previous < AUTH_REJECTION_LOG_INTERVAL_MS) {
+            return;
         }
+        if (authRejectionsLoggedAt.size() >= AUTH_REJECTION_LOG_KEYS) {
+            authRejectionsLoggedAt.clear();
+        }
+        authRejectionsLoggedAt.put(key, now);
+        log.warn("auth_rejected code={} playerId={} reason={} request={}", code, seat, reason, request);
     }
 
     public Player joinGame(String gameCode, String playerName) {

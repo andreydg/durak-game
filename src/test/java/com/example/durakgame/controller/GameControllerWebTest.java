@@ -180,13 +180,13 @@ class GameControllerWebTest {
         String viewerId = game.getPlayers().getFirst().getId();
         when(gameService.getGame("ABC123")).thenReturn(game);
 
-        // Unauthorized viewer (default isAuthorized=false): hand is hidden.
+        // Unauthorized viewer (default authorizedViewer=null): hand is hidden.
         mockMvc.perform(get("/api/games/ABC123").param("viewerPlayerId", viewerId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.players[0].hand", org.hamcrest.Matchers.hasSize(0)));
 
         // Authorized viewer: their six cards are revealed.
-        when(gameService.isAuthorized(game, viewerId, "good-token")).thenReturn(true);
+        when(gameService.authorizedViewer(game, viewerId, "good-token")).thenReturn(viewerId);
         mockMvc.perform(get("/api/games/ABC123")
                         .param("viewerPlayerId", viewerId)
                         .header("X-Durak-Token", "good-token"))
