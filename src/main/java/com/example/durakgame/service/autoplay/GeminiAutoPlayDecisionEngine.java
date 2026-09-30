@@ -199,7 +199,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             planCache.discard(game.getCode(), playerId);
         }
         LlmCircuitBreaker.Permit permit = circuitBreaker.tryAcquire();
-        if (permit == LlmCircuitBreaker.Permit.REJECTED) {
+        if (permit.rejected()) {
             return heuristic(game, playerId, legalMoves, "circuit_open");
         }
         if (!callBudget.tryAcquire()) {

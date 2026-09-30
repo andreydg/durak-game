@@ -1,9 +1,12 @@
 package com.example.durakgame.service.autoplay;
 
+import com.example.durakgame.service.autoplay.LlmCircuitBreaker.Kind;
 import com.example.durakgame.service.autoplay.LlmCircuitBreaker.Outcome;
 import com.example.durakgame.service.autoplay.LlmCircuitBreaker.Permit;
 import com.example.durakgame.service.autoplay.LlmCircuitBreaker.State;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -28,16 +31,20 @@ class LlmCircuitBreakerTest {
         }
     }
 
+    private Kind acquire() {
+        return breaker.tryAcquire().kind();
+    }
+
     @Test
     void opensAfterConsecutiveFailures() {
         fail(2);
         assertEquals(State.CLOSED, breaker.state());
-        assertEquals(Permit.CALL, breaker.tryAcquire());
+        assertEquals(Kind.CALL, acquire());
 
         fail(1);
 
         assertEquals(State.OPEN, breaker.state());
-        assertEquals(Permit.REJECTED, breaker.tryAcquire());
+        assertEquals(Kind.REJECTED, acquire());
     }
 
     @Test
@@ -63,12 +70,12 @@ class LlmCircuitBreakerTest {
     void letsExactlyOneProbeThroughAfterTheCooldown() {
         fail(3);
         clock.addAndGet(59 * SECOND);
-        assertEquals(Permit.REJECTED, breaker.tryAcquire());
+        assertEquals(Kind.REJECTED, acquire());
 
         clock.addAndGet(SECOND);
-        assertEquals(Permit.PROBE, breaker.tryAcquire());
+        assertEquals(Kind.PROBE, acquire());
         assertEquals(State.HALF_OPEN, breaker.state());
-        assertEquals(Permit.REJECTED, breaker.tryAcquire(), "only one probe at a time");
+        assertEquals(Kind.REJECTED, acquire(), "only one probe at a time");
     }
 
     @Test
@@ -79,7 +86,7 @@ class LlmCircuitBreakerTest {
         breaker.record(breaker.tryAcquire(), Outcome.SUCCESS);
 
         assertEquals(State.CLOSED, breaker.state());
-        assertEquals(Permit.CALL, breaker.tryAcquire());
+        assertEquals(Kind.CALL, acquire());
     }
 
     @Test
@@ -91,9 +98,9 @@ class LlmCircuitBreakerTest {
 
         assertEquals(State.OPEN, breaker.state());
         clock.addAndGet(59 * SECOND);
-        assertEquals(Permit.REJECTED, breaker.tryAcquire());
+        assertEquals(Kind.REJECTED, acquire());
         clock.addAndGet(SECOND);
-        assertEquals(Permit.PROBE, breaker.tryAcquire());
+        assertEquals(Kind.PROBE, acquire());
     }
 
     @Test
@@ -104,19 +111,19 @@ class LlmCircuitBreakerTest {
         breaker.record(breaker.tryAcquire(), Outcome.NEUTRAL);
 
         assertEquals(State.HALF_OPEN, breaker.state());
-        assertEquals(Permit.PROBE, breaker.tryAcquire());
+        assertEquals(Kind.PROBE, acquire());
     }
 
     @Test
     void aProbeThatNeverReportsIsReplacedAfterAnotherCooldown() {
         fail(3);
         clock.addAndGet(60 * SECOND);
-        assertEquals(Permit.PROBE, breaker.tryAcquire());
+        assertEquals(Kind.PROBE, acquire());
 
         clock.addAndGet(30 * SECOND);
-        assertEquals(Permit.REJECTED, breaker.tryAcquire());
+        assertEquals(Kind.REJECTED, acquire());
         clock.addAndGet(30 * SECOND);
-        assertEquals(Permit.PROBE, breaker.tryAcquire());
+        assertEquals(Kind.PROBE, acquire());
     }
 
     @Test
@@ -128,7 +135,67 @@ class LlmCircuitBreakerTest {
         breaker.record(early, Outcome.FAILURE);
 
         clock.addAndGet(30 * SECOND);
-        assertEquals(Permit.PROBE, breaker.tryAcquire());
+        assertEquals(Kind.PROBE, acquire());
+    }
+
+    @Test
+    void aLateSuccessFromBeforeOpeningDoesNotCutTheCooldownShort() {
+        Permit delayed = breaker.tryAcquire();
+        fail(3);
+        clock.addAndGet(SECOND);
+
+        breaker.record(delayed, Outcome.SUCCESS);
+
+        assertEquals(State.OPEN, breaker.state());
+        assertEquals(Kind.REJECTED, acquire());
+        clock.addAndGet(59 * SECOND);
+        assertEquals(Kind.PROBE, acquire());
+    }
+
+    @Test
+    void aLateSuccessFromBeforeOpeningDoesNotStandInForTheProbe() {
+        Permit delayed = breaker.tryAcquire();
+        fail(3);
+        clock.addAndGet(60 * SECOND);
+        Permit probe = breaker.tryAcquire();
+
+        breaker.record(delayed, Outcome.SUCCESS);
+
+        assertEquals(State.HALF_OPEN, breaker.state());
+        assertEquals(Kind.REJECTED, acquire(), "the probe is still out");
+        breaker.record(probe, Outcome.SUCCESS);
+        assertEquals(State.CLOSED, breaker.state());
+    }
+
+    @ParameterizedTest
+    @EnumSource(Outcome.class)
+    void aReplacedProbeNoLongerDecidesAnything(Outcome outcome) {
+        fail(3);
+        clock.addAndGet(60 * SECOND);
+        Permit replaced = breaker.tryAcquire();
+        clock.addAndGet(60 * SECOND);
+        Permit current = breaker.tryAcquire();
+        assertEquals(Kind.PROBE, current.kind());
+
+        breaker.record(replaced, outcome);
+
+        assertEquals(State.HALF_OPEN, breaker.state());
+        assertEquals(Kind.REJECTED, acquire(), "the current probe keeps its slot");
+        breaker.record(current, Outcome.FAILURE);
+        assertEquals(State.OPEN, breaker.state());
+    }
+
+    @Test
+    void failuresFromBeforeTheBreakerClosedAgainDoNotCount() {
+        Permit delayed = breaker.tryAcquire();
+        fail(3);
+        clock.addAndGet(60 * SECOND);
+        breaker.record(breaker.tryAcquire(), Outcome.SUCCESS);
+
+        breaker.record(delayed, Outcome.FAILURE);
+        fail(2);
+
+        assertEquals(State.CLOSED, breaker.state());
     }
 
     @Test
@@ -138,7 +205,7 @@ class LlmCircuitBreakerTest {
             disabled.record(disabled.tryAcquire(), Outcome.FAILURE);
         }
 
-        assertEquals(Permit.CALL, disabled.tryAcquire());
+        assertEquals(Kind.CALL, disabled.tryAcquire().kind());
     }
 
     @Test
@@ -147,26 +214,26 @@ class LlmCircuitBreakerTest {
         clock.addAndGet(60 * SECOND);
         int threads = 32;
         CountDownLatch start = new CountDownLatch(1);
-        List<Callable<Permit>> tasks = new ArrayList<>();
+        List<Callable<Kind>> tasks = new ArrayList<>();
         for (int i = 0; i < threads; i++) {
             tasks.add(() -> {
                 start.await();
-                return breaker.tryAcquire();
+                return acquire();
             });
         }
-        List<Permit> permits = new ArrayList<>();
+        List<Kind> kinds = new ArrayList<>();
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            List<Future<Permit>> futures = new ArrayList<>();
-            for (Callable<Permit> task : tasks) {
+            List<Future<Kind>> futures = new ArrayList<>();
+            for (Callable<Kind> task : tasks) {
                 futures.add(executor.submit(task));
             }
             start.countDown();
-            for (Future<Permit> future : futures) {
-                permits.add(future.get());
+            for (Future<Kind> future : futures) {
+                kinds.add(future.get());
             }
         }
 
-        assertEquals(1, permits.stream().filter(permit -> permit == Permit.PROBE).count());
-        assertEquals(threads - 1, permits.stream().filter(permit -> permit == Permit.REJECTED).count());
+        assertEquals(1, kinds.stream().filter(kind -> kind == Kind.PROBE).count());
+        assertEquals(threads - 1, kinds.stream().filter(kind -> kind == Kind.REJECTED).count());
     }
 }
