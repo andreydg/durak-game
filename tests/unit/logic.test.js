@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
-// Importing for its side effect: under jsdom, logic.js assigns window.DurakLogic.
-import "../../src/main/resources/static/js/logic.js";
-
-const L = window.DurakLogic;
+// logic.js is a plain ES module (no DOM access), imported exactly as the page's modules do.
+import * as L from "../../src/main/resources/static/js/logic.js";
 
 describe("prettyCard", () => {
     it("renders rank with a suit glyph", () => {
@@ -875,5 +873,176 @@ describe("realtime fallback timing", () => {
     it("pauses lobby health reads in hidden tabs", () => {
         expect(L.lobbyRefreshDelayMs(false, 0, "hidden")).toBeNull();
         expect(L.lobbyRefreshDelayMs(true, 0, "hidden")).toBeNull();
+    });
+});
+
+describe("defence targets", () => {
+    const defs = { "7H": ["9H", "6S"], "8C": ["6S"], "9D": ["JD"] };
+
+    it("lists the attacks a card beats, in server order", () => {
+        expect(L.defenceTargets(defs, "6S")).toEqual(["7H", "8C"]);
+        expect(L.defenceTargets(defs, "9H")).toEqual(["7H"]);
+        expect(L.defenceTargets(defs, "AC")).toEqual([]);
+        expect(L.defenceTargets(defs, null)).toEqual([]);
+        expect(L.defenceTargets(undefined, "6S")).toEqual([]);
+    });
+
+    it("prefers the first valid preference, then the first beatable attack", () => {
+        expect(L.chooseDefenceTarget(defs, "6S", ["8C"])).toBe("8C");
+        expect(L.chooseDefenceTarget(defs, "6S", ["9D", "8C"])).toBe("8C");   // 6S cannot beat 9D
+        expect(L.chooseDefenceTarget(defs, "6S", ["", undefined])).toBe("7H");
+        expect(L.chooseDefenceTarget(defs, "AC", ["7H"])).toBe("");
+    });
+
+    it("keeps the menu's previous target while it still makes sense", () => {
+        expect(L.defenceChoice(defs, "6S", "8C")).toEqual({ options: ["7H", "8C", "9D"], beatable: ["7H", "8C"], target: "8C", canDefend: true });
+        expect(L.defenceChoice(defs, "6S", "9D")).toMatchObject({ target: "7H", canDefend: true });
+        expect(L.defenceChoice(defs, null, "9D")).toMatchObject({ beatable: [], target: "9D", canDefend: false });
+        expect(L.defenceChoice(defs, "AC", "zz")).toMatchObject({ target: "7H", canDefend: false });
+        expect(L.defenceChoice({}, "6S", "")).toEqual({ options: [], beatable: [], target: "", canDefend: false });
+    });
+});
+
+describe("chooseDropAction", () => {
+    const moves = {
+        canTransfer: true, transferableCardCodes: ["7C"],
+        canAttack: true, attackableCardCodes: ["7C", "7D"],
+        defensesByAttackCard: { "7H": ["9H", "7C"], "8C": ["9H"] }
+    };
+
+    it("transfers first, then attacks, then defends", () => {
+        expect(L.chooseDropAction(moves, "7C")).toEqual({ kind: "transfer" });
+        expect(L.chooseDropAction(moves, "7D")).toEqual({ kind: "attack" });
+        expect(L.chooseDropAction(moves, "9H")).toEqual({ kind: "defend", target: "7H" });
+        expect(L.chooseDropAction({ ...moves, canTransfer: false }, "7C")).toEqual({ kind: "attack" });
+    });
+
+    it("defends the pair the card was dropped on, else the menu's choice", () => {
+        expect(L.chooseDropAction(moves, "9H", ["8C", "7H"])).toEqual({ kind: "defend", target: "8C" });
+        expect(L.chooseDropAction(moves, "9H", ["QQ", "8C"])).toEqual({ kind: "defend", target: "8C" });
+    });
+
+    it("does nothing for cards without a legal move", () => {
+        expect(L.chooseDropAction(moves, "AS")).toBeNull();
+        expect(L.chooseDropAction(moves, "")).toBeNull();
+        expect(L.chooseDropAction(undefined, "7C")).toBeNull();
+    });
+});
+
+describe("actionAvailability", () => {
+    it("enables only what the legal moves allow for the selected card", () => {
+        const moves = { canStart: false, canAttack: true, attackableCardCodes: ["6C"], canTransfer: true, transferableCardCodes: ["7C"], canTake: true, canEndRound: false };
+        expect(L.actionAvailability(moves, "6C", false)).toEqual({ start: false, attack: true, transfer: false, defend: false, take: true, endRound: false });
+        expect(L.actionAvailability(moves, "7C", true)).toEqual({ start: false, attack: false, transfer: true, defend: true, take: true, endRound: false });
+        expect(L.actionAvailability(moves, null, false)).toMatchObject({ attack: false, transfer: false });
+        expect(L.actionAvailability({ canStart: true }, null, false).start).toBe(true);
+    });
+});
+
+describe("actionHint", () => {
+    const two = (overrides = {}) => ({
+        players: [{ id: "me", name: "Alice" }, { id: "bot", name: "Bot" }],
+        attackerPlayerId: "me", defenderPlayerId: "bot", table: [], takingCardsInProgress: false,
+        legalMoves: { attackableCardCodes: ["6C"], transferableCardCodes: [] }, ...overrides
+    });
+    const four = (overrides = {}) => ({
+        players: [{ id: "me", name: "Alice", team: 0 }, { id: "b", name: "Boris", team: 1 }, { id: "c", name: "Cara", team: 0 }, { id: "d", name: "Dan", team: 1 }],
+        attackerPlayerId: "c", defenderPlayerId: "b", table: [], takingCardsInProgress: false, legalMoves: {}, ...overrides
+    });
+
+    it("explains taking and round ends first", () => {
+        expect(L.actionHint(two({ takingCardsInProgress: true }), "me", "6C")).toBe("See the message on the table. Use buttons or drag cards.");
+        expect(L.actionHint(two({ legalMoves: { canEndRound: true, canAttack: true } }), "me", null))
+            .toBe("All attacks are defended. You may add another attack (matching rank) or press End round.");
+        expect(L.actionHint(two({ legalMoves: { canEndRound: true } }), "me", "6C"))
+            .toBe("All attacks are defended. Press End round to finish this bout.");
+    });
+
+    it("prompts for a card, and waits for the opening teammate in four-player games", () => {
+        expect(L.actionHint(two(), "me", null)).toBe("Select or drag a card");
+        expect(L.actionHint(four(), "me", null)).toBe("Wait for Cara to lead; then you can add matching ranks.");
+        expect(L.actionHint(four({ attackerPlayerId: "me" }), "me", null)).toBe("Your turn. Lead the first attack (⚔️ opening attacker).");
+        expect(L.actionHint(four(), "me", "6C")).toBe("6C: wait for your teammate to lead first; then matching ranks can be added.");
+    });
+
+    it("lists what the selected card can do", () => {
+        expect(L.actionHint(two(), "me", "6C")).toBe("6C: can attack");
+        expect(L.actionHint(two({ legalMoves: { transferableCardCodes: ["7C"] } }), "me", "7C", ["7H", "8H"]))
+            .toBe("7C: can transfer, can defend (7♥ or 8♥)");
+        expect(L.actionHint(two(), "me", "AS")).toBe("AS: no legal move right now");
+    });
+});
+
+describe("seatRotation", () => {
+    const p = ids => ids.map(id => ({ id }));
+    const ids = seats => seats.map(seat => (seat ? seat.id : null));
+
+    it("seats everyone else in the same physical order for each viewer", () => {
+        expect(ids(L.seatRotation(p(["a", "b"]), "a"))).toEqual(["b", null, null]);
+        expect(ids(L.seatRotation(p(["a", "b", "c"]), "b"))).toEqual(["c", "a", null]);
+        expect(ids(L.seatRotation(p(["a", "b", "c", "d"]), "c"))).toEqual(["d", "a", "b"]);   // "a" is the teammate opposite
+    });
+
+    it("falls back to join order for a viewer who is not seated", () => {
+        expect(ids(L.seatRotation(p(["a", "b", "c", "d"]), "x"))).toEqual(["a", "b", "c"]);
+        expect(ids(L.seatRotation(p(["a", "b"]), "x"))).toEqual(["a", "b", null]);
+        expect(ids(L.seatRotation([], "x"))).toEqual([null, null, null]);
+    });
+});
+
+describe("fanLayout", () => {
+    it("draws at most six backs, spread symmetrically", () => {
+        expect(L.fanLayout(0)).toEqual({ few: true, angles: [] });
+        expect(L.fanLayout(1)).toEqual({ few: true, angles: [0] });
+        expect(L.fanLayout(3).angles).toEqual([-15, 0, 15]);
+        expect(L.fanLayout(6)).toEqual({ few: false, angles: [-20, -12, -4, 4, 12, 20] });
+        expect(L.fanLayout(24)).toEqual(L.fanLayout(6));
+    });
+
+    it("tolerates missing sizes", () => {
+        expect(L.fanLayout(undefined)).toEqual({ few: false, angles: [] });
+        expect(L.fanLayout(null)).toEqual({ few: true, angles: [] });
+    });
+});
+
+describe("failure messages", () => {
+    it("names the room that is gone or expired", () => {
+        expect(L.roomGoneMessage(404, "ABC234")).toBe("Room ABC234 no longer exists.");
+        expect(L.roomGoneMessage(410, "ABC234")).toBe("Room ABC234 expired due to inactivity.");
+    });
+
+    it("says where a failed leave leaves the player", () => {
+        expect(L.leaveFailureMessage("seat-invalid", 403, "ABC234"))
+            .toBe("This browser's seat in room ABC234 was no longer valid, so you are back in the lobby.");
+        expect(L.leaveFailureMessage("room-gone", 410, "ABC234")).toBe("Room ABC234 expired due to inactivity, so you are back in the lobby.");
+        expect(L.leaveFailureMessage("room-gone", 404, "ABC234")).toBe("Room ABC234 no longer exists, so you are back in the lobby.");
+        expect(L.leaveFailureMessage("transient", 503, "ABC234", "Storage is down."))
+            .toBe("Leave: Storage is down. You are still in room ABC234.");
+    });
+
+    it("words a failed read as a reconnect until the seat is restored", () => {
+        expect(L.refreshFailureMessage(false, "ABC234", "Timeout.")).toBe("Could not reconnect to room ABC234: Timeout. Retrying in the background.");
+        expect(L.refreshFailureMessage(true, "ABC234", "Timeout.")).toBe("Connection problem: Timeout.");
+    });
+});
+
+describe("lobbyInvalidation", () => {
+    const start = { streamId: "", revision: -1 };
+
+    it("tracks revisions per stream and ignores repeats", () => {
+        const first = L.lobbyInvalidation({ type: "LOBBIES_READY", streamId: "s1", revision: 4 }, start);
+        expect(first).toEqual({ streamId: "s1", revision: 4, changed: true, delayMs: 0 });
+        expect(L.lobbyInvalidation({ type: "LOBBIES_CHANGED", streamId: "s1", revision: 4 }, first).changed).toBe(false);
+        expect(L.lobbyInvalidation({ type: "LOBBIES_CHANGED", streamId: "s1", revision: 5 }, first))
+            .toEqual({ streamId: "s1", revision: 5, changed: true, delayMs: 75 });
+        // A restarted server starts a new stream whose revisions begin again.
+        expect(L.lobbyInvalidation({ type: "LOBBIES_CHANGED", streamId: "s2", revision: 0 }, first))
+            .toEqual({ streamId: "s2", revision: 0, changed: true, delayMs: 75 });
+    });
+
+    it("treats messages without a revision as changes and ignores other types", () => {
+        expect(L.lobbyInvalidation({ type: "LOBBIES_CHANGED" }, start).changed).toBe(true);
+        expect(L.lobbyInvalidation({ type: "GAME_UPDATED" }, start)).toBeNull();
+        expect(L.lobbyInvalidation(null, start)).toBeNull();
     });
 });

@@ -1,5 +1,5 @@
 import {describe, expect, test} from "vitest";
-import {readFileSync, existsSync} from "node:fs";
+import {readFileSync, readdirSync, existsSync} from "node:fs";
 import {join} from "node:path";
 import {createHash} from "node:crypto";
 import {JSDOM} from "jsdom";
@@ -62,7 +62,7 @@ describe("crawlable SEO pages", () => {
     test.each(["index.html", "rules.html"])("%s content-versions every stylesheet and script", file => {
         const document = documentFor(file);
         const references = [
-            ...document.querySelectorAll('link[rel="stylesheet"][href], script[src]')
+            ...document.querySelectorAll('link[rel="stylesheet"][href], link[rel="modulepreload"][href], script[src]')
         ].map(element => element.getAttribute(element.tagName === "LINK" ? "href" : "src"));
 
         expect(references.length).toBeGreaterThan(0);
@@ -71,6 +71,58 @@ describe("crawlable SEO pages", () => {
             const assetPath = url.pathname.slice(1);
             expect(url.searchParams.get("v"), `${file}: ${assetPath}`).toBe(assetVersion(assetPath));
         }
+    });
+
+    describe("ES modules", () => {
+        const jsFiles = readdirSync(join(staticDir, "js")).filter(name => name.endsWith(".js")).sort();
+        const document = documentFor("index.html");
+        const importMapScript = document.querySelector('script[type="importmap"]');
+        const imports = JSON.parse(importMapScript?.textContent || "{}").imports || {};
+        const entry = document.querySelector('script[type="module"][src]');
+
+        test("the entry module is loaded, versioned, after exactly one import map", () => {
+            expect(document.querySelectorAll('script[type="importmap"]')).toHaveLength(1);
+            expect(document.querySelectorAll('script[type="module"]')).toHaveLength(1);
+            expect(entry.getAttribute("src")).toBe(`/js/main.js?v=${assetVersion("js/main.js")}`);
+            // An import map only applies to modules loaded after it.
+            expect(importMapScript.compareDocumentPosition(entry) & 4).toBe(4);
+            for (const preload of document.querySelectorAll('link[rel="modulepreload"]')) {
+                expect(importMapScript.compareDocumentPosition(preload) & 4).toBe(4);
+            }
+        });
+
+        test("every other module is mapped to its content-versioned URL", () => {
+            const modules = jsFiles.filter(name => name !== "main.js");
+            expect(Object.keys(imports).sort()).toEqual(modules.map(name => `/js/${name}`));
+            for (const name of modules) {
+                expect(imports[`/js/${name}`], name).toBe(`/js/${name}?v=${assetVersion(`js/${name}`)}`);
+            }
+            const preloaded = [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href"));
+            expect(preloaded.sort()).toEqual(Object.values(imports).sort());
+        });
+
+        test.each(jsFiles)("js/%s imports only mapped modules, by relative path", name => {
+            const code = source(`js/${name}`);
+            expect(code).not.toMatch(/\bimport\s*\(/);   // no dynamic imports that could bypass the map
+            const specifiers = [...code.matchAll(/^\s*(?:import|export)\s[^;]*?\sfrom\s+"([^"]+)"/gm)].map(m => m[1]);
+            for (const specifier of specifiers) {
+                expect(specifier, `${name} imports ${specifier}`).toMatch(/^\.\/[\w-]+\.js$/);
+                const resolved = new URL(specifier, `${canonicalOrigin}/js/${name}`).pathname;
+                expect(imports, `${name} imports ${specifier}`).toHaveProperty([resolved]);
+            }
+        });
+
+        test.each(["index.html", "rules.html"])("%s references no unversioned script URL", file => {
+            const page = documentFor(file);
+            const urls = [...page.querySelectorAll("[src], [href]")]
+                .flatMap(element => ["src", "href"].map(name => element.getAttribute(name)).filter(Boolean));
+            // Import map values are fetched too (keys are only specifiers that modules import).
+            urls.push(...Object.values(JSON.parse(page.querySelector('script[type="importmap"]')?.textContent || "{}").imports || {}));
+            const scripts = urls.map(url => new URL(url, canonicalOrigin)).filter(url => url.pathname.endsWith(".js"));
+            for (const url of scripts) {
+                expect(url.searchParams.get("v"), `${file}: ${url.pathname}`).toBe(assetVersion(url.pathname.slice(1)));
+            }
+        });
     });
 
     test("structured data describes the English game and rules guide", () => {
@@ -121,7 +173,7 @@ describe("crawlable SEO pages", () => {
     });
 
     test("public copy omits advertising language and em dashes", () => {
-        for (const file of ["index.html", "rules.html", "social-card.svg", "js/app.js"]) {
+        for (const file of ["index.html", "rules.html", "social-card.svg", ...readdirSync(join(staticDir, "js")).map(name => `js/${name}`)]) {
             expect(source(file)).not.toMatch(/\bfree\b/i);
             expect(source(file)).not.toContain(String.fromCodePoint(0x2014));
         }

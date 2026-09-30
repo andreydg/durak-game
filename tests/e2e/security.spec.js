@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { contentSecurityPolicy } from "../support/csp.js";
 
 test.describe("Hand privacy (anti-cheat)", () => {
     test("a hand cannot be read from the API without the owner's token", async ({ page }) => {
@@ -32,9 +33,11 @@ test.describe("Hand privacy (anti-cheat)", () => {
     });
 
     test("the UI works under a script-src 'self' content security policy", async ({ page }) => {
-        const policy = "script-src 'self'; style-src 'self' 'unsafe-inline'";
+        // The policy the backend sends: 'self' plus the hash of the page's one import map.
+        let policy = null;
         await page.route(url => url.pathname === "/", async route => {
             const response = await route.fetch();
+            policy = contentSecurityPolicy(await response.text());
             await route.fulfill({response, headers: {...response.headers(), "content-security-policy": policy}});
         });
         await page.addInitScript(() => {
@@ -56,7 +59,27 @@ test.describe("Hand privacy (anti-cheat)", () => {
         await page.click("#helpToggleBtn");
         await expect(page.locator("#gameplayHint")).toBeVisible();
 
+        expect(policy).toMatch(/^script-src 'self' 'sha256-[A-Za-z0-9+/]{43}='; style-src 'self' 'unsafe-inline'$/);
         expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+    });
+
+    test("without the import map's hash the policy blocks the page's modules", async ({ page }) => {
+        // Guards the check above: the hash really is what lets the import map (and so the game) run.
+        await page.route(url => url.pathname === "/", async route => {
+            const response = await route.fetch();
+            await route.fulfill({
+                response,
+                headers: {...response.headers(), "content-security-policy": "script-src 'self'; style-src 'self' 'unsafe-inline'"}
+            });
+        });
+        await page.addInitScript(() => {
+            window.__cspViolations = [];
+            document.addEventListener("securitypolicyviolation", event => window.__cspViolations.push(event.violatedDirective));
+        });
+
+        await page.goto("/");
+
+        await expect.poll(() => page.evaluate(() => window.__cspViolations)).toContain("script-src-elem");
     });
 
     test("acting as another player without their token is rejected with 403", async ({ page }) => {
