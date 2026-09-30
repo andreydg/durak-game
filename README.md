@@ -15,6 +15,21 @@ The canonical public origin is `https://durak.andreyg.com`. The home page includ
 
 Keep canonical URLs and sitemap entries in sync when adding pages. The frontend test suite validates that contract and the 1200×630 social preview.
 
+## Frontend
+
+The browser UI in [`src/main/resources/static`](src/main/resources/static) is plain HTML, CSS and native ES modules, with no bundler or build step. The modules in `js/`:
+
+- `main.js`: entry point; wires up events, starts the page, and assigns the few test hooks the Playwright specs call.
+- `logic.js`: pure, unit-tested helpers without DOM access (game-state questions, labels, hints, layout maths).
+- `state.js` and `dom.js`: shared UI state and element lookups.
+- `api.js`: the saved seat and authenticated JSON requests. `socket.js`: one reconnecting WebSocket helper used by both channels.
+- `sync.js`: game socket, fallback reads and heartbeats. `lobby.js`: the Open tables list and its socket.
+- `actions.js`: player actions and session changes. `view.js`: rendering, focus, alerts and announcements.
+
+**Asset versions.** Every CSS and JS URL carries `?v=` plus the first 12 hex digits of the file's SHA-256, and static files are served `no-cache`, so browsers revalidate and pick up changes at once. Modules import each other with relative specifiers (`./logic.js`); an inline `<script type="importmap">` at the end of `index.html` maps each module to its versioned URL, followed by `modulepreload` links and the versioned entry script. After changing any CSS or JS file, run `node scripts/update-asset-versions.mjs` to recompute the hashes and regenerate that block; the unit tests fail while a hash is stale. The Content-Security-Policy allows the import map by the SHA-256 of the exact text between `<script type="importmap">` and `</script>` (see [`tests/support/csp.js`](tests/support/csp.js)), so keep that tag exactly as written and add no other inline script.
+
+**Card images.** The card faces and back in `cards/` are WebP files made from the original PNGs by [`scripts/convert-cards-webp.mjs`](scripts/convert-cards-webp.mjs) with Playwright's Chromium, at the original size. Cards are lossy (quality 0.9) where that is pixel-identical or at most half the lossless size (court cards, black pip cards) and lossless elsewhere; `--compare` prints sizes and 1x/2x screenshot differences for the alternatives. The script's header explains how to restore the PNGs from git history to re-run it.
+
 ## Testing
 
 Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:
@@ -23,7 +38,7 @@ Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) a
 | --- | --- | --- | --- |
 | Backend | JUnit / Maven | `./mvnw test` | Game rules (including a seeded rules fuzzer), `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, security headers, stores |
 | Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
-| Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js) |
+| Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js), plus static-page contracts: search metadata, versioned assets and the import map, CSP-safe markup, card images |
 | End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, finished results/rematches, hand privacy / anti-cheat), plus UI behaviour with synthetic games: phone/desktop layout (no horizontal overflow, hand above the sticky action strip), double-submit guards, keyboard focus, screen-reader names and announcements, leave confirmation, reconnecting after reload, API error handling, saved-seat validity, and running under a strict CSP |
 
 First-time frontend setup:
