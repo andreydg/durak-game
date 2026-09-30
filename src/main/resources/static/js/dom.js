@@ -1,0 +1,78 @@
+/*
+ * The page elements the modules work with. Module scripts run after the document has been
+ * parsed, so every element exists when this is evaluated.
+ */
+const byId = id => document.getElementById(id);
+
+export const el = {
+    appAlert: byId("appAlert"),
+    liveAnnouncer: byId("liveAnnouncer"),
+    messagesPanel: byId("messagesPanel"),
+    messages: byId("messages"),
+
+    reconnectView: byId("reconnectView"),
+    reconnectCode: byId("reconnectCode"),
+
+    lobbyView: byId("lobbyView"),
+    hostForm: byId("hostForm"),
+    hostNameInput: byId("hostName"),
+    publicRoomInput: byId("publicRoom"),
+    quickPlayBtn: byId("quickPlayBtn"),
+    createBtn: byId("createBtn"),
+    joinForm: byId("joinForm"),
+    gameCodeInput: byId("gameCode"),
+    playerNameInput: byId("playerName"),
+    joinHint: byId("joinHint"),
+    joinBtn: byId("joinBtn"),
+    lobbyGameList: byId("lobbyGameList"),
+
+    gameView: byId("gameView"),
+    gameCodeLabel: byId("gameCodeLabel"),
+    statusLabel: byId("statusLabel"),
+    visibilityLabel: byId("visibilityLabel"),
+    roleLabel: byId("roleLabel"),
+    startBtn: byId("startBtn"),
+    addBotBtn: byId("addBotBtn"),
+    shareBtn: byId("shareBtn"),
+    leaveBtn: byId("leaveBtn"),
+    leaveDialog: byId("leaveDialog"),
+    roomWaitingLine: byId("roomWaitingLine"),
+    gameOpenTablesWrap: byId("gameOpenTablesWrap"),
+    gameLobbyGameList: byId("gameLobbyGameList"),
+    seatNotice: byId("seatNotice"),
+    seatNoticeText: byId("seatNoticeText"),
+    seatNoticeLobbyBtn: byId("seatNoticeLobbyBtn"),
+
+    resultPanel: byId("resultPanel"),
+    resultIcon: byId("resultIcon"),
+    resultTitle: byId("resultTitle"),
+    resultSummary: byId("resultSummary"),
+    rematchWaiting: byId("rematchWaiting"),
+    rematchBtn: byId("rematchBtn"),
+
+    playingArea: byId("playingArea"),
+    tableAttackerLabel: byId("tableAttackerLabel"),
+    tableDefenderLabel: byId("tableDefenderLabel"),
+    trumpSuitHud: byId("trumpSuitHud"),
+    openingLeadHud: byId("openingLeadHud"),
+    deckArea: byId("deckArea"),
+    talonStack: byId("talonStack"),
+    trumpUnderImg: byId("trumpUnderImg"),
+    tableGrid: byId("tableGrid"),
+    seatTop1: byId("seatTop1"),
+    seatTop2: byId("seatTop2"),
+    seatTop3: byId("seatTop3"),
+    battleTableBanner: byId("battleTableBanner"),
+    battleCards: byId("battleCards"),
+    mySeatTitle: byId("mySeatTitle"),
+    myHand: byId("myHand"),
+    attackBtn: byId("attackBtn"),
+    defendBtn: byId("defendBtn"),
+    transferBtn: byId("transferBtn"),
+    takeBtn: byId("takeBtn"),
+    endRoundBtn: byId("endRoundBtn"),
+    defendTargetSelect: byId("defendTargetSelect"),
+    actionHint: byId("actionHint"),
+    helpToggleBtn: byId("helpToggleBtn"),
+    gameplayHint: byId("gameplayHint")
+};
