@@ -60,6 +60,8 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final boolean systemInstructionSupported;
     private final boolean thinkingConfigSupported;
     private final boolean promptReasoningBudgetUsed;
+    private final LlmCircuitBreaker circuitBreaker;
+    private final LlmCallBudget callBudget;
 
     @Autowired
     public GeminiAutoPlayDecisionEngine(
@@ -79,11 +81,18 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             @Value("${autoplay.gemini.system-instruction:auto}") String systemInstructionFlag,
             @Value("${autoplay.gemini.thinking-config:auto}") String thinkingConfigFlag,
             @Value("${autoplay.gemini.prompt-reasoning-budget:auto}") String promptReasoningBudgetFlag,
-            @Value("${autoplay.request-timeout-ms:30000}") long timeoutMs
+            @Value("${autoplay.request-timeout-ms:30000}") long timeoutMs,
+            @Value("${autoplay.gemini.circuit-breaker.failure-threshold:"
+                    + GeminiSettings.DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD + "}") int circuitBreakerFailureThreshold,
+            @Value("${autoplay.gemini.circuit-breaker.cooldown-ms:"
+                    + GeminiSettings.DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS + "}") long circuitBreakerCooldownMs,
+            @Value("${autoplay.gemini.max-calls-per-minute:" + GeminiSettings.DEFAULT_MAX_CALLS_PER_MINUTE + "}")
+            int maxCallsPerMinute
     ) {
         this(fallback, objectMapper, new GeminiSettings(enabled, apiKey, model, baseUrl, thinkingLevel,
                         simpleThinkingLevel, publicCardMemoryEnabled, reasoningBudgetSeconds, jsonModeFlag,
-                        systemInstructionFlag, thinkingConfigFlag, promptReasoningBudgetFlag, timeoutMs),
+                        systemInstructionFlag, thinkingConfigFlag, promptReasoningBudgetFlag, timeoutMs,
+                        circuitBreakerFailureThreshold, circuitBreakerCooldownMs, maxCallsPerMinute),
                 GeminiTransport.jdk(Duration.ofMillis(Math.max(1, Math.min(MAX_CONNECT_TIMEOUT_MS, timeoutMs)))),
                 System::nanoTime);
     }
@@ -116,12 +125,18 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         this.thinkingConfigSupported = resolveCapability(settings.thinkingConfigFlag(), model.defaultThinkingConfig());
         this.promptReasoningBudgetUsed = resolveCapability(settings.promptReasoningBudgetFlag(),
                 model.defaultPromptReasoningBudget());
+        this.circuitBreaker = new LlmCircuitBreaker(settings.circuitBreakerFailureThreshold(),
+                Duration.ofMillis(Math.max(0, settings.circuitBreakerCooldownMs())), nanoClock);
+        this.callBudget = new LlmCallBudget(settings.maxCallsPerMinute(), nanoClock);
         log.info("autoplay_gemini_config enabled={} apiKeyPresent={} model={} modelFamily={} jsonMode={} "
                         + "systemInstruction={} thinkingConfig={} thinkingLevel={} simpleThinkingLevel={} "
-                        + "temperature={} timeoutMs={}",
+                        + "temperature={} timeoutMs={} circuitBreakerFailureThreshold={} circuitBreakerCooldownMs={} "
+                        + "maxCallsPerMinute={} callBurst={}",
                 enabled, !apiKey.isBlank(), model.id(), model.describe(), jsonModeSupported,
                 systemInstructionSupported, thinkingConfigSupported, thinkingLevel, simpleThinkingLevel,
-                model.pinZeroTemperature() ? "0" : "default", timeout.toMillis());
+                model.pinZeroTemperature() ? "0" : "default", timeout.toMillis(),
+                settings.circuitBreakerFailureThreshold(), settings.circuitBreakerCooldownMs(),
+                settings.maxCallsPerMinute(), callBudget.burst());
     }
 
     private static boolean resolveCapability(String flag, boolean autoDefault) {
@@ -174,7 +189,16 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         if (!enabled || apiKey.isBlank()) {
             return heuristic(game, playerId, legalMoves, "disabled");
         }
+        LlmCircuitBreaker.Permit permit = circuitBreaker.tryAcquire();
+        if (permit == LlmCircuitBreaker.Permit.REJECTED) {
+            return heuristic(game, playerId, legalMoves, "circuit_open");
+        }
+        if (!callBudget.tryAcquire()) {
+            circuitBreaker.record(permit, LlmCircuitBreaker.Outcome.NEUTRAL);
+            return heuristic(game, playerId, legalMoves, "budget_exhausted");
+        }
         ModelCall call = callModel(game, playerId, legalMoves, options.size());
+        circuitBreaker.record(permit, call.breakerOutcome());
         if (!call.completed()) {
             return heuristic(game, playerId, legalMoves, "primary_model_failed");
         }
@@ -217,17 +241,28 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
 
     /* ------------------------------------------------------------------ model call */
 
-    /** One model round trip; {@code completed} means an HTTP 2xx response arrived. */
-    private record ModelCall(boolean completed, GeminiResponse response) {
+    /**
+     * One model round trip: {@code completed} means an HTTP 2xx response arrived, and
+     * {@code breakerOutcome} is what the call says about the service's health.
+     */
+    private record ModelCall(boolean completed, GeminiResponse response, LlmCircuitBreaker.Outcome breakerOutcome) {
     }
 
     private ModelCall callModel(Game game, String playerId, ViewerLegalMoves legalMoves, int optionCount) {
         String level = thinkingConfigSupported ? thinkingLevelFor(optionCount) : null;
+        String body;
+        try {
+            body = buildRequest(game, playerId, legalMoves, level);
+        } catch (IOException | RuntimeException ex) {
+            log.warn("autoplay_llm_request_failed code={} player={} error={}", game.getCode(), playerId,
+                    ex.getClass().getSimpleName());
+            return new ModelCall(false, GeminiResponse.EMPTY, LlmCircuitBreaker.Outcome.NEUTRAL);
+        }
         long startedAt = nanoClock.getAsLong();
         GeminiTransport.HttpResult result = null;
         String error = "none";
+        LlmCircuitBreaker.Outcome outcome = LlmCircuitBreaker.Outcome.FAILURE;
         try {
-            String body = buildRequest(game, playerId, legalMoves, level);
             result = transport.post(endpoint, apiKey, body, timeout);
         } catch (HttpTimeoutException ex) {
             error = "timeout";
@@ -236,16 +271,28 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             error = "interrupted";
+            outcome = LlmCircuitBreaker.Outcome.NEUTRAL;
         } catch (RuntimeException ex) {
             error = "exception";
+            outcome = LlmCircuitBreaker.Outcome.NEUTRAL;
         }
         long latencyMs = TimeUnit.NANOSECONDS.toMillis(nanoClock.getAsLong() - startedAt);
         GeminiResponse response = result == null ? GeminiResponse.EMPTY : GeminiResponse.parse(objectMapper, result.body());
-        if (result != null && !result.successful()) {
-            error = "http_status";
+        if (result != null) {
+            int status = result.statusCode();
+            boolean transientStatus = status == 429 || status >= 500;
+            outcome = transientStatus ? LlmCircuitBreaker.Outcome.FAILURE : LlmCircuitBreaker.Outcome.SUCCESS;
+            if (!result.successful()) {
+                error = "http_status";
+            }
         }
         logCall(game, playerId, level, latencyMs, result, response, error);
-        return new ModelCall(result != null && result.successful(), response);
+        return new ModelCall(result != null && result.successful(), response, outcome);
+    }
+
+    /** Package-private for tests. */
+    LlmCircuitBreaker.State circuitState() {
+        return circuitBreaker.state();
     }
 
     /** Decisions with at most two legal options (one card vs pass, one defence vs take) think less. */

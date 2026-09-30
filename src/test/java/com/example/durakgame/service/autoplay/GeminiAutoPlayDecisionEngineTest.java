@@ -322,6 +322,95 @@ class GeminiAutoPlayDecisionEngineTest {
         assertTrue(logLines("autoplay_decision").getLast().contains(" source=heuristic reason=disabled "));
     }
 
+    /* ------------------------------------------------------------------ resilience and spend caps */
+
+    @Test
+    void repeatedTransientFailuresOpenTheCircuitUntilAProbeSucceeds() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings()
+                .circuitBreakerFailureThreshold(3)
+                .circuitBreakerCooldownMs(60_000));
+        Game game = openingAttack();
+        ViewerLegalMoves moves = game.computeViewerLegalMoves(BOT);
+        AutoPlayAction heuristicMove = heuristic.choose(game, BOT, moves);
+        transport.fail(new HttpTimeoutException("slow"));
+        transport.respond(503, "{\"error\":{\"status\":\"UNAVAILABLE\"}}");
+        transport.respond(429, "{\"error\":{\"status\":\"RESOURCE_EXHAUSTED\"}}");
+
+        for (int i = 0; i < 3; i++) {
+            assertEquals(heuristicMove, engine.choose(game, BOT, moves));
+        }
+        assertEquals(LlmCircuitBreaker.State.OPEN, engine.circuitState());
+
+        assertEquals(heuristicMove, engine.choose(game, BOT, moves));
+        assertEquals(3, transport.calls(), "an open circuit skips the model");
+        assertTrue(logLines("autoplay_decision").getLast().contains(" source=heuristic reason=circuit_open "));
+
+        clock[0] += Duration.ofSeconds(60).toNanos();
+        transport.respond(200, answer("{\"type\":\"ATTACK\",\"cardCode\":\"10D\"}"));
+        assertEquals(AutoPlayAction.attack("10D"), engine.choose(game, BOT, moves));
+        assertEquals(4, transport.calls(), "one probe after the cooldown");
+        assertEquals(LlmCircuitBreaker.State.CLOSED, engine.circuitState());
+    }
+
+    @Test
+    void clientErrorsAndBadAnswersDoNotOpenTheCircuit() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings().circuitBreakerFailureThreshold(2));
+        Game game = openingAttack();
+        ViewerLegalMoves moves = game.computeViewerLegalMoves(BOT);
+        transport.respond(400, "{\"error\":{\"status\":\"INVALID_ARGUMENT\"}}");
+        transport.respond(404, "{\"error\":{\"status\":\"NOT_FOUND\"}}");
+        transport.respond(200, answer("not json at all"));
+        transport.respond(200, answer("{\"type\":\"TAKE\"}"));
+
+        for (int i = 0; i < 4; i++) {
+            engine.choose(game, BOT, moves);
+        }
+
+        assertEquals(4, transport.calls());
+        assertEquals(LlmCircuitBreaker.State.CLOSED, engine.circuitState());
+    }
+
+    @Test
+    void theGlobalCallBudgetCapsModelCallsAcrossGames() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings().maxCallsPerMinute(6));
+        Game first = openingAttack();
+        Game second = throwInWithOneMatchingCard();
+        transport.respond(200, answer("{\"type\":\"ATTACK\",\"cardCode\":\"7C\"}"));
+
+        assertEquals(AutoPlayAction.attack("7C"), engine.choose(first, BOT, first.computeViewerLegalMoves(BOT)));
+        ViewerLegalMoves secondMoves = second.computeViewerLegalMoves(BOT);
+        assertEquals(heuristic.choose(second, BOT, secondMoves), engine.choose(second, BOT, secondMoves));
+        assertEquals(1, transport.calls());
+        assertTrue(logLines("autoplay_decision").getLast().contains(" source=heuristic reason=budget_exhausted "));
+
+        clock[0] += Duration.ofSeconds(11).toNanos();
+        transport.respond(200, answer("{\"type\":\"END_ROUND\"}"));
+        assertEquals(AutoPlayAction.endRound(), engine.choose(second, BOT, secondMoves));
+        assertEquals(2, transport.calls());
+    }
+
+    @Test
+    void anExhaustedBudgetDoesNotStrandTheHalfOpenProbe() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings()
+                .circuitBreakerFailureThreshold(1)
+                .circuitBreakerCooldownMs(1_000)
+                .maxCallsPerMinute(6));
+        Game game = openingAttack();
+        ViewerLegalMoves moves = game.computeViewerLegalMoves(BOT);
+        transport.respond(500, "{}");
+        engine.choose(game, BOT, moves);
+        assertEquals(LlmCircuitBreaker.State.OPEN, engine.circuitState());
+
+        clock[0] += Duration.ofSeconds(2).toNanos();
+        engine.choose(game, BOT, moves);
+        assertTrue(logLines("autoplay_decision").getLast().contains(" reason=budget_exhausted "));
+
+        clock[0] += Duration.ofSeconds(10).toNanos();
+        transport.respond(200, answer("{\"type\":\"ATTACK\",\"cardCode\":\"7C\"}"));
+        assertEquals(AutoPlayAction.attack("7C"), engine.choose(game, BOT, moves));
+        assertEquals(LlmCircuitBreaker.State.CLOSED, engine.circuitState());
+    }
+
     /* ------------------------------------------------------------------ logging */
 
     @Test

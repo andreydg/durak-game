@@ -17,12 +17,18 @@ record GeminiSettings(
         String systemInstructionFlag,
         String thinkingConfigFlag,
         String promptReasoningBudgetFlag,
-        long requestTimeoutMs
+        long requestTimeoutMs,
+        int circuitBreakerFailureThreshold,
+        long circuitBreakerCooldownMs,
+        int maxCallsPerMinute
 ) {
     static final String DEFAULT_MODEL = "gemini-3.8-flash";
     static final String DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
     static final String DEFAULT_THINKING_LEVEL = "HIGH";
     static final String DEFAULT_SIMPLE_THINKING_LEVEL = "LOW";
+    static final int DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+    static final long DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+    static final int DEFAULT_MAX_CALLS_PER_MINUTE = 120;
 
     static Builder builder() {
         return new Builder();
@@ -43,6 +49,9 @@ record GeminiSettings(
         private String thinkingConfigFlag = "auto";
         private String promptReasoningBudgetFlag = "auto";
         private long requestTimeoutMs = 30_000;
+        private int circuitBreakerFailureThreshold = DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD;
+        private long circuitBreakerCooldownMs = DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS;
+        private int maxCallsPerMinute = DEFAULT_MAX_CALLS_PER_MINUTE;
 
         Builder enabled(boolean value) {
             enabled = value;
@@ -109,10 +118,26 @@ record GeminiSettings(
             return this;
         }
 
+        Builder circuitBreakerFailureThreshold(int value) {
+            circuitBreakerFailureThreshold = value;
+            return this;
+        }
+
+        Builder circuitBreakerCooldownMs(long value) {
+            circuitBreakerCooldownMs = value;
+            return this;
+        }
+
+        Builder maxCallsPerMinute(int value) {
+            maxCallsPerMinute = value;
+            return this;
+        }
+
         GeminiSettings build() {
             return new GeminiSettings(enabled, apiKey, model, baseUrl, thinkingLevel, simpleThinkingLevel,
                     publicCardMemoryEnabled, reasoningBudgetSeconds, jsonModeFlag, systemInstructionFlag,
-                    thinkingConfigFlag, promptReasoningBudgetFlag, requestTimeoutMs);
+                    thinkingConfigFlag, promptReasoningBudgetFlag, requestTimeoutMs, circuitBreakerFailureThreshold,
+                    circuitBreakerCooldownMs, maxCallsPerMinute);
         }
     }
 }

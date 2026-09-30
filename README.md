@@ -84,6 +84,9 @@ Environment variables:
 - `AUTOPLAY_GEMINI_SIMPLE_THINKING_LEVEL` (`LOW` by default; decisions with at most two legal options, such as one throw-in card vs pass or one beating card vs take; empty means the same level as above)
 - `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
 - `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default)
+- `AUTOPLAY_GEMINI_CIRCUIT_BREAKER_FAILURE_THRESHOLD` (`3` by default; after this many consecutive timeouts, I/O errors or HTTP 429/5xx responses, bots stop calling the model; `0` disables the breaker)
+- `AUTOPLAY_GEMINI_CIRCUIT_BREAKER_COOLDOWN_MS` (`60000` by default; how long the breaker stays open before a single probe call decides whether to resume)
+- `AUTOPLAY_GEMINI_MAX_CALLS_PER_MINUTE` (`120` by default; global token bucket across all games with a burst of ten seconds' worth of calls, so spend stays capped even if request-level rate limiting is bypassed; `0` disables the cap)
 
 Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` derives the value from the model family and version parsed from the id, so future Gemini versions are handled without code changes):
 
