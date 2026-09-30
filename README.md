@@ -72,24 +72,27 @@ The API and lobby list enforce expiration immediately. Firestore documents also 
 
 ## Auto-play (Gemini)
 
-The host can add bot players in the lobby. Bots use the primary LLM to choose moves, and every move is validated server-side. If the model is unavailable or returns invalid output, bots use a deterministic heuristic fallback.
+The host can add bot players in the lobby. Bots use the primary LLM to choose moves. Every move the engine returns is checked against the bot's legal moves: card codes are normalized (`6c` is `6C`), and an answer that is still illegal (or missing, or unparseable) is replaced by the deterministic heuristic's move. The heuristic is also used whenever the model is disabled or unavailable, and a decision with a single forced option never calls the model.
 
 Environment variables:
 
 - `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback; Cloud Run receives this from Secret Manager)
 - `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
-- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.7-flash` by default)
+- `AUTOPLAY_GEMINI_MODEL` (`gemini-3.8-flash` by default; a `models/` prefix is accepted)
 - `AUTOPLAY_GEMINI_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta` by default)
-- `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default)
+- `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default; decisions with three or more legal options)
+- `AUTOPLAY_GEMINI_SIMPLE_THINKING_LEVEL` (`LOW` by default; decisions with at most two legal options, such as one throw-in card vs pass or one beating card vs take; empty means the same level as above)
 - `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
 - `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default)
 
-Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` derives the value from the model name):
+Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` derives the value from the model family and version parsed from the id, so future Gemini versions are handled without code changes):
 
 - `AUTOPLAY_GEMINI_JSON_MODE` (`auto`: enabled except for Gemma 3 models)
 - `AUTOPLAY_GEMINI_SYSTEM_INSTRUCTION` (`auto`: enabled except for Gemma 3 models)
-- `AUTOPLAY_GEMINI_THINKING_CONFIG` (`auto`: enabled for Gemini 3 models)
+- `AUTOPLAY_GEMINI_THINKING_CONFIG` (`auto`: enabled for Gemini 3 and newer)
 - `AUTOPLAY_GEMINI_PROMPT_REASONING_BUDGET` (`auto`: enabled for Gemma models)
+
+Gemini 3 and newer keep their default sampling settings; `temperature: 0` is only pinned for Gemini 1.x/2.x and Gemma models.
 
 API endpoint:
 

@@ -1,46 +1,58 @@
 package com.example.durakgame.service.autoplay;
 
-import com.example.durakgame.model.Game;
+import com.example.durakgame.model.AttackEntry;
 import com.example.durakgame.model.Card;
+import com.example.durakgame.model.Game;
 import com.example.durakgame.model.Player;
 import com.example.durakgame.model.ViewerLegalMoves;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
+/**
+ * Chooses bot moves with Gemini and falls back to {@link HeuristicAutoPlayDecisionEngine}.
+ *
+ * <p>Every returned action is legal for the {@link ViewerLegalMoves} passed in: model answers are
+ * normalized and validated, and anything illegal is replaced by the heuristic's move. Each model
+ * call and each decision produce one single-line {@code key=value} log entry.
+ */
 @Component
 @Primary
 public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private static final Logger log = LoggerFactory.getLogger(GeminiAutoPlayDecisionEngine.class);
 
+    static final String DEFAULT_MODEL = GeminiSettings.DEFAULT_MODEL;
     private static final long MAX_CONNECT_TIMEOUT_MS = 5000;
-    static final String DEFAULT_MODEL = "gemini-3.7-flash";
+    private static final int LOG_TEXT_LIMIT = 300;
 
     private final HeuristicAutoPlayDecisionEngine fallback;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
+    private final GeminiTransport transport;
+    private final LongSupplier nanoClock;
     private final boolean enabled;
     private final String apiKey;
-    private final String model;
-    private final String baseUrl;
+    private final GeminiModelProfile model;
+    private final URI endpoint;
     private final String thinkingLevel;
+    private final String simpleThinkingLevel;
     private final Duration timeout;
     private final long reasoningBudgetSeconds;
     private final boolean publicCardMemoryEnabled;
@@ -49,14 +61,18 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final boolean thinkingConfigSupported;
     private final boolean promptReasoningBudgetUsed;
 
+    @Autowired
     public GeminiAutoPlayDecisionEngine(
             HeuristicAutoPlayDecisionEngine fallback,
             ObjectMapper objectMapper,
             @Value("${autoplay.gemini.enabled:true}") boolean enabled,
             @Value("${autoplay.gemini.api-key:}") String apiKey,
-            @Value("${autoplay.gemini.model:" + DEFAULT_MODEL + "}") String model,
-            @Value("${autoplay.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}") String baseUrl,
-            @Value("${autoplay.gemini.thinking-level:HIGH}") String thinkingLevel,
+            @Value("${autoplay.gemini.model:" + GeminiSettings.DEFAULT_MODEL + "}") String model,
+            @Value("${autoplay.gemini.base-url:" + GeminiSettings.DEFAULT_BASE_URL + "}") String baseUrl,
+            @Value("${autoplay.gemini.thinking-level:" + GeminiSettings.DEFAULT_THINKING_LEVEL + "}")
+            String thinkingLevel,
+            @Value("${autoplay.gemini.simple-thinking-level:" + GeminiSettings.DEFAULT_SIMPLE_THINKING_LEVEL + "}")
+            String simpleThinkingLevel,
             @Value("${autoplay.gemini.public-card-memory-enabled:true}") boolean publicCardMemoryEnabled,
             @Value("${autoplay.gemini.reasoning-budget-seconds:30}") long reasoningBudgetSeconds,
             @Value("${autoplay.gemini.json-mode:auto}") String jsonModeFlag,
@@ -65,24 +81,47 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             @Value("${autoplay.gemini.prompt-reasoning-budget:auto}") String promptReasoningBudgetFlag,
             @Value("${autoplay.request-timeout-ms:30000}") long timeoutMs
     ) {
+        this(fallback, objectMapper, new GeminiSettings(enabled, apiKey, model, baseUrl, thinkingLevel,
+                        simpleThinkingLevel, publicCardMemoryEnabled, reasoningBudgetSeconds, jsonModeFlag,
+                        systemInstructionFlag, thinkingConfigFlag, promptReasoningBudgetFlag, timeoutMs),
+                GeminiTransport.jdk(Duration.ofMillis(Math.max(1, Math.min(MAX_CONNECT_TIMEOUT_MS, timeoutMs)))),
+                System::nanoTime);
+    }
+
+    /** Package-private for tests: scripted transport and a controllable clock. */
+    GeminiAutoPlayDecisionEngine(
+            HeuristicAutoPlayDecisionEngine fallback,
+            ObjectMapper objectMapper,
+            GeminiSettings settings,
+            GeminiTransport transport,
+            LongSupplier nanoClock
+    ) {
         this.fallback = fallback;
         this.objectMapper = objectMapper;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(Math.min(MAX_CONNECT_TIMEOUT_MS, timeoutMs)))
-                .build();
-        this.enabled = enabled;
-        this.apiKey = apiKey == null ? "" : apiKey.trim();
-        this.model = model;
-        this.baseUrl = baseUrl;
-        this.thinkingLevel = thinkingLevel;
-        this.timeout = Duration.ofMillis(timeoutMs);
-        this.reasoningBudgetSeconds = Math.max(1L, reasoningBudgetSeconds);
-        this.publicCardMemoryEnabled = publicCardMemoryEnabled;
-        /* Model capabilities: default derived from the model family, overridable per property (auto|true|false). */
-        this.jsonModeSupported = resolveCapability(jsonModeFlag, !model.startsWith("gemma-3-"));
-        this.systemInstructionSupported = resolveCapability(systemInstructionFlag, !model.startsWith("gemma-3-"));
-        this.thinkingConfigSupported = resolveCapability(thinkingConfigFlag, model.startsWith("gemini-3"));
-        this.promptReasoningBudgetUsed = resolveCapability(promptReasoningBudgetFlag, model.startsWith("gemma-"));
+        this.transport = transport;
+        this.nanoClock = nanoClock;
+        this.enabled = settings.enabled();
+        this.apiKey = settings.apiKey() == null ? "" : settings.apiKey().trim();
+        this.model = GeminiModelProfile.parse(settings.model(), GeminiSettings.DEFAULT_MODEL);
+        this.endpoint = endpointFor(settings.baseUrl(), model.id());
+        this.thinkingLevel = blankToNull(settings.thinkingLevel());
+        this.simpleThinkingLevel = blankToNull(settings.simpleThinkingLevel());
+        this.timeout = Duration.ofMillis(Math.max(1, settings.requestTimeoutMs()));
+        this.reasoningBudgetSeconds = Math.max(1L, settings.reasoningBudgetSeconds());
+        this.publicCardMemoryEnabled = settings.publicCardMemoryEnabled();
+        /* Model capabilities: derived from the model version, overridable per property (auto|true|false). */
+        this.jsonModeSupported = resolveCapability(settings.jsonModeFlag(), model.defaultJsonMode());
+        this.systemInstructionSupported = resolveCapability(settings.systemInstructionFlag(),
+                model.defaultSystemInstruction());
+        this.thinkingConfigSupported = resolveCapability(settings.thinkingConfigFlag(), model.defaultThinkingConfig());
+        this.promptReasoningBudgetUsed = resolveCapability(settings.promptReasoningBudgetFlag(),
+                model.defaultPromptReasoningBudget());
+        log.info("autoplay_gemini_config enabled={} apiKeyPresent={} model={} modelFamily={} jsonMode={} "
+                        + "systemInstruction={} thinkingConfig={} thinkingLevel={} simpleThinkingLevel={} "
+                        + "temperature={} timeoutMs={}",
+                enabled, !apiKey.isBlank(), model.id(), model.describe(), jsonModeSupported,
+                systemInstructionSupported, thinkingConfigSupported, thinkingLevel, simpleThinkingLevel,
+                model.pinZeroTemperature() ? "0" : "default", timeout.toMillis());
     }
 
     private static boolean resolveCapability(String flag, boolean autoDefault) {
@@ -93,63 +132,140 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         return Boolean.parseBoolean(normalized);
     }
 
-    @Override
-    public AutoPlayAction choose(Game game, String playerId, ViewerLegalMoves legalMoves) {
-        if (!enabled || apiKey.isBlank()) {
-            log.info("autoplay_gemini_fallback code={} playerId={} reason=disabled_or_missing_api_key",
-                    game.getCode(), playerId);
-            return fallback.choose(game, playerId, legalMoves);
+    private static URI endpointFor(String baseUrl, String modelId) {
+        String base = baseUrl == null || baseUrl.isBlank() ? GeminiSettings.DEFAULT_BASE_URL : baseUrl.trim();
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
         }
-        AutoPlayAction fromPrimary = chooseWithModel(game, playerId, legalMoves);
-        if (fromPrimary != null) {
-            return fromPrimary;
-        }
-        log.info("autoplay_gemini_fallback code={} playerId={} reason=primary_model_failed",
-                game.getCode(), playerId);
-        return fallback.choose(game, playerId, legalMoves);
+        return URI.create(base + "/models/" + modelId + ":generateContent");
     }
 
-    private AutoPlayAction chooseWithModel(Game game, String playerId, ViewerLegalMoves legalMoves) {
-        try {
-            log.info("autoplay_gemini_request code={} playerId={} model={} timeoutMs={}",
-                    game.getCode(), playerId, model, timeout.toMillis());
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint()))
-                    .timeout(timeout)
-                    .header("x-goog-api-key", apiKey)
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(buildRequest(game, playerId, legalMoves)))
-                    .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            log.info("autoplay_gemini_response code={} playerId={} model={} status={} responseBytes={}",
-                    game.getCode(), playerId, model, response.statusCode(), response.body().length());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.info("autoplay_gemini_failed code={} playerId={} model={} reason=http_status status={} body={}",
-                        game.getCode(), playerId, model, response.statusCode(), humanizeResponseBody(response.body()));
-                return null;
-            }
-            AutoPlayAction fromModel = parseResponse(response.body(), game.getCode(), playerId, legalMoves);
-            if (fromModel == null) {
-                log.info("autoplay_gemini_failed code={} playerId={} model={} reason=unparseable_response",
-                        game.getCode(), playerId, model);
-                return null;
-            }
-            return fromModel;
-        } catch (Exception ex) {
-            log.info("autoplay_gemini_failed code={} playerId={} model={} reason=exception message={}",
-                    game.getCode(), playerId, model, ex.getMessage());
-            return null;
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    @Override
+    public AutoPlayAction choose(Game game, String playerId, ViewerLegalMoves legalMoves) {
+        List<AutoPlayAction> options = AutoPlayLegality.enumerate(legalMoves);
+        Decision decision = decide(game, playerId, legalMoves, options);
+        log.info("autoplay_decision code={} player={} source={} reason={} action={} card={} attackCard={} "
+                        + "options={}{}",
+                game.getCode(), playerId, decision.source(), decision.reason(), actionType(decision.action()),
+                orDash(decision.action() == null ? null : decision.action().cardCode()),
+                orDash(decision.action() == null ? null : decision.action().attackCardCode()),
+                options.size(), decision.detail() == null ? "" : " " + decision.detail());
+        return decision.action();
+    }
+
+    /** Where an action came from and, when the heuristic was used, why. */
+    private record Decision(AutoPlayAction action, String source, String reason, String detail) {
+        static Decision of(AutoPlayAction action, String source, String reason) {
+            return new Decision(action, source, reason, null);
         }
+    }
+
+    private Decision decide(Game game, String playerId, ViewerLegalMoves legalMoves, List<AutoPlayAction> options) {
+        if (options.isEmpty()) {
+            return heuristic(game, playerId, legalMoves, "no_legal_moves");
+        }
+        if (options.size() == 1 && isForced(game, options.getFirst())) {
+            return Decision.of(options.getFirst(), "forced", "single_legal_option");
+        }
+        if (!enabled || apiKey.isBlank()) {
+            return heuristic(game, playerId, legalMoves, "disabled");
+        }
+        ModelCall call = callModel(game, playerId, legalMoves, options.size());
+        if (!call.completed()) {
+            return heuristic(game, playerId, legalMoves, "primary_model_failed");
+        }
+        if (call.response().answer() == null) {
+            return heuristic(game, playerId, legalMoves, "unparseable");
+        }
+        GeminiAnswer answer = new GeminiAnswer(call.response().answer());
+        logStrategy(game, playerId, answer, call.response());
+        AutoPlayAction action = answer.resolve(legalMoves, undefendedAttacks(game, legalMoves));
+        if (action == null || !AutoPlayLegality.isLegal(action, legalMoves)) {
+            Decision fallbackDecision = heuristic(game, playerId, legalMoves, "illegal_model_action");
+            return new Decision(fallbackDecision.action(), fallbackDecision.source(), fallbackDecision.reason(),
+                    "model=" + answer.describe());
+        }
+        return Decision.of(action, "llm", "none");
+    }
+
+    /**
+     * A lone legal option needs no model call, unless it is an optional throw-in: then "wait" is the
+     * unlisted alternative (for example after the bot already passed) and the choice stays open.
+     */
+    private static boolean isForced(Game game, AutoPlayAction onlyOption) {
+        return onlyOption.type() != AutoPlayAction.Type.ATTACK || game.getTable().isEmpty();
+    }
+
+    private Decision heuristic(Game game, String playerId, ViewerLegalMoves legalMoves, String reason) {
+        return Decision.of(fallback.choose(game, playerId, legalMoves), "heuristic", reason);
+    }
+
+    private static Set<String> undefendedAttacks(Game game, ViewerLegalMoves legalMoves) {
+        Set<String> attacks = new LinkedHashSet<>();
+        for (AttackEntry entry : game.getTable()) {
+            if (!entry.isDefended()) {
+                attacks.add(entry.getAttackCard().code());
+            }
+        }
+        attacks.addAll(legalMoves.defensesByAttackCard().keySet());
+        return attacks;
+    }
+
+    /* ------------------------------------------------------------------ model call */
+
+    /** One model round trip; {@code completed} means an HTTP 2xx response arrived. */
+    private record ModelCall(boolean completed, GeminiResponse response) {
+    }
+
+    private ModelCall callModel(Game game, String playerId, ViewerLegalMoves legalMoves, int optionCount) {
+        String level = thinkingConfigSupported ? thinkingLevelFor(optionCount) : null;
+        long startedAt = nanoClock.getAsLong();
+        GeminiTransport.HttpResult result = null;
+        String error = "none";
+        try {
+            String body = buildRequest(game, playerId, legalMoves, level);
+            result = transport.post(endpoint, apiKey, body, timeout);
+        } catch (HttpTimeoutException ex) {
+            error = "timeout";
+        } catch (IOException ex) {
+            error = "io_error";
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            error = "interrupted";
+        } catch (RuntimeException ex) {
+            error = "exception";
+        }
+        long latencyMs = TimeUnit.NANOSECONDS.toMillis(nanoClock.getAsLong() - startedAt);
+        GeminiResponse response = result == null ? GeminiResponse.EMPTY : GeminiResponse.parse(objectMapper, result.body());
+        if (result != null && !result.successful()) {
+            error = "http_status";
+        }
+        logCall(game, playerId, level, latencyMs, result, response, error);
+        return new ModelCall(result != null && result.successful(), response);
+    }
+
+    /** Decisions with at most two legal options (one card vs pass, one defence vs take) think less. */
+    private String thinkingLevelFor(int optionCount) {
+        return optionCount <= 2 && simpleThinkingLevel != null ? simpleThinkingLevel : thinkingLevel;
     }
 
     /** Package-private for request-contract tests. */
-    String endpoint() {
-        return baseUrl + "/models/" + model + ":generateContent";
+    URI endpoint() {
+        return endpoint;
     }
 
-    private String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves) throws IOException {
+    /** Package-private for tests: the model id actually sent (without any {@code models/} prefix). */
+    String modelId() {
+        return model.id();
+    }
+
+    private String buildRequest(Game game, String playerId, ViewerLegalMoves legalMoves, String level)
+            throws IOException {
         String prompt = buildPrompt(game, playerId, legalMoves);
-        Map<String, Object> generationConfig = generationConfig();
         Map<String, Object> body = new LinkedHashMap<>();
         if (systemInstructionSupported) {
             body.put("systemInstruction", Map.of(
@@ -165,22 +281,31 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                     "parts", List.of(Map.of("text", systemInstruction() + "\n\n" + prompt))
             )));
         }
-        body.put("generationConfig", generationConfig);
+        body.put("generationConfig", generationConfig(level));
         return objectMapper.writeValueAsString(body);
     }
 
-    /** Package-private for request-contract tests. */
+    /** Package-private for request-contract tests: the configuration sent for complex decisions. */
     Map<String, Object> generationConfig() {
+        return generationConfig(thinkingConfigSupported ? thinkingLevel : null);
+    }
+
+    /** Package-private for request-contract tests: the configuration for decisions with few options. */
+    Map<String, Object> generationConfigForOptions(int optionCount) {
+        return generationConfig(thinkingConfigSupported ? thinkingLevelFor(optionCount) : null);
+    }
+
+    private Map<String, Object> generationConfig(String level) {
         Map<String, Object> generationConfig = new LinkedHashMap<>();
-        // Gemini 3.7 uses model defaults instead of the deprecated sampling controls.
-        if (!model.startsWith("gemini-3.7")) {
+        /* Gemini 3+ keeps its default sampling; only pre-Gemini-3 models get a pinned temperature. */
+        if (model.pinZeroTemperature()) {
             generationConfig.put("temperature", 0);
         }
         if (jsonModeSupported) {
             generationConfig.put("responseMimeType", "application/json");
         }
-        if (thinkingConfigSupported) {
-            generationConfig.put("thinkingConfig", Map.of("thinkingLevel", thinkingLevel));
+        if (level != null) {
+            generationConfig.put("thinkingConfig", Map.of("thinkingLevel", level));
         }
         return generationConfig;
     }
@@ -358,269 +483,51 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 """;
     }
 
-    /** Package-private for tests. */
-    AutoPlayAction parseResponse(
-            String raw,
-            String gameCode,
-            String playerId,
-            ViewerLegalMoves legalMoves
-    ) throws IOException {
-        JsonNode root = objectMapper.readTree(raw);
-        JsonNode parts = root.path("candidates").path(0).path("content").path("parts");
-        if (!parts.isArray()) {
-            return null;
+    /* ------------------------------------------------------------------ logging */
+
+    private void logCall(Game game, String playerId, String level, long latencyMs, GeminiTransport.HttpResult result,
+                         GeminiResponse response, String error) {
+        GeminiResponse.Usage usage = response.usage();
+        String errorDetail = "";
+        if (result != null && !result.successful()) {
+            errorDetail = " errorStatus=" + orDash(response.errorStatus())
+                    + " errorMessage=\"" + sanitize(response.errorMessage()) + "\"";
         }
-        List<String> nonThoughtTexts = new ArrayList<>();
-        List<String> allTexts = new ArrayList<>();
-        List<String> thoughtTexts = new ArrayList<>();
-        for (JsonNode part : parts) {
-            JsonNode text = part.path("text");
-            if (text.isTextual()) {
-                String value = text.asText();
-                allTexts.add(value);
-                if (part.path("thought").asBoolean(false)) {
-                    thoughtTexts.add(value);
-                } else {
-                    nonThoughtTexts.add(value);
-                }
-            }
-        }
-        logModelReasoning(gameCode, playerId, thoughtTexts);
-        JsonNode action = parseActionJson(nonThoughtTexts);
-        if (action == null) {
-            action = parseActionJson(allTexts);
-        }
-        if (action == null) {
-            return null;
-        }
-        logModelDecision(gameCode, playerId, action);
-        String type = action.path("type").asText("");
-        String actionLabel = action.path("action").asText("");
-        String cardCode = action.path("cardCode").asText(null);
-        String attackCardCode = action.path("attackCardCode").asText(null);
-        if (type.isBlank()) {
-            type = typeFromActionLabel(actionLabel);
-        }
-        if (type.isBlank()) {
-            return null;
-        }
-        try {
-            AutoPlayAction.Type actionType = AutoPlayAction.Type.valueOf(type.trim().toUpperCase(Locale.ROOT));
-            if (actionType == AutoPlayAction.Type.TAKE) {
-                return AutoPlayAction.take();
-            }
-            if ((actionType == AutoPlayAction.Type.ATTACK || actionType == AutoPlayAction.Type.TRANSFER)
-                    && (cardCode == null || cardCode.isBlank())) {
-                cardCode = firstCard(action);
-            }
-            AutoPlayAction normalized = normalizeAgainstLegalMoves(actionType, cardCode, attackCardCode, legalMoves);
-            if (normalized != null) {
-                return normalized;
-            }
-            if (actionType == AutoPlayAction.Type.DEFEND
-                    && (cardCode == null || cardCode.isBlank() || attackCardCode == null || attackCardCode.isBlank())) {
-                AutoPlayAction inferred = inferDefenseAction(action, legalMoves);
-                if (inferred != null) {
-                    return inferred;
-                }
-            }
-            return new AutoPlayAction(actionType, cardCode, attackCardCode);
-        } catch (IllegalArgumentException ex) {
-            return null;
-        }
+        log.info("autoplay_llm_call code={} player={} model={} thinkingLevel={} latencyMs={} httpStatus={} "
+                        + "promptTokens={} cachedTokens={} outputTokens={} thoughtTokens={} totalTokens={} "
+                        + "finishReason={} error={}{}",
+                game.getCode(), playerId, model.id(), level == null ? "none" : level, latencyMs,
+                result == null ? 0 : result.statusCode(), usage.promptTokens(), usage.cachedTokens(),
+                usage.outputTokens(), usage.thoughtTokens(), usage.totalTokens(),
+                orDash(response.finishReason()), error, errorDetail);
     }
 
-    private AutoPlayAction normalizeAgainstLegalMoves(
-            AutoPlayAction.Type actionType,
-            String cardCode,
-            String attackCardCode,
-            ViewerLegalMoves legalMoves
-    ) {
-        if (actionType == AutoPlayAction.Type.ATTACK
-                && !legalMoves.canAttack()
-                && cardCode != null
-                && legalMoves.canTransfer()
-                && legalMoves.transferableCardCodes().contains(cardCode)) {
-            return AutoPlayAction.transfer(cardCode);
-        }
-        if (actionType == AutoPlayAction.Type.TRANSFER
-                && cardCode != null
-                && legalMoves.canTransfer()
-                && legalMoves.transferableCardCodes().contains(cardCode)) {
-            return AutoPlayAction.transfer(cardCode);
-        }
-        if (actionType == AutoPlayAction.Type.ATTACK
-                && cardCode != null
-                && legalMoves.canAttack()
-                && legalMoves.attackableCardCodes().contains(cardCode)) {
-            return AutoPlayAction.attack(cardCode);
-        }
-        if (actionType == AutoPlayAction.Type.DEFEND
-                && cardCode != null
-                && attackCardCode != null
-                && legalMoves.canDefend()
-                && legalMoves.defensesByAttackCard().containsKey(attackCardCode)
-                && legalMoves.defensesByAttackCard().get(attackCardCode).contains(cardCode)) {
-            return AutoPlayAction.defend(attackCardCode, cardCode);
-        }
-        return null;
-    }
-
-    private String firstCard(JsonNode action) {
-        JsonNode cards = action.path("cards");
-        if (!cards.isArray()) {
-            return null;
-        }
-        for (JsonNode card : cards) {
-            if (card.isTextual() && !card.asText().isBlank()) {
-                return card.asText();
-            }
-        }
-        return null;
-    }
-
-    private String typeFromActionLabel(String actionLabel) {
-        return switch (actionLabel == null ? "" : actionLabel.trim().toLowerCase()) {
-            case "attack" -> "ATTACK";
-            case "beat", "defend", "defense" -> "DEFEND";
-            case "transfer" -> "TRANSFER";
-            case "take" -> "TAKE";
-            case "pass", "end round", "end_round" -> "END_ROUND";
-            default -> "";
-        };
-    }
-
-    private AutoPlayAction inferDefenseAction(JsonNode action, ViewerLegalMoves legalMoves) {
-        if (!legalMoves.canDefend()) {
-            return null;
-        }
-        List<String> candidateDefenseCards = new ArrayList<>();
-        JsonNode cards = action.path("cards");
-        if (cards.isArray()) {
-            for (JsonNode card : cards) {
-                if (card.isTextual()) {
-                    candidateDefenseCards.add(card.asText());
-                }
-            }
-        }
-        String explicitCardCode = action.path("cardCode").asText("");
-        if (!explicitCardCode.isBlank()) {
-            candidateDefenseCards.add(0, explicitCardCode);
-        }
-        for (String defenseCard : candidateDefenseCards) {
-            String attackCard = inferAttackForDefense(action, legalMoves, defenseCard);
-            if (attackCard != null) {
-                return AutoPlayAction.defend(attackCard, defenseCard);
-            }
-        }
-        return null;
-    }
-
-    private String inferAttackForDefense(JsonNode action, ViewerLegalMoves legalMoves, String defenseCard) {
-        String planText = (action.path("defensePlan").asText("") + "\n" + action.path("strategy").asText("")).toUpperCase();
-        String normalizedDefense = defenseCard == null ? "" : defenseCard.toUpperCase();
-        for (Map.Entry<String, List<String>> entry : legalMoves.defensesByAttackCard().entrySet()) {
-            String attackCard = entry.getKey();
-            if (!entry.getValue().contains(defenseCard)) {
-                continue;
-            }
-            String normalizedAttack = attackCard.toUpperCase();
-            if (planText.contains(normalizedAttack + " WITH " + normalizedDefense)
-                    || planText.contains(normalizedDefense + " TO BEAT " + normalizedAttack)
-                    || planText.contains("BEAT " + normalizedAttack + " WITH " + normalizedDefense)) {
-                return attackCard;
-            }
-        }
-        return legalMoves.defensesByAttackCard().entrySet().stream()
-                .filter(entry -> entry.getValue().contains(defenseCard))
-                .map(Map.Entry::getKey)
-                .findFirst()
-                .orElse(null);
-    }
-
-    private void logModelReasoning(String gameCode, String playerId, List<String> thoughtTexts) {
-        if (!log.isDebugEnabled() || thoughtTexts.isEmpty()) {
+    private void logStrategy(Game game, String playerId, GeminiAnswer answer, GeminiResponse response) {
+        if (!log.isDebugEnabled()) {
             return;
         }
-        log.debug("""
-                autoplay_gemini_reasoning code={} playerId={}
-                {}""", gameCode, playerId, String.join("\n", thoughtTexts));
+        log.debug("autoplay_llm_strategy code={} player={} strategy=\"{}\" thoughts=\"{}\"",
+                game.getCode(), playerId, sanitize(answer.strategy()), sanitize(String.join(" ", response.thoughts())));
     }
 
-    private JsonNode parseActionJson(List<String> texts) {
-        for (int i = texts.size() - 1; i >= 0; i--) {
-            JsonNode action = parseActionJson(texts.get(i));
-            if (action != null) {
-                return action;
-            }
-        }
-        return null;
-    }
-
-    private JsonNode parseActionJson(String rawText) {
-        if (rawText == null || rawText.isBlank()) {
-            return null;
-        }
-        String text = rawText.trim();
-        if (text.startsWith("```")) {
-            text = text.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
-        }
-        try {
-            JsonNode node = objectMapper.readTree(text);
-            if (node.isTextual()) {
-                node = objectMapper.readTree(node.asText());
-            }
-            if (node.isObject()) {
-                return node;
-            }
-        } catch (IOException ignored) {
-            // Fall through to extracting an object from surrounding text.
-        }
-        int left = text.indexOf('{');
-        int right = text.lastIndexOf('}');
-        if (left < 0 || right <= left) {
-            return null;
-        }
-        try {
-            JsonNode node = objectMapper.readTree(text.substring(left, right + 1));
-            return node.isObject() ? node : null;
-        } catch (IOException ignored) {
-            return null;
-        }
-    }
-
-    private void logModelDecision(String gameCode, String playerId, JsonNode action) throws IOException {
-        if (!log.isInfoEnabled()) {
-            return;
-        }
-        String strategy = action.path("strategy").asText("");
-        String defensePlan = action.path("defensePlan").asText("");
-        String actionLabel = action.path("action").asText("");
-        boolean taking = "TAKE".equalsIgnoreCase(action.path("type").asText(""))
-                || "TAKE".equalsIgnoreCase(actionLabel);
-        JsonNode cardsNode = action.path("cards");
-        String cards = taking || cardsNode.isMissingNode() || cardsNode.isNull()
-                ? ""
-                : objectMapper.writeValueAsString(cardsNode);
-        log.info("""
-                autoplay_gemini_decision code={} playerId={}
-                STRATEGY: {}
-                DEFENSE PLAN: {}
-                ACTION: {}
-                CARDS: {}""", gameCode, playerId, strategy, defensePlan, actionLabel, cards);
-    }
-
-    private String humanizeResponseBody(String raw) {
-        if (raw == null || raw.isBlank()) {
+    /** One line, bounded, quote-safe, and never containing the API key. */
+    private String sanitize(String text) {
+        if (text == null) {
             return "";
         }
-        try {
-            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(objectMapper.readTree(raw));
-        } catch (IOException ignored) {
-            return raw.replace("\\n", "\n")
-                    .replace("\\\"", "\"")
-                    .replace("\\u003e", ">")
-                    .replace("\\u003c", "<");
+        String cleaned = text;
+        if (!apiKey.isBlank()) {
+            cleaned = cleaned.replace(apiKey, "[redacted]");
         }
+        cleaned = cleaned.replaceAll("[\\r\\n\\t]+", " ").replace('"', '\'').trim();
+        return cleaned.length() > LOG_TEXT_LIMIT ? cleaned.substring(0, LOG_TEXT_LIMIT) + "..." : cleaned;
+    }
+
+    private static String actionType(AutoPlayAction action) {
+        return action == null ? "none" : action.type().name();
+    }
+
+    private static String orDash(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 }
