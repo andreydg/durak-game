@@ -26,8 +26,8 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-    <link rel="stylesheet" href="/css/theme.css?v=a7ed9f34f34c">
-    <link rel="stylesheet" href="/css/app.css?v=651016ba30f4">
+    <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
+    <link rel="stylesheet" href="/css/app.css?v=420035c4d82c">
     <link rel="stylesheet" href="/css/content.css?v=915568db78e3">
     <script type="application/ld+json">
     {
@@ -51,6 +51,7 @@
 </head>
 <body>
 <div id="appAlert" class="app-alert hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<div id="liveAnnouncer" class="visually-hidden" aria-live="polite"></div>
 <section id="reconnectView" class="panel reconnect-view hidden" role="status">
     <p>Reconnecting to room <strong id="reconnectCode" class="room-code"></strong>…</p>
 </section>
@@ -166,7 +167,7 @@
         <button id="seatNoticeLobbyBtn" type="button" class="btn btn-secondary">Back to lobby</button>
     </div>
 
-    <section id="resultPanel" class="panel result-panel hidden" aria-live="polite">
+    <section id="resultPanel" class="panel result-panel hidden" aria-labelledby="resultTitle">
         <div id="resultIcon" class="result-icon" aria-hidden="true">🏆</div>
         <div class="result-copy">
             <p class="result-eyebrow">Game complete</p>
@@ -181,11 +182,11 @@
 
     <div id="playingArea" class="table-shell">
         <div class="hud">
-            <span class="pill" title="Attacker"><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
-            <span class="pill" title="Defender"><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
+            <span class="pill" title="Attacker"><span class="visually-hidden">Attacker: </span><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
+            <span class="pill" title="Defender"><span class="visually-hidden">Defender: </span><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
             <span id="trumpSuitHud" class="pill hidden" title="Trump suit"></span>
         </div>
-        <div id="openingLeadHud" class="opening-lead-hud hidden" aria-live="polite"></div>
+        <div id="openingLeadHud" class="opening-lead-hud hidden"></div>
         <div class="table-felt-wrap">
             <aside class="deck-outside deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
                 <div class="deck-tableau">
@@ -199,7 +200,7 @@
             <div class="seat top seat-top-3" id="seatTop3"></div>
             <div class="seat left" id="seatLeft"></div>
             <div class="seat center">
-                <div id="battleTableBanner" class="battle-table-banner hidden" aria-live="polite"></div>
+                <div id="battleTableBanner" class="battle-table-banner hidden"></div>
                 <div id="battleCards" class="battle-row"></div>
             </div>
             <div class="seat right" id="seatRight"></div>
@@ -208,7 +209,7 @@
                 <div class="muted my-role-line" id="myRoleLine" aria-live="polite"></div>
                 <div class="hand-scroll">
                     <div class="hand-scroll-x">
-                        <div id="myHand" class="hand-row"></div>
+                        <div id="myHand" class="hand-row" role="group" aria-label="Your cards"></div>
                     </div>
                 </div>
                 <div class="action-strip">
@@ -217,6 +218,7 @@
                     <button id="transferBtn">Transfer</button>
                     <button id="takeBtn">Take cards</button>
                     <button id="endRoundBtn">End round</button>
+                    <label for="defendTargetSelect" class="visually-hidden">Attack card to beat</label>
                     <select id="defendTargetSelect" class="hidden"></select>
                 </div>
                 <div id="actionHint" class="muted"></div>
@@ -244,7 +246,7 @@
     <pre id="messages">Ready.</pre>
 </section>
 
-<script src="/js/logic.js?v=343df05ca19d"></script>
-<script src="/js/app.js?v=33822b9ce00b"></script>
+<script src="/js/logic.js?v=2602bef3422d"></script>
+<script src="/js/app.js?v=17bdf32372ba"></script>
 </body>
 </html>

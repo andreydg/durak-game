@@ -282,6 +282,182 @@
         return typeof code === "string" && CARD_CODE_PATTERN.test(code);
     }
 
+    const SUIT_NAMES = { C: "clubs", D: "diamonds", H: "hearts", S: "spades" };
+    const FULL_SUIT_CODES = { CLUBS: "C", DIAMONDS: "D", HEARTS: "H", SPADES: "S" };
+    const RANK_NAMES = { J: "jack", Q: "queen", K: "king", A: "ace" };
+
+    /** "spades" for "S" or "SPADES"; "" when unknown. */
+    function suitName(suit) {
+        const code = String(suit || "").toUpperCase();
+        return SUIT_NAMES[FULL_SUIT_CODES[code] || code] || "";
+    }
+
+    /** Spoken name of a card code: "6C" -> "6 of clubs", "QH" -> "queen of hearts". */
+    function cardName(code) {
+        const text = String(code || "");
+        const suit = SUIT_NAMES[text.slice(-1).toUpperCase()];
+        const rank = text.slice(0, -1).toUpperCase();
+        if (!suit || !rank) return text;
+        return `${RANK_NAMES[rank] || rank} of ${suit}`;
+    }
+
+    /** "a", "a and b", "a, b and c". */
+    function listPhrase(items) {
+        if (items.length <= 1) return items.join("");
+        return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+    }
+
+    /**
+     * What sighted players can tell from an opponent's fan: it draws at most six backs, so the
+     * exact count is only visible below six. Never reveals more than the picture does.
+     */
+    function fanCountLabel(handSize) {
+        const count = Math.max(0, Math.floor(Number(handSize) || 0));
+        if (count >= 6) return "6 or more cards";
+        if (count === 0) return "no cards";
+        return count === 1 ? "1 card" : `${count} cards`;
+    }
+
+    /** Words for roleTags' emoji: "attacker, team 1", "defender, taking the cards", "the durak". */
+    function roleDescription(player, game) {
+        const parts = [];
+        if (game.status === "IN_PROGRESS") {
+            if (player.id === game.attackerPlayerId) parts.push("attacker");
+            if (player.id === game.defenderPlayerId) parts.push("defender");
+            if (game.takingCardsInProgress && player.id === game.takingPlayerId) parts.push("taking the cards");
+        } else if (game.status === "FINISHED" && player.id === game.loserPlayerId) {
+            parts.push("the durak");
+        }
+        if (player.team !== null && player.team !== undefined) parts.push(`team ${player.team}`);
+        return parts.join(", ");
+    }
+
+    /** Accessible description of one table pair. */
+    function tablePairLabel(pair) {
+        const attack = cardName(pair && pair.attackCard);
+        return pair && pair.defenseCard
+            ? `${attack}, beaten by ${cardName(pair.defenseCard)}`
+            : `${attack}, not beaten yet`;
+    }
+
+    function gameOverSentence(game, viewerId) {
+        if (!game.loserPlayerId) return "Game over. It's a draw: nobody is the durak.";
+        const players = game.players || [];
+        const viewer = players.find(player => player.id === viewerId) || null;
+        const loser = players.find(player => player.id === game.loserPlayerId) || null;
+        const loserName = loser ? loser.name : (game.loserPlayerName || "A player");
+        const loserTeam = loser ? loser.team : game.loserTeam;
+        if (loserTeam !== null && loserTeam !== undefined && viewer && viewer.team !== null && viewer.team !== undefined) {
+            return viewer.team === loserTeam
+                ? "Game over. Your team is the durak."
+                : `Game over. Your team wins. ${loserName}'s team is the durak.`;
+        }
+        if (game.loserPlayerId === viewerId) return "Game over. You are the durak.";
+        return `Game over. ${loserName} is the durak.`;
+    }
+
+    /**
+     * Short announcements for a screen reader describing what changed between two snapshots of
+     * the same game, from the viewer's point of view ("Elektronik attacks with 7 of hearts",
+     * "You beat 7 of hearts with 9 of hearts", "Bout over", "Your turn to defend", ...).
+     * Only mentions what a sighted player can see: opponents' hand sizes are never spelled out.
+     */
+    function describeTransition(prev, next, viewerId) {
+        if (!prev || !next || prev.code !== next.code || !Array.isArray(next.players)) return [];
+        const out = [];
+        const prevPlayers = Array.isArray(prev.players) ? prev.players : [];
+        const known = [...next.players, ...prevPlayers.filter(p => !next.players.some(q => q.id === p.id))];
+        const nameOf = id => (known.find(p => p.id === id) || {}).name || "A player";
+        const says = (id, youText, otherText) => (id && id === viewerId ? `You ${youText}` : `${nameOf(id)} ${otherText}`);
+
+        const prevIds = new Set(prevPlayers.map(p => p.id));
+        const nextIds = new Set(next.players.map(p => p.id));
+        for (const p of next.players) {
+            if (!prevIds.has(p.id) && p.id !== viewerId) out.push(`${p.name} joined.`);
+        }
+        for (const p of prevPlayers) {
+            if (!nextIds.has(p.id) && p.id !== viewerId) out.push(`${p.name} left.`);
+        }
+
+        const wasPlaying = prev.status === "IN_PROGRESS";
+        const playing = next.status === "IN_PROGRESS";
+        if (next.status === "FINISHED" && prev.status !== "FINISHED") {
+            out.push(gameOverSentence(next, viewerId));
+            return out;
+        }
+        if (wasPlaying && !playing) {
+            out.push("The game was stopped and the room is back in the lobby.");
+            return out;
+        }
+        if (!playing) return out;
+
+        if (!wasPlaying) {
+            const trump = suitName(next.trumpSuit);
+            out.push(trump ? `New game. Trump is ${trump}.` : "New game.");
+        }
+
+        const prevTable = wasPlaying && Array.isArray(prev.table) ? prev.table : [];
+        const nextTable = Array.isArray(next.table) ? next.table : [];
+        const sameBout = prevTable.length > 0 && nextTable.length > 0
+            && prevTable[0].attackCard === nextTable[0].attackCard;
+        const boutEnded = prevTable.length > 0 && !sameBout;
+
+        if (boutEnded) {
+            out.push("Bout over.");
+            const before = (prevPlayers.find(p => p.id === viewerId) || {}).hand || [];
+            const after = (next.players.find(p => p.id === viewerId) || {}).hand || [];
+            const tableCards = new Set(prevTable.flatMap(pair => [pair.attackCard, pair.defenseCard]).filter(Boolean));
+            const gained = after.filter(card => !before.includes(card));
+            const pickedUp = gained.filter(card => tableCards.has(card));
+            const drawn = gained.filter(card => !tableCards.has(card));
+            if (pickedUp.length) out.push(`You pick up ${pickedUp.length === 1 ? "1 card" : `${pickedUp.length} cards`}.`);
+            if (drawn.length) out.push(`You draw ${listPhrase(drawn.map(cardName))}.`);
+        }
+
+        const earlier = sameBout ? prevTable : [];
+        for (let i = 0; i < earlier.length; i++) {
+            const was = earlier[i];
+            const now = nextTable[i];
+            if (now && !was.defenseCard && now.defenseCard) {
+                out.push(`${says(next.defenderPlayerId, "beat", "beats")} ${cardName(now.attackCard)} with ${cardName(now.defenseCard)}.`);
+            }
+        }
+        let newAttacks = 0;
+        for (const pair of nextTable.slice(earlier.length)) {
+            newAttacks++;
+            const transferred = sameBout && pair.attackerId === prev.defenderPlayerId
+                && next.defenderPlayerId !== prev.defenderPlayerId;
+            if (transferred) {
+                out.push(`${says(pair.attackerId, "transfer", "transfers")} with ${cardName(pair.attackCard)}.`);
+            } else if (next.takingCardsInProgress && sameBout) {
+                out.push(`${says(pair.attackerId, "throw in", "throws in")} ${cardName(pair.attackCard)}.`);
+            } else {
+                out.push(`${says(pair.attackerId, "attack", "attacks")} with ${cardName(pair.attackCard)}.`);
+            }
+            if (pair.defenseCard) {
+                out.push(`${says(next.defenderPlayerId, "beat", "beats")} ${cardName(pair.attackCard)} with ${cardName(pair.defenseCard)}.`);
+            }
+        }
+
+        if (next.takingCardsInProgress && !(sameBout && prev.takingCardsInProgress)) {
+            out.push(`${says(next.takingPlayerId, "take", "takes")} the cards.`);
+        }
+
+        const moves = next.legalMoves || {};
+        const undefended = nextTable.some(pair => !pair.defenseCard);
+        if (next.defenderPlayerId === viewerId && undefended && !next.takingCardsInProgress
+            && (newAttacks > 0 || prev.defenderPlayerId !== viewerId)) {
+            out.push("Your turn to defend.");
+        } else if (nextTable.length === 0 && (boutEnded || !wasPlaying || prev.attackerPlayerId !== next.attackerPlayerId)) {
+            out.push(next.attackerPlayerId === viewerId
+                ? "Your turn to attack."
+                : `${nameOf(next.attackerPlayerId)} attacks next.`);
+        } else if (moves.canEndRound && !(prev.legalMoves || {}).canEndRound && !next.takingCardsInProgress) {
+            out.push("All attacks are beaten. Press End round or add a matching card.");
+        }
+        return out;
+    }
+
     function roleTags(player, game) {
         const t = [];
         if (game.status === "IN_PROGRESS") {
@@ -418,6 +594,12 @@
         escapeHtml,
         normalizeRoomCode,
         isCardCode,
+        suitName,
+        cardName,
+        fanCountLabel,
+        roleDescription,
+        tablePairLabel,
+        describeTransition,
         roleTags,
         playerTeam,
         onAttackingSide,

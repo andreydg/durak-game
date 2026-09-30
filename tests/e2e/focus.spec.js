@@ -67,16 +67,20 @@ test.describe("Keyboard focus survives game updates", () => {
         await page.locator('#myHand [data-card-code="9S"]').focus();
         await page.keyboard.press("Enter");
 
+        // Snapshots carry the same thinking state as the socket, as they do on the real server.
+        const thinking = {p2: "planning defence..."};
+        ctx.game = {...ctx.game, botThinking: thinking};
         ctx.socket.send(JSON.stringify({type: "BOT_THINKING", playerId: "p2", thinking: true, message: "planning defence...", eventAtMs: Date.now()}));
         await expect(page.locator("#seatTop1 .bot-thinking-inline")).toBeVisible();
         expect(await focused(page)).toBe("card:9S");
 
-        ctx.game = attacking({version: 31, table: [{attackCard: "10H", attackerId: "me"}]});
+        ctx.game = attacking({version: 31, table: [{attackCard: "10H", attackerId: "me"}], botThinking: thinking});
         ctx.socket.send(JSON.stringify({type: "GAME_UPDATED", version: 31}));
         await expect(page.locator("#battleCards .battle-pair")).toHaveCount(1);
         expect(await focused(page)).toBe("card:9S");
         await expect(page.locator('#myHand [data-card-code="9S"]')).toHaveAttribute("aria-pressed", "true");
 
+        ctx.game = {...ctx.game, botThinking: {}};
         ctx.socket.send(JSON.stringify({type: "BOT_THINKING", playerId: "p2", thinking: false, eventAtMs: Date.now() + 1}));
         await expect(page.locator("#seatTop1 .bot-thinking-inline")).toHaveCount(0);
         expect(await focused(page)).toBe("card:9S");

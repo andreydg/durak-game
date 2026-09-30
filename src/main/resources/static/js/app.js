@@ -21,6 +21,12 @@ const {
     escapeHtml,
     normalizeRoomCode,
     isCardCode,
+    suitName,
+    cardName,
+    fanCountLabel,
+    roleDescription,
+    tablePairLabel,
+    describeTransition,
     roleTags,
     playerTeam,
     onAttackingSide,
@@ -104,6 +110,7 @@ const reconnectCode = document.getElementById("reconnectCode");
 const lobbyView = document.getElementById("lobbyView");
 const gameView = document.getElementById("gameView");
 const appAlert = document.getElementById("appAlert");
+const liveAnnouncer = document.getElementById("liveAnnouncer");
 const playingArea = document.getElementById("playingArea");
 const gameplayHintEl = document.getElementById("gameplayHint");
 const helpToggleBtn = document.getElementById("helpToggleBtn");
@@ -180,6 +187,20 @@ function clearError(kind = null) {
     appAlert.textContent = "";
     delete appAlert.dataset.kind;
     appAlert.classList.add("hidden");
+}
+
+/**
+ * Polite screen reader announcement. Each message is appended as a new node, which live
+ * regions announce reliably even when the same words repeat; old lines are pruned.
+ */
+function announce(message) {
+    if (!liveAnnouncer || !message) return;
+    const line = document.createElement("p");
+    line.textContent = message;
+    liveAnnouncer.appendChild(line);
+    while (liveAnnouncer.childElementCount > 5) {
+        liveAnnouncer.firstElementChild.remove();
+    }
 }
 
 function showError(message, kind = "action") {
@@ -302,7 +323,9 @@ function applyGameSnapshot(snapshot, key = sessionKey()) {
     if (previous && previous.code === snapshot.code && previous.status !== snapshot.status) {
         state.selectedHandCard = null;
     }
+    const announcements = describeTransition(previous, snapshot, state.playerId);
     state.game = snapshot;
+    if (announcements.length) announce(announcements.join(" "));
     const me = snapshot.players.find(p => p.id === state.playerId);
     if (state.selectedHandCard && !(me?.hand || []).includes(state.selectedHandCard)) {
         state.selectedHandCard = null;
@@ -704,12 +727,12 @@ function cardImage(code) {
     return isCardCode(code) ? `/cards/${code}.png` : "/cards/BACK.png";
 }
 
-function cardImg(code, className) {
+/** Card image; `alt` defaults to the spoken card name ("" when a parent already names it). */
+function cardImg(code, className, alt = cardName(code)) {
     const img = document.createElement("img");
     if (className) img.className = className;
     img.src = cardImage(code);
-    img.alt = String(code || "");
-    img.title = String(code || "");
+    img.alt = alt;
     return img;
 }
 
@@ -733,13 +756,25 @@ function renderSeat(el, player, game) {
     const fanClass = "back-fan" + (fewFan ? " back-fan--few" : "");
     const teamClass = game.players.length === 4 && Number.isInteger(player.team)
         ? ` seat-title--team${player.team}` : "";
-    const tags = roleTags(player, game);
-    const aiBadge = player.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
-    const tagHtml = tags ? `<span class="seat-role-inline">${escapeHtml(tags)}</span>` : "";
     /* <wbr>: narrow seats may wrap between the name and its badges instead of mid-word. */
-    el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}<wbr>${tagHtml}<wbr></div>
-        <div class="${fanClass}">${backs}</div>`;
+    /* The fan exposes only what it shows: an exact count below six, "6 or more" otherwise. */
+    el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${botBadgeHtml(player)}<wbr>${roleTagsHtml(player, game)}<wbr></div>
+        <div class="${fanClass}" role="img" aria-label="${escapeHtml(fanCountLabel(player.handSize))}">${backs}</div>`;
     syncSeatThinking(el);
+}
+
+function botBadgeHtml(player) {
+    return player.bot
+        ? `<span class="ai-badge" title="Bot" aria-hidden="true">🤖</span><span class="visually-hidden"> (bot)</span>`
+        : "";
+}
+
+/** Emoji role tags for the eye, the same roles in words for screen readers. */
+function roleTagsHtml(player, game) {
+    const tags = roleTags(player, game);
+    if (!tags) return "";
+    return `<span class="seat-role-inline" aria-hidden="true">${escapeHtml(tags)}</span>`
+        + `<span class="visually-hidden">, ${escapeHtml(roleDescription(player, game))}</span>`;
 }
 
 /** Shows or clears the "planning attack..." note of the bot in this seat, in place. */
@@ -755,10 +790,18 @@ function syncSeatThinking(el) {
     if (!note) {
         note = document.createElement("span");
         note.className = "bot-thinking-inline";
-        note.append(document.createTextNode(""), Object.assign(document.createElement("span"), {className: "bot-thinking-dots"}));
+        // The last word and the dots never wrap apart in narrow seats.
+        const tail = document.createElement("span");
+        tail.className = "bot-thinking-tail";
+        tail.append(document.createTextNode(""), Object.assign(document.createElement("span"), {className: "bot-thinking-dots"}));
+        note.append(document.createTextNode(""), tail);
         title.appendChild(note);
     }
-    note.firstChild.textContent = String(message).replace(/\\.\\.\\.$/, "");
+    // The animated dots follow the text, so drop the server's own trailing ellipsis.
+    const text = String(message).replace(/(\.{3}|…)$/, "");
+    const cut = text.lastIndexOf(" ") + 1;
+    note.firstChild.textContent = text.slice(0, cut);
+    note.lastChild.firstChild.textContent = text.slice(cut);
 }
 
 /**
@@ -793,16 +836,26 @@ function updateBattleTableBanner(game) {
 function renderBattle(game) {
     battleCards.innerHTML = "";
     if (!game.table || game.table.length === 0) {
+        battleCards.removeAttribute("role");
+        battleCards.removeAttribute("aria-label");
         battleCards.innerHTML = "<div class='muted'>No cards on table</div>";
         return;
     }
+    battleCards.setAttribute("role", "list");
+    battleCards.setAttribute("aria-label", "Cards on the table");
     for (const pairData of game.table) {
         const pair = document.createElement("div");
         pair.className = "battle-pair";
+        pair.setAttribute("role", "listitem");
         pair.dataset.attackCard = String(pairData.attackCard || "");
-        pair.appendChild(cardImg(pairData.attackCard, "battle-card attack"));
+        // One spoken description per pair ("7 of hearts, beaten by 9 of hearts"); images are decorative.
+        const label = document.createElement("span");
+        label.className = "visually-hidden";
+        label.textContent = tablePairLabel(pairData);
+        pair.appendChild(label);
+        pair.appendChild(cardImg(pairData.attackCard, "battle-card attack", ""));
         if (pairData.defenseCard) {
-            pair.appendChild(cardImg(pairData.defenseCard, "battle-card defense"));
+            pair.appendChild(cardImg(pairData.defenseCard, "battle-card defense", ""));
         }
         battleCards.appendChild(pair);
     }
@@ -817,10 +870,11 @@ function createHandCardButton(code) {
     btn.type = "button";
     btn.className = "hand-card-btn";
     btn.dataset.cardCode = code;
-    const img = cardImg(code);
+    const img = cardImg(code, null, "");
     img.draggable = false;
     btn.appendChild(img);
-    btn.setAttribute("aria-label", `Play ${prettyCard(code)}`);
+    // Clicking selects (aria-pressed); it does not play, so the name is just the card.
+    btn.setAttribute("aria-label", cardName(code));
     btn.addEventListener("click", () => toggleHandCard(code));
     btn.addEventListener("dragstart", (e) => {
         if (isBusy()) {
@@ -895,7 +949,7 @@ function renderActionState(game) {
     for (const atk of options) {
         const opt = document.createElement("option");
         opt.value = atk;
-        opt.textContent = `vs ${prettyCard(atk)} (${atk})`;
+        opt.textContent = `vs ${cardName(atk)}`;
         defendTargetSelect.appendChild(opt);
     }
 
@@ -1062,7 +1116,8 @@ function settleFocus(before, handBefore) {
     });
     const previousView = state.view;
     state.view = view;
-    if (previousView && previousView !== view) {
+    // Restoring a seat after a reload is still page load: leave focus where the browser put it.
+    if (previousView && previousView !== "reconnecting" && previousView !== view) {
         const heading = document.getElementById(VIEW_HEADINGS[view] || "");
         if (canTakeFocus(heading)) {
             heading.focus();
@@ -1177,6 +1232,7 @@ function renderView() {
         if (talonCount > 0) {
             deckArea.classList.remove("hidden");
             trumpUnderImg.src = cardImage(game.trumpCard);
+            trumpUnderImg.alt = `Trump card: ${cardName(game.trumpCard)}`;
             trumpUnderImg.classList.remove("hidden");
             talonStack.innerHTML = "";
             const face = document.createElement("div");
@@ -1206,7 +1262,10 @@ function renderView() {
         glyph.className = "pill-role";
         glyph.setAttribute("aria-hidden", "true");
         glyph.textContent = sym;
-        trumpSuitHud.replaceChildren(glyph);
+        const spoken = document.createElement("span");
+        spoken.className = "visually-hidden";
+        spoken.textContent = `Trump: ${suitName(game.trumpSuit) || sym}`;
+        trumpSuitHud.replaceChildren(glyph, spoken);
         trumpSuitHud.title = `Trump ${sym}`;
         trumpSuitHud.classList.remove("hidden");
     } else if (trumpSuitHud) {
@@ -1241,7 +1300,8 @@ function renderView() {
         tableAttackerLabel.textContent = attacker ? attacker.name : "-";
         if (defender) {
             tableDefenderLabel.innerHTML =
-                `${escapeHtml(defender.name)}<span class="pill-take" title="Taking cards">⇩</span>`;
+                `${escapeHtml(defender.name)}<span class="pill-take" title="Taking cards" aria-hidden="true">⇩</span>`
+                + `<span class="visually-hidden">, taking the cards</span>`;
         } else {
             tableDefenderLabel.textContent = "-";
         }
@@ -1268,10 +1328,9 @@ function renderView() {
             cls += ` seat-title--team${me.team}`;
         }
         mySeatTitle.className = cls;
-        const myTags = game.status === "IN_PROGRESS" || game.status === "FINISHED" ? roleTags(me, game) : "";
-        const myAi = me.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
-        const myTagHtml = myTags ? ` <span class="seat-role-inline">${escapeHtml(myTags)}</span>` : "";
-        mySeatTitle.innerHTML = `${escapeHtml(me.name)} (you)${myAi}${myTagHtml}`;
+        const showTags = game.status === "IN_PROGRESS" || game.status === "FINISHED";
+        const myTagHtml = showTags && roleTags(me, game) ? ` ${roleTagsHtml(me, game)}` : "";
+        mySeatTitle.innerHTML = `${escapeHtml(me.name)} (you)${botBadgeHtml(me)}${myTagHtml}`;
         if (myRoleLine) myRoleLine.textContent = "";
     } else {
         mySeatTitle.className = "seat-title";

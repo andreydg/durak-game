@@ -11,6 +11,19 @@ body {
 .hidden { display: none !important; }
 /* View headings take focus on view changes; show a ring only for keyboard users. */
 [tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
+/* Read by screen readers, not shown. */
+.visually-hidden {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
 .app-alert {
     position: fixed;
     z-index: 1000;
@@ -498,6 +511,7 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     white-space: nowrap;
     vertical-align: baseline;
 }
+.bot-thinking-tail { white-space: nowrap; }
 .bot-thinking-dots::after {
     content: "";
     display: inline-block;
@@ -510,6 +524,13 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     25% { content: "."; }
     50% { content: ".."; }
     75%, 100% { content: "..."; }
+}
+@media (prefers-reduced-motion: reduce) {
+    /* Still show that the bot is busy, without the ticking dots. */
+    .bot-thinking-dots::after {
+        animation: none;
+        content: "...";
+    }
 }
 .ai-badge {
     margin-left: 0.35rem;
