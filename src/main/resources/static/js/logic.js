@@ -164,6 +164,24 @@
         return "transient";
     }
 
+    /**
+     * Detects a game view that the server answered as a stranger: it still returns the public
+     * view when the token is wrong, just without the viewer's hand and moves. Returns null when
+     * the seat looks usable, "not-seated" when the viewer is not at the table, or "unauthorized".
+     */
+    function seatProblem(game, viewerId) {
+        if (!game || !Array.isArray(game.players) || !viewerId) return null;
+        const me = game.players.find(player => player.id === viewerId);
+        if (!me) return "not-seated";
+        const handHidden = Number(me.handSize) > 0 && !(Array.isArray(me.hand) && me.hand.length > 0);
+        if (game.status === "IN_PROGRESS" && handHidden) return "unauthorized";
+        const hostCouldStart = game.status === "LOBBY"
+            && game.hostPlayerId === viewerId
+            && game.players.length >= 2;
+        if (hostCouldStart && !(game.legalMoves && game.legalMoves.canStart)) return "unauthorized";
+        return null;
+    }
+
     /** Preserve a pending prompt refresh unless the new deadline is earlier or explicitly replaces it. */
     function shouldReplaceRefreshTimer(existingDueAt, requestedDueAt, replaceExisting = false) {
         if (replaceExisting) return true;
@@ -330,6 +348,7 @@
         parseJsonBody,
         apiErrorMessage,
         sessionErrorKind,
+        seatProblem,
         shouldReplaceRefreshTimer,
         lobbyRefreshDelayMs,
         escapeHtml,

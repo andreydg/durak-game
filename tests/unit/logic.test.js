@@ -188,6 +188,44 @@ describe("sessionErrorKind", () => {
     });
 });
 
+describe("seatProblem", () => {
+    const players = (meHand, meHandSize = meHand.length) => [
+        { id: "me", hand: meHand, handSize: meHandSize },
+        { id: "bot", hand: [], handSize: 6 }
+    ];
+
+    it("accepts a seat that can see its own hand", () => {
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: players(["6C", "7C"]) }, "me")).toBeNull();
+    });
+
+    it("flags an in-progress view without the viewer's cards as unauthorized", () => {
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: players([], 6) }, "me")).toBe("unauthorized");
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: [{ id: "me", handSize: 3 }] }, "me")).toBe("unauthorized");
+    });
+
+    it("does not flag a viewer who is simply out of cards", () => {
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: players([], 0) }, "me")).toBeNull();
+        expect(L.seatProblem({ status: "FINISHED", players: players([], 0) }, "me")).toBeNull();
+    });
+
+    it("flags a host who could start but is not allowed to", () => {
+        const lobby = { status: "LOBBY", hostPlayerId: "me", players: players([], 0), legalMoves: { canStart: false } };
+        expect(L.seatProblem(lobby, "me")).toBe("unauthorized");
+        expect(L.seatProblem({ ...lobby, legalMoves: { canStart: true } }, "me")).toBeNull();
+        expect(L.seatProblem({ ...lobby, players: [lobby.players[0]] }, "me")).toBeNull();
+        expect(L.seatProblem({ ...lobby, hostPlayerId: "bot" }, "me")).toBeNull();
+    });
+
+    it("flags a viewer who is not seated at all", () => {
+        expect(L.seatProblem({ status: "LOBBY", players: players([]) }, "someone-else")).toBe("not-seated");
+    });
+
+    it("ignores missing input", () => {
+        expect(L.seatProblem(null, "me")).toBeNull();
+        expect(L.seatProblem({ status: "LOBBY", players: [] }, "")).toBeNull();
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
         expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");

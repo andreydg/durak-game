@@ -1,16 +1,3 @@
-/* Per-tab session so a new tab can stay on the main lobby and see Open tables while another tab hosts a game. */
-(function migrateLegacyLocalStorageSession() {
-    const hadSs = sessionStorage.getItem("durak_game_code");
-    const lc = localStorage.getItem("durak_game_code");
-    const lid = localStorage.getItem("durak_player_id");
-    if (!hadSs && lc && lid) {
-        sessionStorage.setItem("durak_game_code", lc);
-        sessionStorage.setItem("durak_player_id", lid);
-    }
-    localStorage.removeItem("durak_game_code");
-    localStorage.removeItem("durak_player_id");
-})();
-
 /* Pure presentation helpers live in logic.js (loaded first) so they can be unit-tested. */
 const {
     prettyCard,
@@ -26,6 +13,7 @@ const {
     parseJsonBody,
     apiErrorMessage,
     sessionErrorKind,
+    seatProblem,
     shouldReplaceRefreshTimer,
     lobbyRefreshDelayMs,
     escapeHtml,
@@ -38,10 +26,35 @@ const {
     lobbyRowsHtml
 } = window.DurakLogic;
 
+/*
+ * Per-tab session (sessionStorage) so a new tab can stay on the main lobby and see Open tables
+ * while another tab hosts a game. A seat is only usable with its secret token: a saved code and
+ * player id without one is no session at all.
+ */
+function loadSavedSession() {
+    const saved = {
+        gameCode: sessionStorage.getItem("durak_game_code") || "",
+        playerId: sessionStorage.getItem("durak_player_id") || "",
+        playerToken: sessionStorage.getItem("durak_player_token") || ""
+    };
+    if (saved.gameCode && saved.playerId && saved.playerToken) return saved;
+    if (saved.gameCode || saved.playerId || saved.playerToken) {
+        console.warn("Durak: ignoring an incomplete saved seat (no player token).");
+        for (const key of ["durak_game_code", "durak_player_id", "durak_player_token"]) {
+            sessionStorage.removeItem(key);
+        }
+    }
+    return {gameCode: "", playerId: "", playerToken: ""};
+}
+
+const savedSession = loadSavedSession();
+
 const state = {
-    gameCode: sessionStorage.getItem("durak_game_code") || "",
-    playerId: sessionStorage.getItem("durak_player_id") || "",
-    playerToken: sessionStorage.getItem("durak_player_token") || "",
+    gameCode: savedSession.gameCode,
+    playerId: savedSession.playerId,
+    playerToken: savedSession.playerToken,
+    /* Set when the server no longer accepts this browser's seat (wrong/missing token, not seated). */
+    seatInvalid: false,
     game: null,
     selectedHandCard: null,
     showGameplayHelp: false,
@@ -86,6 +99,9 @@ const resultIcon = document.getElementById("resultIcon");
 const resultTitle = document.getElementById("resultTitle");
 const resultSummary = document.getElementById("resultSummary");
 const rematchWaiting = document.getElementById("rematchWaiting");
+const seatNotice = document.getElementById("seatNotice");
+const seatNoticeText = document.getElementById("seatNoticeText");
+const seatNoticeLobbyBtn = document.getElementById("seatNoticeLobbyBtn");
 const messagesPanel = document.getElementById("messagesPanel");
 const messages = document.getElementById("messages");
 const debugUi = new URLSearchParams(window.location.search).get("debug") === "1";
@@ -155,14 +171,9 @@ function showError(message, kind = "action") {
     appAlert.classList.remove("hidden");
 }
 
-/* Capability token proving we own state.playerId; falls back to the id for legacy sessions/games. */
-function effectivePlayerToken() {
-    return state.playerToken || state.playerId || "";
-}
-
+/* Capability token proving we own state.playerId. There is no fallback: no token, no seat. */
 function authHeaders() {
-    const token = effectivePlayerToken();
-    return token ? {"X-Durak-Token": token} : {};
+    return state.playerToken ? {"X-Durak-Token": state.playerToken} : {};
 }
 
 /** Every game request path goes through here so a stored or typed code is always encoded. */
@@ -240,7 +251,12 @@ function applyGameSnapshot(snapshot, key = sessionKey()) {
         state.selectedHandCard = null;
     }
     syncBotThinkingFromGame(snapshot);
-    render();
+    const problem = seatProblem(snapshot, state.playerId);
+    if (problem) {
+        markSeatInvalid(problem);
+    } else {
+        render();
+    }
     return true;
 }
 
@@ -260,10 +276,40 @@ function handleSessionError(err, key = sessionKey()) {
         return true;
     }
     if (kind === "seat-invalid") {
-        showError(`This browser's seat in room ${code} is no longer valid. Leave the room, then join again.`, "session");
+        markSeatInvalid(`rejected with ${err.status}`);
         return true;
     }
     return false;
+}
+
+/**
+ * The server no longer accepts this browser's seat (a wrong or missing token, or the player is
+ * not seated): it would keep answering with the public view, which looks like a hand of zero
+ * cards with every button disabled. Stop updates and explain the way out instead.
+ */
+function markSeatInvalid(reason) {
+    if (!state.gameCode) return;
+    if (!state.seatInvalid) {
+        console.warn(`Durak: this browser's seat in room ${state.gameCode} is no longer valid (${reason}).`);
+    }
+    state.seatInvalid = true;
+    state.selectedHandCard = null;
+    stopPolling();
+    closeWebSocket();
+    render();
+}
+
+/** "Back to lobby" from an invalid seat: forget it locally and offer to join the room again. */
+function abandonInvalidSeat() {
+    const code = state.gameCode;
+    clearSession();
+    clearError();
+    if (code) {
+        gameCodeInput.value = code;
+        if (joinHint) {
+            joinHint.textContent = `Room ${code} is filled in. Join again for a new seat, or create a room.`;
+        }
+    }
 }
 
 function saveSession() {
@@ -526,7 +572,7 @@ document.addEventListener("visibilitychange", () => {
         return;
     }
     syncLobbyListPolling();
-    if (state.gameCode) {
+    if (state.gameCode && !state.seatInvalid) {
         beginPolling();
         sendHeartbeat();
         connectWebSocket();
@@ -553,13 +599,14 @@ function adoptCreatedGame(created) {
 
 /** Takes over the seat returned by create/join/quick play and shows its game. */
 function adoptSession(game, playerId, playerToken) {
-    if (!game || typeof game.code !== "string" || !Array.isArray(game.players) || !playerId) {
+    if (!game || typeof game.code !== "string" || !Array.isArray(game.players) || !playerId || !playerToken) {
         throw new ApiError(200, "Unexpected response from the server. Please try again.");
     }
     closeWebSocket();
     state.gameCode = game.code;
     state.playerId = String(playerId);
-    state.playerToken = playerToken ? String(playerToken) : "";
+    state.playerToken = String(playerToken);
+    state.seatInvalid = false;
     state.game = null;
     state.selectedHandCard = null;
     saveSession();
@@ -860,6 +907,14 @@ function render() {
     if (shareBtn) {
         shareBtn.classList.toggle("hidden", !hasSession || !game || game.status !== "LOBBY");
     }
+    if (seatNotice) {
+        const showNotice = Boolean(hasSession && state.seatInvalid);
+        seatNotice.classList.toggle("hidden", !showNotice);
+        const text = showNotice
+            ? `This browser's seat in room ${state.gameCode} is no longer valid. Go back to the lobby to join the room again or start a new game.`
+            : "";
+        if (seatNoticeText.textContent !== text) seatNoticeText.textContent = text;
+    }
 
     if (!hasSession) {
         syncLobbyListPolling();
@@ -1048,7 +1103,7 @@ function render() {
 }
 
 async function refreshGame(showMessage = false) {
-    if (!state.gameCode) return false;
+    if (!state.gameCode || state.seatInvalid) return false;
     if (state.gameRefreshInFlight) {
         state.gameRefreshQueued = true;
         return state.gameRefreshInFlight;
@@ -1169,7 +1224,7 @@ function beginPolling() {
 }
 
 function scheduleGameRefresh(delayOverride = null, replaceExisting = false) {
-    if (!state.gameCode || !state.playerId) {
+    if (!state.gameCode || !state.playerId || state.seatInvalid) {
         cancelGameRefreshTimer();
         return;
     }
@@ -1207,7 +1262,7 @@ function stopPolling() {
 
 async function sendHeartbeat() {
     if (document.visibilityState === "hidden"
-        || !state.gameCode || !state.playerId || state.game?.status === "FINISHED") return;
+        || !state.gameCode || !state.playerId || state.seatInvalid || state.game?.status === "FINISHED") return;
     const key = sessionKey();
     try {
         await api(gamePath(state.gameCode, "/heartbeat"), "POST", {playerId: state.playerId});
@@ -1252,7 +1307,7 @@ function closeWebSocket() {
 }
 
 function scheduleWebSocketReconnect() {
-    if (state.wsReconnectTimer || !state.gameCode || document.visibilityState === "hidden") return;
+    if (state.wsReconnectTimer || !state.gameCode || state.seatInvalid || document.visibilityState === "hidden") return;
     const delay = reconnectDelayMs(state.wsReconnectAttempt++);
     state.wsReconnectTimer = window.setTimeout(() => {
         state.wsReconnectTimer = null;
@@ -1261,7 +1316,7 @@ function scheduleWebSocketReconnect() {
 }
 
 function connectWebSocket() {
-    if (!state.gameCode || document.visibilityState === "hidden" || state.wsReconnectTimer) return;
+    if (!state.gameCode || state.seatInvalid || document.visibilityState === "hidden" || state.wsReconnectTimer) return;
     const current = state.ws;
     if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) {
         return;
@@ -1347,6 +1402,7 @@ function clearSession() {
     state.gameCode = "";
     state.playerId = "";
     state.playerToken = "";
+    state.seatInvalid = false;
     state.game = null;
     state.selectedHandCard = null;
     saveSession();
@@ -1426,6 +1482,9 @@ document.getElementById("leaveBtn").addEventListener("click", async () => {
         clearSession();
     }
 });
+if (seatNoticeLobbyBtn) {
+    seatNoticeLobbyBtn.addEventListener("click", () => abandonInvalidSeat());
+}
 if (helpToggleBtn) {
     helpToggleBtn.addEventListener("click", () => {
         state.showGameplayHelp = !state.showGameplayHelp;
