@@ -411,6 +411,66 @@ class GeminiAutoPlayDecisionEngineTest {
         assertEquals(LlmCircuitBreaker.State.CLOSED, engine.circuitState());
     }
 
+    /* ------------------------------------------------------------------ defence plan reuse */
+
+    private static final String TWO_PAIR_DEFENCE = "{\"type\":\"DEFEND\",\"attackCardCode\":\"7H\",\"cardCode\":\"KH\","
+            + "\"defensePlan\":[{\"attackCardCode\":\"7H\",\"cardCode\":\"KH\"},"
+            + "{\"attackCardCode\":\"9C\",\"cardCode\":\"QC\"}]}";
+
+    /** The human attacked with 7H and 9C; the bot beats 7H with KH/8S and 9C with QC/8S. */
+    static Game twoUndefendedAttacks() {
+        return new GameBuilder()
+                .player(HUMAN, HUMAN_NAME, false, "9D", "7D", "JS")
+                .player(BOT, BOT_NAME, true, "KH", "QC", "8S", "6D")
+                .talon("6C", "8D", "AS")
+                .undefended("7H", HUMAN)
+                .undefended("9C", HUMAN)
+                .build();
+    }
+
+    @Test
+    void replaysTheModelsDefencePlanWithoutAnotherCall() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings());
+        Game game = twoUndefendedAttacks();
+        transport.respond(200, answer(TWO_PAIR_DEFENCE));
+
+        assertEquals(AutoPlayAction.defend("7H", "KH"), engine.choose(game, BOT, game.computeViewerLegalMoves(BOT)));
+        game.defend(BOT, Card.fromCode("7H"), Card.fromCode("KH"));
+
+        assertEquals(AutoPlayAction.defend("9C", "QC"), engine.choose(game, BOT, game.computeViewerLegalMoves(BOT)));
+        assertEquals(1, transport.calls());
+        assertTrue(logLines("autoplay_decision").getLast()
+                .contains(" source=plan_cache reason=none action=DEFEND card=QC attackCard=9C "));
+    }
+
+    @Test
+    void aThrowInAfterThePlanAsksTheModelAgain() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings());
+        Game game = twoUndefendedAttacks();
+        transport.respond(200, answer(TWO_PAIR_DEFENCE));
+        engine.choose(game, BOT, game.computeViewerLegalMoves(BOT));
+        game.defend(BOT, Card.fromCode("7H"), Card.fromCode("KH"));
+        game.attack(HUMAN, Card.fromCode("9D"));
+
+        transport.respond(200, answer("{\"type\":\"TAKE\"}"));
+        assertEquals(AutoPlayAction.take(), engine.choose(game, BOT, game.computeViewerLegalMoves(BOT)));
+        assertEquals(2, transport.calls());
+    }
+
+    @Test
+    void aPlanThatSkipsAnAttackIsNotCached() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings());
+        Game game = twoUndefendedAttacks();
+        transport.respond(200, answer("{\"type\":\"DEFEND\",\"attackCardCode\":\"7H\",\"cardCode\":\"KH\","
+                + "\"defensePlan\":[{\"attackCardCode\":\"7H\",\"cardCode\":\"KH\"}]}"));
+        engine.choose(game, BOT, game.computeViewerLegalMoves(BOT));
+        game.defend(BOT, Card.fromCode("7H"), Card.fromCode("KH"));
+
+        transport.respond(200, answer("{\"type\":\"DEFEND\",\"attackCardCode\":\"9C\",\"cardCode\":\"8S\"}"));
+        assertEquals(AutoPlayAction.defend("9C", "8S"), engine.choose(game, BOT, game.computeViewerLegalMoves(BOT)));
+        assertEquals(2, transport.calls());
+    }
+
     /* ------------------------------------------------------------------ logging */
 
     @Test
@@ -529,6 +589,12 @@ class GeminiAutoPlayDecisionEngineTest {
         private int bouts = 0;
         private boolean taking;
         private int takeLimit;
+        private String code = "TEST01";
+
+        GameBuilder code(String gameCode) {
+            code = gameCode;
+            return this;
+        }
 
         GameBuilder player(String id, String name, boolean bot, String... hand) {
             return player(id, name, bot, null, hand);
@@ -583,7 +649,7 @@ class GeminiAutoPlayDecisionEngineTest {
 
         Game build() {
             return Game.fromSnapshot(new Game.Snapshot(
-                    "TEST01", 0L, 0L, 0L, players.getFirst().id(), GameStatus.IN_PROGRESS,
+                    code, 0L, 0L, 0L, players.getFirst().id(), GameStatus.IN_PROGRESS,
                     Suit.SPADES, Card.fromCode("KS"), attacker, defender, null, taking, takeLimit, 0L,
                     players, talon, table, Set.of(), discarded, known, false, null, null, bouts));
         }

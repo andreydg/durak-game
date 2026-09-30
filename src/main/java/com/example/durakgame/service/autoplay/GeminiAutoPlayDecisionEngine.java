@@ -62,6 +62,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final boolean promptReasoningBudgetUsed;
     private final LlmCircuitBreaker circuitBreaker;
     private final LlmCallBudget callBudget;
+    private final DefencePlanCache planCache;
 
     @Autowired
     public GeminiAutoPlayDecisionEngine(
@@ -128,6 +129,8 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         this.circuitBreaker = new LlmCircuitBreaker(settings.circuitBreakerFailureThreshold(),
                 Duration.ofMillis(Math.max(0, settings.circuitBreakerCooldownMs())), nanoClock);
         this.callBudget = new LlmCallBudget(settings.maxCallsPerMinute(), nanoClock);
+        this.planCache = new DefencePlanCache(DefencePlanCache.DEFAULT_MAX_PLANS, DefencePlanCache.DEFAULT_TTL,
+                nanoClock);
         log.info("autoplay_gemini_config enabled={} apiKeyPresent={} model={} modelFamily={} jsonMode={} "
                         + "systemInstruction={} thinkingConfig={} thinkingLevel={} simpleThinkingLevel={} "
                         + "temperature={} timeoutMs={} circuitBreakerFailureThreshold={} circuitBreakerCooldownMs={} "
@@ -189,6 +192,15 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         if (!enabled || apiKey.isBlank()) {
             return heuristic(game, playerId, legalMoves, "disabled");
         }
+        if (legalMoves.canDefend()) {
+            /* The model may already have planned this defence; replay it while the table still matches. */
+            AutoPlayAction planned = planCache.next(game, playerId, legalMoves);
+            if (planned != null && AutoPlayLegality.isLegal(planned, legalMoves)) {
+                return Decision.of(planned, "plan_cache", "none");
+            }
+        } else {
+            planCache.discard(game.getCode(), playerId);
+        }
         LlmCircuitBreaker.Permit permit = circuitBreaker.tryAcquire();
         if (permit == LlmCircuitBreaker.Permit.REJECTED) {
             return heuristic(game, playerId, legalMoves, "circuit_open");
@@ -207,11 +219,15 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         }
         GeminiAnswer answer = new GeminiAnswer(call.response().answer());
         logStrategy(game, playerId, answer, call.response());
-        AutoPlayAction action = answer.resolve(legalMoves, undefendedAttacks(game, legalMoves));
+        Set<String> undefended = undefendedAttacks(game, legalMoves);
+        AutoPlayAction action = answer.resolve(legalMoves, undefended);
         if (action == null || !AutoPlayLegality.isLegal(action, legalMoves)) {
             Decision fallbackDecision = heuristic(game, playerId, legalMoves, "illegal_model_action");
             return new Decision(fallbackDecision.action(), fallbackDecision.source(), fallbackDecision.reason(),
                     "model=" + answer.describe());
+        }
+        if (action.type() == AutoPlayAction.Type.DEFEND) {
+            planCache.store(game, playerId, legalMoves, action, answer.defencePlan(undefended));
         }
         return Decision.of(action, "llm", "none");
     }
