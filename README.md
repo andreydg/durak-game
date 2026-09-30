@@ -24,7 +24,7 @@ Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) a
 | Backend | JUnit / Maven | `./mvnw test` | Game rules (including a seeded rules fuzzer), `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, security headers, stores |
 | Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
 | Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js) |
-| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, finished results/rematches, hand privacy / anti-cheat) |
+| End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, finished results/rematches, hand privacy / anti-cheat), plus UI behaviour with synthetic games: phone/desktop layout (no horizontal overflow, hand above the sticky action strip), double-submit guards, keyboard focus, screen-reader names and announcements, leave confirmation, reconnecting after reload, API error handling, saved-seat validity, and running under a strict CSP |
 
 First-time frontend setup:
 
