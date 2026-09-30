@@ -98,6 +98,38 @@ test.describe("Leaving a room", () => {
         await expect(page.locator("#appAlert")).toContainText(`Room ${CODE} no longer exists.`);
     });
 
+    test("the question goes away when the game ends behind it", async ({ page }) => {
+        let finished = false;
+        const leaves = [];
+        await seedSession(page);
+        await page.routeWebSocket("**/ws/games/**", () => {});
+        await page.route(`**/api/games/${CODE}**`, async route => {
+            if (new URL(route.request().url()).pathname.endsWith("/leave")) {
+                leaves.push(route.request().postDataJSON());
+                await emptyOk(route);
+                return;
+            }
+            await route.fulfill({
+                status: 200,
+                contentType: "application/json",
+                body: JSON.stringify(finished
+                    ? syntheticGame({version: 9, status: "FINISHED", loserPlayerId: "p2", hand: []})
+                    : syntheticGame({version: 8}))
+            });
+        });
+        await page.goto("/");
+        await page.click("#leaveBtn");
+        await expect(page.getByRole("dialog")).toBeVisible();
+
+        finished = true;
+        await page.evaluate(() => window.refreshGame(false));
+
+        await expect(page.getByRole("dialog")).toBeHidden();
+        await expect(page.locator("#resultPanel")).toBeVisible();
+        await expect(page.locator("#resultTitle")).toBeFocused();
+        expect(leaves).toEqual([]);
+    });
+
     test("an action that fails after the player left does not raise a stale error", async ({ page }) => {
         let releaseAttack;
         const attackHeld = new Promise(resolve => { releaseAttack = resolve; });

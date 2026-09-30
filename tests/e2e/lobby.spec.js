@@ -61,7 +61,7 @@ test.describe("Lobby & room creation", () => {
 
     test("error alert is opaque and cannot block controls behind it", async ({ page }) => {
         await page.goto("/");
-        await page.fill("#gameCode", "NOPE12");
+        await page.fill("#gameCode", "ZZZZ22");
         await page.click("#joinBtn");
 
         const alert = page.locator("#appAlert");
@@ -217,7 +217,7 @@ test.describe("Lobby & room creation", () => {
     });
 
     test("quick play consumes an invite URL so reload restores the new private game", async ({ page }) => {
-        await page.goto("/?room=ABC123&utm_source=invite#play");
+        await page.goto("/?room=ABC234&utm_source=invite#play");
         await page.fill("#hostName", "Invite Quick Player");
         await page.click("#quickPlayBtn");
         await expect(page.locator("#gameView")).toBeVisible();

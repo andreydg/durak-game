@@ -9,6 +9,7 @@ const {
     searchWithoutRoomParam,
     reconnectDelayMs,
     gameRefreshDelayMs,
+    isGameSnapshot,
     shouldApplySnapshot,
     parseJsonBody,
     apiErrorMessage,
@@ -342,12 +343,18 @@ function applyGameSnapshot(snapshot, key = sessionKey()) {
 
 /**
  * Handles failures that invalidate the saved seat. Returns true when the error was consumed:
- * 404/410 (room gone) end the session, 403 means this browser's seat can no longer act.
+ * a room that is gone (404 on a read, 410) ends the session, 403 means this browser's seat can no
+ * longer act. A 404 from a move ("verify") may just be a refused move, so the room is re-read
+ * right away and that read decides. `source` is "read", "leave" or "move" (see sessionErrorKind).
  */
-function handleSessionError(err, key = sessionKey()) {
+function handleSessionError(err, key = sessionKey(), source = "read") {
     if (!err || !isCurrentSession(key)) return false;
-    const kind = sessionErrorKind(err.status);
+    const kind = sessionErrorKind(err.status, source);
     const code = state.gameCode;
+    if (kind === "verify") {
+        scheduleGameRefresh(0, true);
+        return false;
+    }
     if (kind === "room-gone") {
         clearSession();
         showError(err.status === 410
@@ -696,7 +703,7 @@ function adoptCreatedGame(created) {
 
 /** Takes over the seat returned by create/join/quick play and shows its game. */
 function adoptSession(game, playerId, playerToken) {
-    if (!game || typeof game.code !== "string" || !Array.isArray(game.players) || !playerId || !playerToken) {
+    if (!isGameSnapshot(game) || !playerId || !playerToken) {
         throw new ApiError(200, "Unexpected response from the server. Please try again.");
     }
     closeWebSocket();
@@ -718,7 +725,7 @@ if (lobbyGameList) {
         const btn = e.target.closest(".lobby-list-join");
         if (!btn || !lobbyGameList.contains(btn)) return;
         const code = btn.getAttribute("data-code");
-        if (code) runAction("Join game", () => performJoin(code));
+        if (code) runAction("Join game", () => performJoin(code), null, {scope: "lobby"});
     });
 }
 
@@ -893,7 +900,7 @@ function createHandCardButton(code) {
 }
 
 function toggleHandCard(code) {
-    if (isBusy() || !state.game) return;
+    if (isBusy() || state.seatInvalid || !state.game) return;
     state.selectedHandCard = state.selectedHandCard === code ? null : code;
     renderActionState(state.game);
     renderMyHand(state.game, state.game.players.find(p => p.id === state.playerId));
@@ -905,7 +912,7 @@ function toggleHandCard(code) {
  */
 function renderMyHand(game, me) {
     const hand = sortCardCodesByRank(me?.hand || []);
-    const busy = isBusy();
+    const busy = isBusy() || state.seatInvalid;
     const existing = new Map([...myHand.querySelectorAll(".hand-card-btn")].map(btn => [btn.dataset.cardCode, btn]));
     const wanted = new Set(hand);
     for (const [code, btn] of existing) {
@@ -975,7 +982,8 @@ function renderActionState(game) {
         (defensesByAttack[chosenAttack] || []).includes(selected)
     );
 
-    const idle = !isBusy();
+    // A rejected seat keeps its last snapshot on screen, but none of its moves can be made.
+    const idle = !isBusy() && !state.seatInvalid;
     setControlEnabled(startBtn, idle && Boolean(lm.canStart));
     setControlEnabled(attackBtn, idle && Boolean(lm.canAttack && selected && attackable.includes(selected)));
     setControlEnabled(transferBtn, idle && Boolean(lm.canTransfer && selected && transferable.includes(selected)));
@@ -1024,7 +1032,7 @@ function renderActionState(game) {
  */
 async function playCardToTable(cardCode, preferredAttackCard) {
     const game = state.game;
-    if (!game || game.status !== "IN_PROGRESS" || !cardCode || isBusy()) return;
+    if (!game || game.status !== "IN_PROGRESS" || !cardCode || isBusy() || state.seatInvalid) return;
     const lm = game.legalMoves || {};
     const attackable = lm.attackableCardCodes || [];
     const transferable = lm.transferableCardCodes || [];
@@ -1081,7 +1089,14 @@ function render() {
     const focusBefore = describeFocus();
     const handBefore = currentHandCodes();
     renderView();
+    // "Leave this game?" only makes sense while this seat's game is in progress.
+    if (leaveDialog?.open && !leaveNeedsConfirmation()) leaveDialog.close();
     settleFocus(focusBefore, handBefore);
+}
+
+/** Leaving resets the table for everyone only while a game is in progress at a valid seat. */
+function leaveNeedsConfirmation() {
+    return Boolean(state.gameCode && state.game?.status === "IN_PROGRESS" && !state.seatInvalid);
 }
 
 /** What has focus, in terms that survive a re-render: a card code or a control id. */
@@ -1127,6 +1142,11 @@ function settleFocus(before, handBefore) {
     if (!before) return;
     const active = document.activeElement;
     if (active && active !== document.body && canTakeFocus(active)) return;
+    if (state.seatInvalid && canTakeFocus(seatNoticeLobbyBtn)) {
+        // Nothing at the table can be used any more: offer the way out.
+        seatNoticeLobbyBtn.focus();
+        return;
+    }
 
     const handAfter = currentHandCodes();
     const lostEl = before.kind === "control" ? document.getElementById(before.id) : null;
@@ -1214,7 +1234,7 @@ function renderView() {
         resultSummary.textContent = result?.summary || "The game is complete.";
         const canRematch = game.hostPlayerId === state.playerId;
         rematchBtn.classList.toggle("hidden", !canRematch);
-        setControlEnabled(rematchBtn, !isBusy());
+        setControlEnabled(rematchBtn, !isBusy() && !state.seatInvalid);
         rematchWaiting.classList.toggle("hidden", canRematch);
     }
 
@@ -1290,7 +1310,7 @@ function renderView() {
             game.playerCount < game.maxPlayers
         );
         addBotBtn.classList.toggle("hidden", !isHostLobby || hasBot);
-        setControlEnabled(addBotBtn, canAddBot && !isBusy());
+        setControlEnabled(addBotBtn, canAddBot && !isBusy() && !state.seatInvalid);
     }
 
     if (game.status === "FINISHED") {
@@ -1404,7 +1424,7 @@ async function refreshGame(showMessage = false) {
             if (!isCurrentSession(key)) {
                 return false;
             }
-            if (!refreshed || refreshed.code !== requestedGameCode || !Array.isArray(refreshed.players)) {
+            if (!isGameSnapshot(refreshed) || refreshed.code !== requestedGameCode) {
                 throw new ApiError(200, "Unexpected response from the server. Please try again.");
             }
             // A stale version is not a failure: the screen already shows something newer.
@@ -1457,18 +1477,15 @@ function syncBotThinkingFromGame(game) {
     state.botThinkingEventAt = nextEventAt;
 }
 
-/** True for a GameResponse-shaped value (as opposed to the create/join envelopes or nothing). */
-function looksLikeGame(value) {
-    return Boolean(value && typeof value === "object" && typeof value.code === "string" && Array.isArray(value.players));
-}
-
 /**
  * Runs one user action. At most one runs at a time: while its request is pending, every other
  * activation (double clicks, Enter repeats, drops) is ignored and the action controls render
  * disabled. `fn` may resolve to a game snapshot, which is applied through the same version check
  * as refreshes, so a delayed response can never roll back newer state.
+ * `scope` "seat" (default) is a move at the current table, whose 403/404/410 speak about that
+ * seat; "lobby" (create/join) requests target another room, so their errors are only shown.
  */
-async function runAction(name, fn, trigger = null) {
+async function runAction(name, fn, trigger = null, {scope = "seat"} = {}) {
     if (isBusy()) {
         log(`${name} ignored: ${state.actionInFlight?.name || "Leave"} is still pending.`);
         return false;
@@ -1499,7 +1516,7 @@ async function runAction(name, fn, trigger = null) {
 
     if (error) {
         log(`${name} failed: ${error.message}`);
-        if (handleSessionError(error, key)) {
+        if (scope === "seat" && handleSessionError(error, key, "move")) {
             return false;
         }
         render();
@@ -1508,13 +1525,13 @@ async function runAction(name, fn, trigger = null) {
             return false;
         }
         showError(`${name}: ${error.message || "Something went wrong. Please try again."}`);
-        if (error.status === 409 && isCurrentSession(key)) {
+        if (scope === "seat" && error.status === 409 && isCurrentSession(key)) {
             // The move was rejected against newer server state: resynchronise promptly.
             scheduleGameRefresh(0, true);
         }
         return false;
     }
-    if (!(looksLikeGame(result) && applyGameSnapshot(result, key))) {
+    if (!(isGameSnapshot(result) && applyGameSnapshot(result, key))) {
         render();
     }
     // The action response already carries updated game state.
@@ -1575,7 +1592,7 @@ async function sendHeartbeat() {
         await api(gamePath(state.gameCode, "/heartbeat"), "POST", {playerId: state.playerId});
     } catch (err) {
         // Best effort, except that a rejected seat or a vanished room is reported like any request.
-        handleSessionError(err, key);
+        handleSessionError(err, key, "move");
     }
 }
 
@@ -1715,8 +1732,6 @@ function clearSession() {
     saveSession();
     stopPolling();
     closeWebSocket();
-    // A pending "Leave this game?" question is moot once the seat is gone (closes as "stay").
-    if (leaveDialog?.open) leaveDialog.close();
     render();
     log("Session cleared.");
 }
@@ -1729,7 +1744,7 @@ document.getElementById("hostForm").addEventListener("submit", async (event) => 
             publicRoom: Boolean(publicRoomInput?.checked)
         });
         adoptCreatedGame(created);
-    }, createBtn);
+    }, createBtn, {scope: "lobby"});
 });
 
 if (quickPlayBtn) {
@@ -1738,7 +1753,7 @@ if (quickPlayBtn) {
             hostName: hostNameInput.value.trim()
         });
         adoptCreatedGame(created);
-    }, quickPlayBtn));
+    }, quickPlayBtn, {scope: "lobby"}));
 }
 
 if (shareBtn) {
@@ -1772,7 +1787,7 @@ if (shareBtn) {
 
 document.getElementById("joinForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await runAction("Join game", () => performJoin(null), joinBtn);
+    await runAction("Join game", () => performJoin(null), joinBtn, {scope: "lobby"});
 });
 
 /**
@@ -1821,7 +1836,7 @@ async function leaveRoom() {
         if (isCurrentSession(key)) clearSession();
     } catch (err) {
         if (!isCurrentSession(key)) return;
-        const kind = sessionErrorKind(err.status);
+        const kind = sessionErrorKind(err.status, "leave");
         if (kind === "room-gone" || kind === "seat-invalid") {
             clearSession();
             const reason = kind === "seat-invalid"
@@ -1842,8 +1857,7 @@ async function leaveRoom() {
 
 leaveBtn.addEventListener("click", async () => {
     if (state.leaveInFlight || leaveBtn.getAttribute("aria-disabled") === "true") return;
-    const inProgress = state.game?.status === "IN_PROGRESS" && !state.seatInvalid;
-    if (inProgress && !(await confirmLeave())) return;
+    if (leaveNeedsConfirmation() && !(await confirmLeave())) return;
     await leaveRoom();
 });
 if (seatNoticeLobbyBtn) {

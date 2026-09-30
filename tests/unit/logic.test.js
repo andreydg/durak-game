@@ -186,6 +186,28 @@ describe("sessionErrorKind", () => {
             expect(L.sessionErrorKind(status)).toBe("transient");
         }
     });
+
+    it("only asks to verify a 404 from a move, which can be a refused move", () => {
+        // The server maps every NoSuchElementException to 404, "Attack card to defend not found" included.
+        expect(L.sessionErrorKind(404, "move")).toBe("verify");
+        expect(L.sessionErrorKind(404, "read")).toBe("room-gone");
+        expect(L.sessionErrorKind(404, "leave")).toBe("room-gone");
+        expect(L.sessionErrorKind(410, "move")).toBe("room-gone");
+        expect(L.sessionErrorKind(403, "move")).toBe("seat-invalid");
+        expect(L.sessionErrorKind(503, "move")).toBe("transient");
+    });
+});
+
+describe("isGameSnapshot", () => {
+    it("recognises GameResponse-shaped values only", () => {
+        expect(L.isGameSnapshot({ code: "ABC234", players: [] })).toBe(true);
+        expect(L.isGameSnapshot({ code: "", players: [] })).toBe(false);
+        expect(L.isGameSnapshot({ code: 5, players: [] })).toBe(false);
+        expect(L.isGameSnapshot({ code: "ABC234" })).toBe(false);
+        expect(L.isGameSnapshot({ game: { code: "ABC234", players: [] } })).toBe(false);
+        expect(L.isGameSnapshot(null)).toBe(false);
+        expect(L.isGameSnapshot("ABC234")).toBe(false);
+    });
 });
 
 describe("seatProblem", () => {
@@ -500,7 +522,7 @@ describe("describeTransition", () => {
 
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
-        expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");
+        expect(L.roomCodeFromSearch("?room=abc234")).toBe("ABC234");
         expect(L.roomCodeFromSearch("?foo=1&room=XY9Z88")).toBe("XY9Z88");
     });
 
@@ -510,9 +532,14 @@ describe("room invite links", () => {
         expect(L.roomCodeFromSearch("")).toBe("");
     });
 
+    it("uses the same alphabet as typed codes, so an invite never pre-fills an impossible code", () => {
+        expect(L.roomCodeFromSearch("?room=NOPE12")).toBe("");
+        expect(L.buildInviteUrl("https://durak.example", "NOPE12")).toBe("");
+    });
+
     it("builds a canonical same-origin invite URL", () => {
-        expect(L.buildInviteUrl("https://durak.example", "abc123"))
-            .toBe("https://durak.example/?room=ABC123");
+        expect(L.buildInviteUrl("https://durak.example", "abc234"))
+            .toBe("https://durak.example/?room=ABC234");
         expect(L.buildInviteUrl("https://durak.example/old/path", "bad"))
             .toBe("");
     });

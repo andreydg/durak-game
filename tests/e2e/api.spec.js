@@ -135,6 +135,59 @@ test.describe("Action responses and API errors", () => {
         expect(await page.evaluate(() => sessionStorage.getItem("durak_player_token"))).toBe("");
     });
 
+    test("a move refused with 404 keeps the seat and re-reads the room", async ({ page }) => {
+        await seedSession(page);
+        const defending = syntheticGame({
+            version: 12,
+            table: [{attackCard: "9H"}],
+            hand: ["6C", "7D", "JH", "9S", "JC", "QD"],
+            legalMoves: {canDefend: true, canTake: true, defensesByAttackCard: {"9H": ["JH"]}}
+        });
+        let readsAfterDefend = 0;
+        let defended = false;
+        await routeGame(page, {
+            "GET /": route => {
+                if (defended) readsAfterDefend++;
+                return json(route, 200, defending);
+            },
+            // Game.defend throws NoSuchElementException, which the server maps to 404.
+            "POST /defend": route => {
+                defended = true;
+                return json(route, 404, {message: "Attack card to defend not found"});
+            }
+        });
+
+        await page.goto("/");
+        await page.locator('#myHand [data-card-code="JH"]').click();
+        await page.click("#defendBtn");
+
+        await expect(page.locator("#appAlert")).toContainText("Defend: Attack card to defend not found");
+        await expect.poll(() => readsAfterDefend).toBeGreaterThanOrEqual(1);
+        await expect(page.locator("#playingArea")).toBeVisible();
+        expect(await page.evaluate(() => sessionStorage.getItem("durak_game_code"))).toBe(CODE);
+    });
+
+    test("a move refused with 404 in a vanished room ends the seat once the re-read confirms it", async ({ page }) => {
+        await seedSession(page);
+        let gone = false;
+        await routeGame(page, {
+            "GET /": route => gone
+                ? json(route, 404, {message: "Game not found"})
+                : json(route, 200, attackerGame()),
+            "POST /attack": route => {
+                gone = true;
+                return json(route, 404, {message: "Game not found"});
+            }
+        });
+        await page.goto("/");
+        await page.locator('#myHand [data-card-code="6C"]').click();
+        await page.click("#attackBtn");
+
+        await expect(page.locator("#lobbyView")).toBeVisible();
+        await expect(page.locator("#appAlert")).toContainText(`Room ${CODE} no longer exists.`);
+        expect(await page.evaluate(() => sessionStorage.getItem("durak_game_code"))).toBe("");
+    });
+
     test("a transient failure keeps the seat and explains itself", async ({ page }) => {
         await seedSession(page);
         await routeGame(page, {

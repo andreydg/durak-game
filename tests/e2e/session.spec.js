@@ -75,6 +75,37 @@ test.describe("Saved seat validity", () => {
         await expect(page.locator("#seatNotice")).toContainText("room SYNTH2 is no longer valid");
         await expect(page.locator("#appAlert")).toBeHidden();
         expect(warnings.some(text => text.includes("403"))).toBe(true);
+
+        // The last snapshot stays on screen, but none of its moves can be made any more.
+        await expect(page.locator("#attackBtn")).toBeDisabled();
+        await expect(page.locator('#myHand [data-card-code="7D"]')).toHaveAttribute("aria-disabled", "true");
+        await expect(page.locator('#myHand [data-card-code="7D"]')).toHaveAttribute("draggable", "false");
+        await page.locator('#myHand [data-card-code="7D"]').click({force: true});
+        await expect(page.locator('#myHand [data-card-code="7D"]')).toHaveAttribute("aria-pressed", "false");
+    });
+
+    test("keyboard focus moves to the way out when the seat is rejected", async ({ page }) => {
+        await seedSession(page);
+        const game = syntheticGame({
+            attackerPlayerId: "me",
+            defenderPlayerId: "p2",
+            legalMoves: {canAttack: true, attackableCardCodes: ["6C"]},
+            hand: ["6C", "7D", "8H", "9S", "JC", "QD"]
+        });
+        await page.routeWebSocket("**/ws/games/**", () => {});
+        await page.route("**/api/games/SYNTH2**", route => route.fulfill(route.request().method() === "POST"
+            ? {status: 403, contentType: "application/json", body: JSON.stringify({message: "You are not authorized to act as this player."})}
+            : {status: 200, contentType: "application/json", body: JSON.stringify(game)}));
+        await page.goto("/");
+        await page.locator('#myHand [data-card-code="6C"]').focus();
+        await page.keyboard.press("Enter");
+        await page.locator("#attackBtn").focus();
+
+        await page.keyboard.press("Enter");
+
+        await expect(page.locator("#seatNoticeLobbyBtn")).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(page.locator("#lobbyView")).toBeVisible();
     });
 
     test("a saved seat without a token is not a session", async ({ page }) => {

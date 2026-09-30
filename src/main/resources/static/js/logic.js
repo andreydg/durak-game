@@ -60,14 +60,12 @@
     }
 
     function roomCodeFromSearch(search) {
-        const code = new URLSearchParams(search || "").get("room");
-        const normalized = String(code || "").trim().toUpperCase();
-        return /^[A-Z0-9]{6}$/.test(normalized) ? normalized : "";
+        return normalizeRoomCode(new URLSearchParams(search || "").get("room"));
     }
 
     function buildInviteUrl(origin, roomCode) {
-        const code = String(roomCode || "").trim().toUpperCase();
-        if (!/^[A-Z0-9]{6}$/.test(code)) return "";
+        const code = normalizeRoomCode(roomCode);
+        if (!code) return "";
         const url = new URL("/", origin);
         url.searchParams.set("room", code);
         return url.toString();
@@ -112,14 +110,19 @@
         return incoming >= current;
     }
 
+    /** True for a GameResponse-shaped value (as opposed to create/join envelopes, errors or nothing). */
+    function isGameSnapshot(value) {
+        return Boolean(value && typeof value === "object"
+            && typeof value.code === "string" && value.code !== ""
+            && Array.isArray(value.players));
+    }
+
     /**
      * Whether an incoming game snapshot (refresh or action response) may replace the current one.
      * Snapshots of another room always replace; within a room, an older version never does.
      */
     function shouldApplySnapshot(current, incoming) {
-        if (!incoming || typeof incoming !== "object" || !Array.isArray(incoming.players) || !incoming.code) {
-            return false;
-        }
+        if (!isGameSnapshot(incoming)) return false;
         if (!current || current.code !== incoming.code) return true;
         return shouldAcceptGameVersion(current.version, incoming.version);
     }
@@ -154,13 +157,18 @@
     }
 
     /**
-     * What a failed request means for the saved seat: 403 is a seat this browser can no longer
-     * use, 404/410 a room that is gone, anything else (network, 409, 429, 5xx) is transient.
+     * What a failed request means for the saved seat. 403: this browser's seat is no longer
+     * accepted. 410: the room expired. 404 on a read of the room (or on leaving it) means the room
+     * is gone, but a move can also be refused with 404 ("Attack card to defend not found"), so for
+     * moves and heartbeats it only means "verify": a refresh of the room then tells which.
+     * Anything else (network, 409, 429, 5xx) is transient.
+     * `source` is "read" (default), "leave" or "move".
      */
-    function sessionErrorKind(status) {
+    function sessionErrorKind(status, source = "read") {
         const code = Number(status) || 0;
         if (code === 403) return "seat-invalid";
-        if (code === 404 || code === 410) return "room-gone";
+        if (code === 410) return "room-gone";
+        if (code === 404) return source === "move" ? "verify" : "room-gone";
         return "transient";
     }
 
@@ -581,6 +589,7 @@
         reconnectDelayMs,
         gameRefreshDelayMs,
         shouldAcceptGameVersion,
+        isGameSnapshot,
         shouldApplySnapshot,
         parseJsonBody,
         apiErrorMessage,

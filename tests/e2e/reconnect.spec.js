@@ -56,6 +56,29 @@ test.describe("Restoring a saved seat after a reload", () => {
         expect(await page.evaluate(() => sessionStorage.getItem("durak_game_code"))).toBe(CODE);
     });
 
+    test("after a failed reconnect, a failed join elsewhere does not touch the saved seat", async ({ page }) => {
+        const release = await holdRefresh(page, route => route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({message: "Game storage is temporarily unavailable. Please try again."})
+        }));
+        await page.route("**/api/games/ZZZZ22/join", route => route.fulfill({
+            status: 404,
+            contentType: "application/json",
+            body: JSON.stringify({message: "Game not found"})
+        }));
+        await page.goto("/");
+        release();
+        await expect(page.locator("#lobbyView")).toBeVisible();
+
+        await page.fill("#gameCode", "ZZZZ22");
+        await page.click("#joinBtn");
+
+        await expect(page.locator("#appAlert")).toContainText("Join game: Game not found");
+        await expect(page.locator("#appAlert")).not.toContainText(CODE);
+        expect(await page.evaluate(() => sessionStorage.getItem("durak_game_code"))).toBe(CODE);
+    });
+
     test("a vanished room falls back to the lobby and forgets the seat", async ({ page }) => {
         const release = await holdRefresh(page, route => route.fulfill({
             status: 404,
