@@ -57,6 +57,8 @@ const state = {
     seatInvalid: false,
     /* {name} of the one user action whose request is pending; repeat activations are ignored. */
     actionInFlight: null,
+    /* True while a /leave request is pending. */
+    leaveInFlight: false,
     game: null,
     selectedHandCard: null,
     showGameplayHelp: false,
@@ -153,6 +155,8 @@ const shareBtn = document.getElementById("shareBtn");
 const rematchBtn = document.getElementById("rematchBtn");
 const createBtn = document.getElementById("createBtn");
 const joinBtn = document.getElementById("joinBtn");
+const leaveBtn = document.getElementById("leaveBtn");
+const leaveDialog = document.getElementById("leaveDialog");
 
 function log(message) {
     if (!debugUi || !messages) return;
@@ -188,7 +192,7 @@ function gamePath(code, suffix = "") {
 const API_TIMEOUT_MS = 20_000;
 
 function isBusy() {
-    return Boolean(state.actionInFlight);
+    return Boolean(state.actionInFlight || state.leaveInFlight);
 }
 
 /**
@@ -394,7 +398,7 @@ async function refreshLobbyLists() {
             /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
             if (lobbyGameList) {
                 lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
-                syncLobbyBusyState();
+                syncBusyControls();
             }
             if (gameLobbyGameList) {
                 const code = state.gameCode || "";
@@ -928,14 +932,15 @@ function playerAction(suffix, extra = {}, {clearSelection = true} = {}) {
     };
 }
 
-function syncLobbyBusyState() {
+function syncBusyControls() {
     for (const btn of lobbyActionButtons()) setControlEnabled(btn, !isBusy());
+    setControlEnabled(leaveBtn, !state.leaveInFlight);
 }
 
 function render() {
     const game = state.game;
     const hasSession = Boolean(state.gameCode && state.playerId && game);
-    syncLobbyBusyState();
+    syncBusyControls();
     lobbyView.classList.toggle("hidden", hasSession);
     gameView.classList.toggle("hidden", !hasSession);
 
@@ -1241,7 +1246,7 @@ function looksLikeGame(value) {
  */
 async function runAction(name, fn, trigger = null) {
     if (isBusy()) {
-        log(`${name} ignored: ${state.actionInFlight.name} is still pending.`);
+        log(`${name} ignored: ${state.actionInFlight?.name || "Leave"} is still pending.`);
         return false;
     }
     state.actionInFlight = {name};
@@ -1539,19 +1544,76 @@ document.getElementById("joinForm").addEventListener("submit", async (event) => 
     await runAction("Join game", () => performJoin(null), joinBtn);
 });
 
-document.getElementById("leaveBtn").addEventListener("click", async () => {
+/**
+ * Asks before leaving a game in progress (leaving resets the table for everyone). Native modal
+ * dialog: focus stays inside it and Escape cancels. Resolves to true when the player confirms.
+ */
+function confirmLeave() {
+    if (!leaveDialog || typeof leaveDialog.showModal !== "function") {
+        return Promise.resolve(window.confirm("Leave this game? It ends the game for everyone at the table."));
+    }
+    return new Promise(resolve => {
+        // Escape closes without a value, so clear any answer left from an earlier opening.
+        leaveDialog.returnValue = "";
+        leaveDialog.addEventListener("close", () => {
+            const confirmed = leaveDialog.returnValue === "leave";
+            if (!confirmed && document.activeElement === document.body && !leaveBtn.disabled) {
+                leaveBtn.focus();
+            }
+            resolve(confirmed);
+        }, {once: true});
+        leaveDialog.showModal();
+    });
+}
+
+/**
+ * Gives up the seat. Only a confirmed departure, or a seat/room the server says is already
+ * gone (403/404/410), clears the local session; on network errors or 5xx the seat is kept so
+ * the player is not silently orphaned at the table.
+ */
+async function leaveRoom() {
     const code = state.gameCode;
     const playerId = state.playerId;
-    clearError();
-    try {
-        if (code && playerId) {
-            await api(gamePath(code, "/leave"), "POST", {playerId});
-        }
-    } catch (err) {
-        log(`Leave notify failed: ${err.message}`);
-    } finally {
+    if (!code || !playerId) {
         clearSession();
+        return;
     }
+    const key = sessionKey();
+    const previousText = leaveBtn.textContent;
+    state.leaveInFlight = true;
+    leaveBtn.setAttribute("aria-busy", "true");
+    leaveBtn.textContent = "Leaving…";
+    clearError();
+    render();
+    try {
+        await api(gamePath(code, "/leave"), "POST", {playerId});
+        if (isCurrentSession(key)) clearSession();
+    } catch (err) {
+        if (!isCurrentSession(key)) return;
+        const kind = sessionErrorKind(err.status);
+        if (kind === "room-gone" || kind === "seat-invalid") {
+            clearSession();
+            const reason = kind === "seat-invalid"
+                ? `This browser's seat in room ${code} was no longer valid`
+                : err.status === 410 ? `Room ${code} expired due to inactivity` : `Room ${code} no longer exists`;
+            showError(`${reason}, so you are back in the lobby.`, "session");
+        } else {
+            showError(`Leave: ${err.message} You are still in room ${code}.`);
+        }
+        log(`Leave failed: ${err.message}`);
+    } finally {
+        state.leaveInFlight = false;
+        leaveBtn.removeAttribute("aria-busy");
+        leaveBtn.textContent = previousText;
+        render();
+    }
+}
+
+leaveBtn.addEventListener("click", async () => {
+    if (state.leaveInFlight || leaveBtn.getAttribute("aria-disabled") === "true") return;
+    const inProgress = state.game?.status === "IN_PROGRESS" && !state.seatInvalid;
+    if (inProgress && !(await confirmLeave())) return;
+    await leaveRoom();
 });
 if (seatNoticeLobbyBtn) {
     seatNoticeLobbyBtn.addEventListener("click", () => abandonInvalidSeat());

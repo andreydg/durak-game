@@ -46,6 +46,33 @@ body {
     flex: 1 1 16rem;
     margin: 0;
 }
+.leave-dialog {
+    width: min(28rem, calc(100vw - 2rem));
+    padding: 1.1rem 1.2rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    color: var(--text);
+    background: var(--bg);
+    box-shadow: var(--shadow);
+}
+.leave-dialog::backdrop {
+    background: rgba(40, 33, 20, 0.45);
+}
+.leave-dialog h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.15rem;
+}
+.leave-dialog p {
+    margin: 0 0 1rem;
+    color: var(--text-soft);
+    line-height: 1.45;
+}
+.leave-dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
 .stack { display: grid; gap: 1rem; }
 .panel {
     border: 1px solid var(--border);

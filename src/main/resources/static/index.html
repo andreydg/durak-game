@@ -27,7 +27,7 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css?v=a7ed9f34f34c">
-    <link rel="stylesheet" href="/css/app.css?v=a312b206262d">
+    <link rel="stylesheet" href="/css/app.css?v=ad3432b2cf84">
     <link rel="stylesheet" href="/css/content.css?v=915568db78e3">
     <script type="application/ld+json">
     {
@@ -225,12 +225,23 @@
     </div>
 </section>
 
+<dialog id="leaveDialog" class="leave-dialog" aria-labelledby="leaveDialogTitle" aria-describedby="leaveDialogText">
+    <form method="dialog">
+        <h2 id="leaveDialogTitle">Leave this game?</h2>
+        <p id="leaveDialogText">The game is still in progress. Leaving ends it for everyone at the table and sends the room back to the lobby.</p>
+        <div class="leave-dialog-actions">
+            <button type="submit" value="stay" class="btn btn-secondary" id="leaveCancelBtn" autofocus>Stay</button>
+            <button type="submit" value="leave" class="btn btn-danger" id="leaveConfirmBtn">Leave game</button>
+        </div>
+    </form>
+</dialog>
+
 <section id="messagesPanel" class="panel hidden">
     <h3>Messages</h3>
     <pre id="messages">Ready.</pre>
 </section>
 
 <script src="/js/logic.js?v=4062a264dc31"></script>
-<script src="/js/app.js?v=ac71498f06ed"></script>
+<script src="/js/app.js?v=bf1752dc4ec4"></script>
 </body>
 </html>
