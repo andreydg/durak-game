@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
@@ -815,6 +816,74 @@ class GameServiceTest {
         assertTrue(service.getGame("TEST01").getTable().isEmpty());
     }
 
+    @Test
+    void botTakesAtOnceWhenAnAttackCannotBeBeaten() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        AtomicInteger calls = new AtomicInteger();
+        GameService service = newService(store, (game, playerId, legalMoves) -> {
+            calls.incrementAndGet();
+            return AutoPlayAction.defend("9H", "10H");
+        });
+        // 10H beats 9H, but nothing beats 9D and no nine is available to transfer.
+        store.put(withTable(twoPlayerBotDefender("10H", "7D", "6D"),
+                attack("9H", "h"), attack("9D", "h")));
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+
+        assertTrue(waitUntil(() -> service.getGame("TEST01").isTakingCardsInProgress(), 10_000));
+        assertEquals(0, calls.get(), "defending one card first would only open more throw-ins");
+    }
+
+    @Test
+    void aLegalTransferIsLeftToTheEngineInsteadOfForcingATake() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        AtomicInteger calls = new AtomicInteger();
+        GameService service = newService(store, (game, playerId, legalMoves) -> {
+            calls.incrementAndGet();
+            return AutoPlayAction.transfer("9C");
+        });
+        // 9D cannot be beaten, but transferring with 9C passes both attacks on.
+        store.put(withTable(twoPlayerBotDefender("10H", "9C", "7D"),
+                attack("9H", "h"), attack("9D", "h")));
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+
+        assertTrue(waitUntil(() -> "h".equals(service.getGame("TEST01").getDefenderPlayerId()), 10_000));
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void thinkingTextDuringATakeDoesNotRevealWhetherTheBotCanThrowIn() throws Exception {
+        SnapshotGameStore store = new SnapshotGameStore();
+        CountDownLatch engineEntered = new CountDownLatch(1);
+        CountDownLatch releaseEngine = new CountDownLatch(1);
+        GameService service = newService(store, (game, playerId, legalMoves) -> {
+            engineEntered.countDown();
+            try {
+                releaseEngine.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+            return AutoPlayAction.endRound();
+        });
+        // Human defender h is taking; bot attacker b holds a matching six it could throw in.
+        long now = Instant.now().toEpochMilli();
+        Game taking = Game.fromSnapshot(new Game.Snapshot(
+                "TEST01", now, now, "h", GameStatus.IN_PROGRESS, Suit.SPADES, null, 1, 0, null, true, 6, 0L,
+                List.of(playerSnapshot("h", false, "7H", "8H", "9H", "10H", "JH"),
+                        playerSnapshot("b", true, "6D", "KS", "QC")),
+                cards("8D", "10D"), List.of(attack("6C", "b")), Set.of(), List.of(), List.of()));
+        store.put(taking);
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+        assertTrue(engineEntered.await(5, TimeUnit.SECONDS));
+        try {
+            assertEquals(Map.of("b", "thinking..."), webSocket.botThinkingForGame("TEST01"));
+        } finally {
+            releaseEngine.countDown();
+        }
+    }
+
     private static boolean waitUntil(java.util.function.BooleanSupplier condition, long timeoutMs)
             throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
@@ -837,6 +906,29 @@ class GameServiceTest {
                         playerSnapshot("b", true, "6C", "7D")
                 ),
                 Suit.SPADES, cards("8D", "10D"), 1, 0);
+    }
+
+    /** h=human attacker seat0 with three cards; b=bot defender seat1 holding {@code botCards}. */
+    private static Game twoPlayerBotDefender(String... botCards) {
+        return inProgress(
+                List.of(
+                        playerSnapshot("h", false, "KH", "QH", "JH"),
+                        playerSnapshot("b", true, botCards)
+                ),
+                Suit.SPADES, cards("8D", "10D"), 0, 1);
+    }
+
+    private static Game.AttackSnapshot attack(String card, String attackerId) {
+        return new Game.AttackSnapshot(Card.fromCode(card), null, attackerId);
+    }
+
+    private static Game withTable(Game game, Game.AttackSnapshot... table) {
+        Game.Snapshot s = game.toSnapshot();
+        return Game.fromSnapshot(new Game.Snapshot(
+                s.code(), s.createdAtEpochMs(), s.lastActivityAtEpochMs(), s.hostPlayerId(), s.status(),
+                s.trumpSuit(), s.trumpCard(), s.attackerIndex(), s.defenderIndex(), s.loserPlayerId(),
+                s.takingCardsInProgress(), s.takeLimit(), s.version(), s.players(), s.talon(),
+                List.of(table), s.endRoundApprovals(), s.discardedCards(), s.knownCardsByPlayer()));
     }
 
     /** h=human attacker seat0 holding a second nine; b=bot defender seat1 who can transfer with 9C. */

@@ -54,9 +54,13 @@ public class GameService {
     private static final int AUTO_PLAY_MAX_ITERATIONS = 48;
     /* Pause before the loop reschedules itself after a bout-ending move, so clients can render it. */
     private static final long AUTO_PLAY_RESCHEDULE_DELAY_MS = 250;
-    /* Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. */
+    /*
+     * Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. The
+     * wide jitter also blurs the gap between instant (forced) and deliberated moves, which would
+     * otherwise hint at what the bot holds.
+     */
     private static final long AUTO_PLAY_MIN_THINK_MS = 2000;
-    private static final int AUTO_PLAY_THINK_JITTER_MS = 1001;
+    private static final int AUTO_PLAY_THINK_JITTER_MS = 2001;
     /* Re-plans allowed per pass when a bot decision goes stale because another player moved first. */
     private static final int AUTO_PLAY_MAX_STALE_REPLANS = 5;
     /* Delayed retries after an unexpected failure (e.g. a store outage) before waiting for a read to resume the bot. */
@@ -877,19 +881,22 @@ public class GameService {
     }
 
     private AutoPlayAction forcedDefenseDisciplineAction(Game game, ViewerLegalMoves legalMoves) {
-        if (game.isTakingCardsInProgress() || !legalMoves.canTake()) {
+        // A legal transfer is a real alternative to taking, so that choice stays with the engine.
+        if (game.isTakingCardsInProgress() || !legalMoves.canTake() || legalMoves.canTransfer()) {
             return null;
         }
         boolean hasDefendedCardOnTable = game.getTable().stream().anyMatch(entry -> entry.getDefenseCard() != null);
         if (!hasDefendedCardOnTable && legalMoves.canDefend()
-                && !canDefendAllCurrentAttacks(legalMoves.defensesByAttackCard())) {
+                && !canDefendAllCurrentAttacks(game, legalMoves.defensesByAttackCard())) {
             return AutoPlayAction.take();
         }
         return null;
     }
 
-    private boolean canDefendAllCurrentAttacks(Map<String, List<String>> defensesByAttackCard) {
-        if (defensesByAttackCard.isEmpty()) {
+    private boolean canDefendAllCurrentAttacks(Game game, Map<String, List<String>> defensesByAttackCard) {
+        long undefended = game.getTable().stream().filter(entry -> !entry.isDefended()).count();
+        // Attacks that nothing in hand can beat have no entry in the map at all.
+        if (defensesByAttackCard.isEmpty() || defensesByAttackCard.size() < undefended) {
             return false;
         }
         List<Map.Entry<String, List<String>>> attacks = defensesByAttackCard.entrySet().stream()
@@ -931,17 +938,16 @@ public class GameService {
         }
     }
 
+    /**
+     * Shown to every player while a bot deliberates, so it may only reflect public facts (the bot's
+     * role). While the defender takes, whether an attacker can still throw in depends on its hand,
+     * so every attacking-side bot shows the same neutral text.
+     */
     private String thinkingMessage(Game game, ViewerLegalMoves legalMoves) {
         if (legalMoves.canDefend() || legalMoves.canTransfer() || legalMoves.canTake()) {
             return "planning defence...";
         }
-        if (legalMoves.canAttack()) {
-            return game.isTakingCardsInProgress() ? "planning throw-in..." : "planning attack...";
-        }
-        if (legalMoves.canEndRound()) {
-            return game.isTakingCardsInProgress() ? "planning end round..." : "planning attack...";
-        }
-        return "thinking...";
+        return game.isTakingCardsInProgress() ? "thinking..." : "planning attack...";
     }
 
     private boolean shouldWaitForDefender(Game game, ViewerLegalMoves legalMoves) {
