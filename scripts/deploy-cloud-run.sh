@@ -18,6 +18,10 @@ set -euo pipefail
 #   GEMINI_SECRET_VERSION=latest
 #   AUTOPLAY_GEMINI_MODEL=gemini-3.7-flash
 #   RUNTIME_SERVICE_ACCOUNT=service-account@project.iam.gserviceaccount.com
+#   CONCURRENCY=200          (max concurrent requests on the single instance; each open tab holds a websocket)
+#   REQUEST_TIMEOUT=3600     (seconds; Cloud Run closes websockets at this limit, default would be 300)
+#   MIN_INSTANCES=0          (0 = scale to zero when idle)
+#   LOG_FORMATTER=com.example.durakgame.logging.CloudLoggingJsonFormatter (structured JSON logs)
 
 : "${PROJECT_ID:?Set PROJECT_ID (your GCP project id)}"
 REGION="${REGION:-us-central1}"
@@ -32,6 +36,11 @@ GEMINI_SECRET_PROJECT="${GEMINI_SECRET_PROJECT:-${PROJECT_ID}}"
 GEMINI_SECRET_VERSION="${GEMINI_SECRET_VERSION:-latest}"
 AUTOPLAY_GEMINI_MODEL="${AUTOPLAY_GEMINI_MODEL:-gemini-3.7-flash}"
 RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
+CONCURRENCY="${CONCURRENCY:-200}"
+REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-3600}"
+MIN_INSTANCES="${MIN_INSTANCES:-0}"
+# One JSON object per log line with a Cloud Logging severity (see CloudLoggingJsonFormatter).
+LOG_FORMATTER="${LOG_FORMATTER:-com.example.durakgame.logging.CloudLoggingJsonFormatter}"
 GCLOUD_BIN="${GCLOUD_BIN:-gcloud}"
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${TAG}"
@@ -76,6 +85,7 @@ echo "==> Image: ${IMAGE}"
 echo "==> Gemini model: ${AUTOPLAY_GEMINI_MODEL}"
 echo "==> Gemini secret: ${GEMINI_SECRET_RESOURCE}:${GEMINI_SECRET_VERSION}"
 echo "==> Runtime service account: ${RUNTIME_SERVICE_ACCOUNT}"
+echo "==> Concurrency: ${CONCURRENCY}, request timeout: ${REQUEST_TIMEOUT}s, min instances: ${MIN_INSTANCES}"
 
 echo "==> Enabling required APIs"
 "${GCLOUD_BIN}" services enable \
@@ -136,16 +146,22 @@ echo "==> Building container image with Cloud Build"
 echo "==> Deploying to Cloud Run"
 # max-instances must stay 1: websocket fan-out, bot-thinking status, and the
 # per-game locks that prevent concurrent-write races all live in instance memory.
+# Every open tab holds a websocket, which counts against --concurrency for its whole
+# lifetime, so the Cloud Run default of 80 would cap the whole site at ~80 open tabs.
 DEPLOY_ARGS=(
   --image "${IMAGE}"
   --platform managed
   --region "${REGION}"
   --port 8080
   --max-instances 1
+  --min-instances "${MIN_INSTANCES}"
+  --concurrency "${CONCURRENCY}"
+  --timeout "${REQUEST_TIMEOUT}"
+  --cpu-boost
   --memory 512Mi
   --cpu 1
   --service-account "${RUNTIME_SERVICE_ACCOUNT}"
-  --update-env-vars "AUTOPLAY_GEMINI_MODEL=${AUTOPLAY_GEMINI_MODEL}"
+  --update-env-vars "AUTOPLAY_GEMINI_MODEL=${AUTOPLAY_GEMINI_MODEL},LOGGING_STRUCTURED_FORMAT_CONSOLE=${LOG_FORMATTER}"
   --update-secrets "GEMINI_API_KEY=${GEMINI_SECRET_RESOURCE}:${GEMINI_SECRET_VERSION}"
   --project "${PROJECT_ID}"
 )

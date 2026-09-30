@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -252,27 +253,43 @@ class GameServiceTest {
     }
 
     @Test
-    void isAuthorizedAcceptsPlayerIdForLegacyBlankSecret() {
-        // Games persisted before tokens decode with a blank secret; the id acts as the token.
+    void playerIdIsNotAcceptedAsAToken() {
+        // Seats from before per-player tokens decode with a blank secret; their public id no longer works.
         Game legacy = inProgress(
                 List.of(playerSnapshot("h", false, "9H"), playerSnapshot("b", false, "7D")),
                 Suit.SPADES, cards("8D"), 0, 1);
         GameService service = newService(new InMemoryGameStore());
 
-        assertTrue(service.isAuthorized(legacy, "h", "h"));
-        assertFalse(service.isAuthorized(legacy, "h", "not-h"));
+        assertFalse(service.isAuthorized(legacy, "h", "h"));
+        assertFalse(service.isAuthorized(legacy, "h", ""));
     }
 
     @Test
-    void requireAuthorizedThrowsOnBadToken() {
-        SnapshotGameStore store = new SnapshotGameStore();
+    void requireAuthorizedAcceptsOnlyTheSeatsSecret() {
+        InMemoryGameStore store = new InMemoryGameStore();
         GameService service = newService(store);
-        store.put(twoPlayerBoutOnEmptyTable());
+        Game game = service.createGame("Host");
+        Player host = game.getPlayers().getFirst();
 
+        service.requireAuthorized(game.getCode(), host.getId(), host.getSecret());
         assertThrows(UnauthorizedActionException.class,
-                () -> service.requireAuthorized("TEST01", "h", "bad-token"));
-        // Legacy fixture: the id is accepted, so this must not throw.
-        service.requireAuthorized("TEST01", "h", "h");
+                () -> service.requireAuthorized(game.getCode(), host.getId(), "bad-token"));
+        assertThrows(UnauthorizedActionException.class,
+                () -> service.requireAuthorized(game.getCode(), host.getId(), host.getId()));
+        assertThrows(UnauthorizedActionException.class,
+                () -> service.requireAuthorized(game.getCode(), host.getId(), null));
+    }
+
+    @Test
+    void authorizedViewerRevealsThePrivateViewOnlyWithTheSecret() {
+        GameService service = newService(new InMemoryGameStore());
+        Game game = service.createGame("Host");
+        Player host = game.getPlayers().getFirst();
+
+        assertEquals(host.getId(), service.authorizedViewer(game, host.getId(), host.getSecret()));
+        assertNull(service.authorizedViewer(game, host.getId(), "stale-token"));
+        assertNull(service.authorizedViewer(game, host.getId(), null));
+        assertNull(service.authorizedViewer(game, null, host.getSecret()));
     }
 
     // --- joinGame ---------------------------------------------------------
@@ -698,7 +715,139 @@ class GameServiceTest {
         assertTrue(defended, "bot defender should apply the engine-chosen defense");
     }
 
+    @Test
+    void illegalEngineDecisionFallsBackInsteadOfStallingTheTable() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        // A near-miss card code: the bot holds 6C, but "6c" is not a legal move as-is.
+        AutoPlayDecisionEngine engine = (game, playerId, legalMoves) -> AutoPlayAction.attack("6c");
+        GameService service = newService(store, engine);
+        store.put(twoPlayerBotOpensAttack());
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+
+        assertTrue(waitUntil(() -> !service.getGame("TEST01").getTable().isEmpty(), 10_000),
+                "bot must still open the bout when the engine's move is unusable");
+    }
+
+    @Test
+    void engineFailureFallsBackInsteadOfStallingTheTable() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        AutoPlayDecisionEngine engine = (game, playerId, legalMoves) -> {
+            throw new IllegalStateException("model unavailable");
+        };
+        GameService service = newService(store, engine);
+        store.put(twoPlayerBotOpensAttack());
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+
+        assertTrue(waitUntil(() -> !service.getGame("TEST01").getTable().isEmpty(), 10_000),
+                "bot must still open the bout when the engine throws");
+    }
+
+    @Test
+    void humanMoveDuringBotDeliberationIsNotLost() throws Exception {
+        SnapshotGameStore store = new SnapshotGameStore();
+        CountDownLatch engineEntered = new CountDownLatch(1);
+        CountDownLatch releaseEngine = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+        // First decision is slow; by the time it lands, the human's throw-in has made it illegal.
+        AutoPlayDecisionEngine engine = (game, playerId, legalMoves) -> {
+            if (calls.incrementAndGet() == 1) {
+                engineEntered.countDown();
+                try {
+                    releaseEngine.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return AutoPlayAction.transfer("9C");
+        };
+        GameService service = newService(store, engine);
+        store.put(twoPlayerBotDefenderCanTransfer());
+
+        service.attack("TEST01", "h", Card.fromCode("9H"));
+        assertTrue(engineEntered.await(5, TimeUnit.SECONDS));
+        // Legal throw-in while the bot deliberates; afterwards the bot's transfer no longer fits.
+        service.attack("TEST01", "h", Card.fromCode("9D"));
+        releaseEngine.countDown();
+
+        assertTrue(waitUntil(() -> {
+            Game game = service.getGame("TEST01");
+            return game.isTakingCardsInProgress()
+                    || game.getTable().stream().anyMatch(com.example.durakgame.model.AttackEntry::isDefended);
+        }, 20_000), "bot defender must respond to the throw-in instead of waiting forever");
+    }
+
+    @Test
+    void readPathsResumeABotTurnNothingIsDriving() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        AtomicInteger calls = new AtomicInteger();
+        AutoPlayDecisionEngine engine = (game, playerId, legalMoves) -> {
+            calls.incrementAndGet();
+            return AutoPlayAction.attack("6C");
+        };
+        GameService service = newService(store, engine);
+        // Simulates a restart: the bot owes the opening attack but no pass is running.
+        store.put(twoPlayerBotOpensAttack());
+
+        service.heartbeat("TEST01", "h");
+
+        assertTrue(waitUntil(() -> !service.getGame("TEST01").getTable().isEmpty(), 10_000),
+                "a heartbeat should restart the owed bot turn");
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void resumeDoesNothingWhenTheBotOwesNoMove() throws InterruptedException {
+        SnapshotGameStore store = new SnapshotGameStore();
+        AtomicInteger calls = new AtomicInteger();
+        GameService service = newService(store, (game, playerId, legalMoves) -> {
+            calls.incrementAndGet();
+            return null;
+        });
+        // The human attacker is to move; the bot defender has nothing to answer yet.
+        store.put(twoPlayerBotDefenderCanBeat());
+
+        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+        Thread.sleep(300);
+
+        assertEquals(0, calls.get());
+        assertTrue(service.getGame("TEST01").getTable().isEmpty());
+    }
+
+    private static boolean waitUntil(java.util.function.BooleanSupplier condition, long timeoutMs)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.getAsBoolean()) {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return condition.getAsBoolean();
+    }
+
     // --- helpers ----------------------------------------------------------
+
+    /** h=human defender seat0; b=bot attacker seat1 who must open the bout. */
+    private static Game twoPlayerBotOpensAttack() {
+        return inProgress(
+                List.of(
+                        playerSnapshot("h", false, "9H", "8C"),
+                        playerSnapshot("b", true, "6C", "7D")
+                ),
+                Suit.SPADES, cards("8D", "10D"), 1, 0);
+    }
+
+    /** h=human attacker seat0 holding a second nine; b=bot defender seat1 who can transfer with 9C. */
+    private static Game twoPlayerBotDefenderCanTransfer() {
+        return inProgress(
+                List.of(
+                        playerSnapshot("h", false, "9H", "9D", "8C"),
+                        playerSnapshot("b", true, "9C", "10H", "7D", "6D")
+                ),
+                Suit.SPADES, cards("QD", "KD"), 0, 1);
+    }
 
     /** Two humans, in progress, empty table, h=attacker seat0, b=defender seat1. */
     private static Game twoPlayerBoutOnEmptyTable() {

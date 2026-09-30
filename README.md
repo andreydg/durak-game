@@ -21,7 +21,7 @@ Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) a
 
 | Layer | Tool | Command | Covers |
 | --- | --- | --- | --- |
-| Backend | JUnit / Maven | `./mvnw test` | Game rules, `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, stores |
+| Backend | JUnit / Maven | `./mvnw test` | Game rules (including a seeded rules fuzzer), `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, security headers, stores |
 | Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
 | Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js) |
 | End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, finished results/rematches, hand privacy / anti-cheat) |
@@ -35,13 +35,20 @@ npx playwright install --with-deps chromium   # only needed for E2E
 
 The Playwright config boots the packaged jar itself (in-memory store and offline heuristic bot; no API keys needed), so run `./mvnw -DskipTests package` once before `npm run test:e2e`.
 
+`DurakRulesFuzzTest` plays seeded random games through the rules engine, checking card conservation, legal beats, bout limits, roles and results after every action, and fires illegal "probe" actions that must leave the game unchanged. CI runs a few-second sweep; for a deep one run `./mvnw test -Dtest=DurakRulesFuzzTest -Dfuzz.games=4000 -Dfuzz.seed=424242` (reports land in `target/fuzz-reports/`).
+
 The Firestore emulator tests run automatically in CI (against the emulator Docker image). Locally they only run when an emulator is reachable. For example, run `gcloud beta emulators firestore start --host-port=localhost:8085` then `FIRESTORE_EMULATOR_HOST=localhost:8085 ./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` (needs a JDK the emulator supports).
 
 ## Security & limits
 
-- **Per-player tokens.** Create/join returns a secret token (sent back via the `X-Durak-Token` header). The server reveals a player's hand and accepts their moves only with a matching token, so the room code alone can't read hands or spoof opponents. Games persisted before tokens fall back to accepting the player id.
-- **Rate limiting.** Per-IP token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; game and lobby WebSocket handlers cap their connection sets. Defaults are generous enough for players behind a shared NAT.
+- **Per-player tokens.** Create/join returns a secret token (sent back via the `X-Durak-Token` header). The server reveals a player's hand and accepts their moves only with a matching token, so the room code alone can't read hands or spoof opponents. The (public) player id is never accepted as a token. Rejected tokens are logged as `auth_rejected` (seat and reason, never the token), at most once a minute per seat.
+- **Rate limiting.** Per-client token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; game and lobby WebSocket handlers cap their connection sets. Defaults are generous enough for players behind a shared NAT. The client is the `X-Forwarded-For` entry appended by the trusted proxy, counted from the right (`app.ratelimit.forwarded-for-hops`: `1` for Cloud Run, `2` behind an external load balancer); entries further left are client-supplied and ignored. IPv6 clients are bucketed per /64. This limit also caps Gemini spend, since a Quick Play game can make the bot's first model call without further input.
+- **Browser hardening.** Every response carries a Content-Security-Policy (scripts only from this origin; an inline import map would be allowed by its hash), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a referrer policy, a permissions policy, and HSTS over HTTPS. Deals are shuffled with `SecureRandom`.
 - **Health.** `/actuator/health` reports `DOWN` when the game store is unreachable; it's the platform health-check path.
+
+## Logging
+
+On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every log event is one JSON object with a Cloud Logging `severity`, `message` and `time` (stack traces stay in their entry and reach Error Reporting). Messages are `key=value` style, so they work well in Logs Explorer queries and log-based metrics, for example `jsonPayload.message:"autoplay_applied"` (each bot move, with `source=forced|engine|fallback`) or `jsonPayload.message:"auth_rejected"`. Local runs keep Spring's readable console format.
 
 ## Realtime updates and fallback reads
 
@@ -127,6 +134,10 @@ Optional environment variables:
 - `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
 - `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.7-flash`)
 - `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
+- `CONCURRENCY` (default `200`; every open tab holds a websocket that counts against it)
+- `REQUEST_TIMEOUT` (default `3600` seconds; Cloud Run closes websockets at this limit)
+- `MIN_INSTANCES` (default `0`, i.e. scale to zero when idle)
+- `LOG_FORMATTER` (default `com.example.durakgame.logging.CloudLoggingJsonFormatter`)
 
 Example:
 
@@ -148,5 +159,7 @@ The deploy script pins the service to one instance (`--max-instances 1`). Keep i
 
 - Websocket sessions, lobby invalidation revisions, and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
 - Concurrent-write protection uses in-process per-game locks (plus a stale-version check on every Firestore save as a safety net). Multiple instances would rely on the version check alone and reject racing writes instead of serializing them.
+
+Because a websocket occupies a request slot for as long as the tab is open, the single instance's `--concurrency` (200 by default, Cloud Run's maximum is 1000) is effectively the number of simultaneously open tabs it can serve. The script also sets `--timeout 3600` so Cloud Run doesn't cut every websocket after its default five minutes, and `--cpu-boost` for faster cold starts. The container defaults `JAVA_OPTS` to `-XX:MaxRAMPercentage=75.0`; without it the JVM would cap the heap at a quarter of the 512 MiB instance.
 
 Game state itself persists in Firestore on Cloud Run, so a restart does not lose active rooms. To scale beyond one instance later, move websocket fan-out and bot status to a shared channel (for example Firestore listeners or Pub/Sub).

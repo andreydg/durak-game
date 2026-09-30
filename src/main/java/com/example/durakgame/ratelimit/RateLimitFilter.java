@@ -2,10 +2,13 @@ package com.example.durakgame.ratelimit;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletRequestWrapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -17,6 +20,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ServletRequestPathUtils;
 
 import java.io.IOException;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -32,8 +41,11 @@ import java.util.function.Supplier;
 public class RateLimitFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(RateLimitFilter.class);
     private static final long IDLE_EVICTION_NANOS = 10L * 60 * 1_000_000_000L;
+    private static final int MAX_TRACKED_CLIENTS = 100_000;
+    private static final String OVERFLOW_KEY = "overflow";
 
     private final boolean enabled;
+    private final int forwardedForHops;
     private final double generalBurst;
     private final double generalPerSecond;
     private final double createBurst;
@@ -42,18 +54,31 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final ConcurrentHashMap<String, TokenBucket> generalBuckets = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, TokenBucket> createBuckets = new ConcurrentHashMap<>();
 
+    /**
+     * @param forwardedForHops which {@code X-Forwarded-For} entry, counted from the right, is the
+     *     client: 1 when Cloud Run's front end is the only proxy; 2 behind an external load balancer
+     *     that appends its own address too; 0 to ignore the header (direct connections).
+     */
+    @Autowired
     public RateLimitFilter(
             @Value("${app.ratelimit.enabled:true}") boolean enabled,
             @Value("${app.ratelimit.general-burst:120}") double generalBurst,
             @Value("${app.ratelimit.general-per-second:50}") double generalPerSecond,
             @Value("${app.ratelimit.create-burst:30}") double createBurst,
-            @Value("${app.ratelimit.create-per-minute:60}") double createPerMinute
+            @Value("${app.ratelimit.create-per-minute:60}") double createPerMinute,
+            @Value("${app.ratelimit.forwarded-for-hops:1}") int forwardedForHops
     ) {
         this.enabled = enabled;
+        this.forwardedForHops = forwardedForHops;
         this.generalBurst = generalBurst;
         this.generalPerSecond = generalPerSecond;
         this.createBurst = createBurst;
         this.createPerSecond = createPerMinute / 60.0;
+    }
+
+    RateLimitFilter(boolean enabled, double generalBurst, double generalPerSecond,
+                    double createBurst, double createPerMinute) {
+        this(enabled, generalBurst, generalPerSecond, createBurst, createPerMinute, 1);
     }
 
     @Override
@@ -68,13 +93,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        String ip = clientIp(request);
+        String client = clientKey(request);
 
-        if (isGameCreation(request) && !allow(createBuckets, ip, () -> new TokenBucket(createBurst, createPerSecond))) {
+        if (isGameCreation(request) && !allow(createBuckets, client, () -> new TokenBucket(createBurst, createPerSecond))) {
             reject(response, "Too many games created. Slow down.");
             return;
         }
-        if (!allow(generalBuckets, ip, () -> new TokenBucket(generalBurst, generalPerSecond))) {
+        if (!allow(generalBuckets, client, () -> new TokenBucket(generalBurst, generalPerSecond))) {
             reject(response, "Too many requests. Slow down.");
             return;
         }
@@ -108,8 +133,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
     }
 
-    private boolean allow(ConcurrentHashMap<String, TokenBucket> buckets, String ip, Supplier<TokenBucket> factory) {
-        return buckets.computeIfAbsent(ip, ignored -> factory.get()).tryConsume();
+    private boolean allow(ConcurrentHashMap<String, TokenBucket> buckets, String key, Supplier<TokenBucket> factory) {
+        TokenBucket bucket = buckets.get(key);
+        if (bucket == null) {
+            // Bounded tracking: once full, unknown clients share one bucket until idle ones are evicted.
+            String trackedKey = buckets.size() < MAX_TRACKED_CLIENTS ? key : OVERFLOW_KEY;
+            bucket = buckets.computeIfAbsent(trackedKey, ignored -> factory.get());
+        }
+        return bucket.tryConsume();
     }
 
     private void reject(HttpServletResponse response, String message) throws IOException {
@@ -119,13 +150,58 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 "{\"status\":429,\"error\":\"Too Many Requests\",\"message\":\"" + message + "\"}");
     }
 
-    private static String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            int comma = forwarded.indexOf(',');
-            return (comma > 0 ? forwarded.substring(0, comma) : forwarded).trim();
+    /**
+     * Identifies the client by the address the trusted proxy saw. Cloud Run's front end appends the
+     * connecting address to {@code X-Forwarded-For}, so only entries counted from the right are
+     * trustworthy; anything further left is client-supplied, and trusting it would let a caller mint
+     * a fresh bucket per request. Spring's forwarded-header support has already replaced
+     * {@code getRemoteAddr()} with that leftmost value and hidden the header, so read the raw request.
+     */
+    String clientKey(HttpServletRequest request) {
+        HttpServletRequest raw = unwrap(request);
+        String address = null;
+        List<String> hops = forwardedFor(raw);
+        if (!hops.isEmpty() && forwardedForHops > 0) {
+            address = hops.get(Math.max(0, hops.size() - forwardedForHops));
         }
-        return request.getRemoteAddr();
+        if (address == null || address.isEmpty()) {
+            address = raw.getRemoteAddr();
+        }
+        return bucketKey(address);
+    }
+
+    private static List<String> forwardedFor(HttpServletRequest raw) {
+        List<String> hops = new ArrayList<>();
+        Enumeration<String> headers = raw.getHeaders("X-Forwarded-For");
+        while (headers != null && headers.hasMoreElements()) {
+            for (String hop : headers.nextElement().split(",")) {
+                if (!hop.isBlank()) {
+                    hops.add(hop.trim());
+                }
+            }
+        }
+        return hops;
+    }
+
+    private static HttpServletRequest unwrap(HttpServletRequest request) {
+        ServletRequest current = request;
+        while (current instanceof ServletRequestWrapper wrapper) {
+            current = wrapper.getRequest();
+        }
+        return current instanceof HttpServletRequest raw ? raw : request;
+    }
+
+    /** IPv6 clients are bucketed per /64, since a single subscriber typically controls the whole prefix. */
+    static String bucketKey(String address) {
+        try {
+            InetAddress parsed = InetAddress.ofLiteral(address);   // literal parsing only, never DNS
+            if (parsed instanceof Inet6Address) {
+                return "v6:" + HexFormat.of().formatHex(parsed.getAddress(), 0, 8);
+            }
+            return parsed.getHostAddress();
+        } catch (IllegalArgumentException notALiteral) {
+            return address.length() > 64 ? address.substring(0, 64) : address;
+        }
     }
 
     /** Evicts idle buckets so the per-IP tracking maps stay bounded. */
