@@ -507,7 +507,8 @@ function renderSeat(el, player, game) {
     const thinking = state.botThinking[player.id]
         ? `<span class="bot-thinking-inline">${escapeHtml(state.botThinking[player.id]).replace(/\\.\\.\\.$/, "")}<span class="bot-thinking-dots"></span></span>` : "";
     const tagHtml = tags ? `<span class="seat-role-inline">${escapeHtml(tags)}</span>` : "";
-    el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}${tagHtml}${thinking}</div>
+    /* <wbr>: narrow seats may wrap between the name and its badges instead of mid-word. */
+    el.innerHTML = `<div class="seat-title${teamClass}">${escapeHtml(player.name)}${aiBadge}<wbr>${tagHtml}<wbr>${thinking}</div>
         <div class="${fanClass}">${backs}</div>`;
 }
 
