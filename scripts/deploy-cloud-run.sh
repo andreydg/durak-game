@@ -21,6 +21,7 @@ set -euo pipefail
 #   CONCURRENCY=200          (max concurrent requests on the single instance; each open tab holds a websocket)
 #   REQUEST_TIMEOUT=3600     (seconds; Cloud Run closes websockets at this limit, default would be 300)
 #   MIN_INSTANCES=0          (0 = scale to zero when idle)
+#   LOG_FORMATTER=com.example.durakgame.logging.CloudLoggingJsonFormatter (structured JSON logs)
 
 : "${PROJECT_ID:?Set PROJECT_ID (your GCP project id)}"
 REGION="${REGION:-us-central1}"
@@ -38,6 +39,8 @@ RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
 CONCURRENCY="${CONCURRENCY:-200}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-3600}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
+# One JSON object per log line with a Cloud Logging severity (see CloudLoggingJsonFormatter).
+LOG_FORMATTER="${LOG_FORMATTER:-com.example.durakgame.logging.CloudLoggingJsonFormatter}"
 GCLOUD_BIN="${GCLOUD_BIN:-gcloud}"
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${TAG}"
@@ -158,7 +161,7 @@ DEPLOY_ARGS=(
   --memory 512Mi
   --cpu 1
   --service-account "${RUNTIME_SERVICE_ACCOUNT}"
-  --update-env-vars "AUTOPLAY_GEMINI_MODEL=${AUTOPLAY_GEMINI_MODEL}"
+  --update-env-vars "AUTOPLAY_GEMINI_MODEL=${AUTOPLAY_GEMINI_MODEL},LOGGING_STRUCTURED_FORMAT_CONSOLE=${LOG_FORMATTER}"
   --update-secrets "GEMINI_API_KEY=${GEMINI_SECRET_RESOURCE}:${GEMINI_SECRET_VERSION}"
   --project "${PROJECT_ID}"
 )

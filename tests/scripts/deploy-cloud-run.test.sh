@@ -109,6 +109,7 @@ assert_contains "${DEFAULT_CALLS}" $'--min-instances\t0'
 assert_contains "${DEFAULT_CALLS}" $'--concurrency\t200'
 assert_contains "${DEFAULT_CALLS}" $'--timeout\t3600'
 assert_contains "${DEFAULT_CALLS}" $'--cpu-boost'
+assert_contains "${DEFAULT_CALLS}" 'LOGGING_STRUCTURED_FORMAT_CONSOLE=com.example.durakgame.logging.CloudLoggingJsonFormatter'
 
 PRODUCTION_CALLS="${TMP_DIR}/production.calls"
 run_deploy "${PRODUCTION_CALLS}" \
