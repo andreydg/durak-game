@@ -40,10 +40,14 @@ test.describe("Game table layout", () => {
                 const lastCard = await page.locator("#myHand .hand-card-btn").last().boundingBox();
                 const railBox = await rail.boundingBox();
                 expect(lastCard.x + lastCard.width).toBeLessThanOrEqual(railBox.x + railBox.width + 0.5);
+                const actionTops = new Set();
                 for (const id of ["#attackBtn", "#defendBtn", "#transferBtn", "#takeBtn", "#endRoundBtn"]) {
                     const box = await page.locator(id).boundingBox();
                     expect(box.x + box.width, id).toBeLessThanOrEqual(clientWidth);
+                    actionTops.add(Math.round(box.y));
                 }
+                // The sticky action strip is a single compact row, so it hides as little as possible.
+                expect(actionTops.size).toBe(1);
 
                 // The draw pile and trump never cover a player's name.
                 const titles = [await page.locator("#mySeatTitle").boundingBox()];
@@ -80,6 +84,52 @@ test.describe("Game table layout", () => {
             await rail.evaluate(el => { el.scrollLeft = el.scrollWidth; });
             const lastCard = await page.locator("#myHand .hand-card-btn").last().boundingBox();
             expect(lastCard.x + lastCard.width).toBeLessThanOrEqual(railBox.x + railBox.width + 0.5);
+        });
+    }
+
+    /*
+     * A fresh deal on a phone: long names, the bot "thinking" note and, with four players, the
+     * opening-lead line above the table. The sticky action strip must not hide the hand.
+     */
+    async function openFreshDeal(page, {width, height, players}) {
+        await page.setViewportSize({width, height});
+        await seedSession(page);
+        await serveGame(page, syntheticGame({players, botThinking: {p2: "planning attack..."}}));
+        await page.goto("/");
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
+        await page.evaluate(() => window.scrollTo(0, 0));
+    }
+
+    async function handAndChrome(page) {
+        const cards = [];
+        for (const card of await page.locator("#myHand .hand-card-btn").all()) cards.push(await card.boundingBox());
+        return {
+            top: Math.min(...cards.map(c => c.y)),
+            bottom: Math.max(...cards.map(c => c.y + c.height)),
+            stripTop: (await page.locator(".action-strip").boundingBox()).y,
+            headerBottom: await page.locator("#gameView .room-header").evaluate(el => el.getBoundingClientRect().bottom)
+        };
+    }
+
+    for (const players of [2, 4]) {
+        test(`a fresh ${players}-player hand is fully visible above the action strip at 375x812`, async ({ page }) => {
+            await openFreshDeal(page, {width: 375, height: 812, players});
+            const {top, bottom, stripTop} = await handAndChrome(page);
+            expect(top).toBeGreaterThan(0);
+            expect(bottom).toBeLessThanOrEqual(stripTop + 0.5);
+        });
+    }
+
+    for (const players of [2, 3, 4]) {
+        test(`at 375x667 a ${players}-player hand is at least half visible, and fully visible at max scroll`, async ({ page }) => {
+            await openFreshDeal(page, {width: 375, height: 667, players});
+            const atTop = await handAndChrome(page);
+            expect(atTop.stripTop - atTop.top).toBeGreaterThanOrEqual((atTop.bottom - atTop.top) / 2);
+
+            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+            const atEnd = await handAndChrome(page);
+            expect(atEnd.top).toBeGreaterThanOrEqual(atEnd.headerBottom - 0.5);
+            expect(atEnd.bottom).toBeLessThanOrEqual(atEnd.stripTop + 0.5);
         });
     }
 

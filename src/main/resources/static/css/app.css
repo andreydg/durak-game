@@ -224,6 +224,26 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     .room-actions {
         justify-content: flex-start;
     }
+    /* During play only Leave is left in the header: keep it beside the title, not on its own row. */
+    #gameView.game-view--active .room-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.5rem 0.75rem;
+    }
+    /*
+      Keep the header short on phones while playing: the seats already show every name, and
+      public/invite-only only matters in the waiting room (the pill returns there).
+    */
+    #gameView.game-view--active .visibility-pill {
+        display: none;
+    }
+    #gameView.game-view--active .room-meta {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        overflow: hidden;
+        font-size: 0.82rem;
+    }
 }
 .pill {
     border-radius: 999px;
@@ -849,10 +869,10 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
         grid-column: 2;
         grid-row: 1;
         position: relative;
-        /* 0.5 x the drawn footprint of the talon + sideways trump (143 x 123 px) */
-        width: 72px;
-        min-width: 72px;
-        height: 62px;
+        /* 0.42 x the drawn footprint of the talon + sideways trump (143 x 123 px): two HUD rows high */
+        width: 61px;
+        min-width: 61px;
+        height: 52px;
         margin-bottom: 0.7rem;
         padding: 0;
     }
@@ -865,8 +885,8 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
         max-width: none;
         margin: 0;
         transform-origin: 0 0;
-        /* Shift the footprint's top-left corner (-7px, 41.6px) onto the box origin, then halve. */
-        transform: scale(0.5) translate(7px, -41.6px);
+        /* Shift the footprint's top-left corner (-7px, 41.6px) onto the box origin, then scale. */
+        transform: scale(0.42) translate(7px, -41.6px);
     }
     .hand-row {
         flex-wrap: nowrap;
@@ -881,7 +901,9 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
         position: sticky;
         z-index: 35;
         bottom: max(0.35rem, env(safe-area-inset-bottom, 0px));
-        padding: 0.45rem;
+        /* One compact row: a two-row strip hid the hand behind it on phones. */
+        gap: clamp(0.2rem, 1vw, 0.3rem);
+        padding: 0.3rem;
         border: 1px solid var(--border-strong);
         border-radius: 12px;
         background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -889,7 +911,63 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
         backdrop-filter: blur(10px);
     }
     .action-strip button {
-        min-height: 2.45rem;
+        /*
+          Zero basis: the five buttons share the row and only wrap their label ("Take / cards")
+          when narrow, which keeps all of them on one line from 320px up.
+        */
+        flex: 1 1 0;
+        min-height: 2.4rem;
+        padding: 0.2rem 0.15rem;
+        font-size: clamp(0.66rem, 3.4vw, 0.82rem);
+        line-height: 1.15;
+    }
+    .action-strip select {
+        flex: 1 1 100%;
+    }
+    /* Keyboard focus never parks a card behind the sticky strip. */
+    .hand-card-btn {
+        scroll-margin-bottom: 4.5rem;
+    }
+    /* Vertical trims so a fresh hand sits above the strip: */
+    #gameView.stack {
+        gap: 0.6rem;
+    }
+    .hud {
+        gap: 0.35rem;
+        margin-bottom: 0.45rem;
+    }
+    .hud .pill {
+        font-size: 0.82rem;
+    }
+    .deck-outside {
+        margin-bottom: 0.45rem;
+    }
+    .opening-lead-hud {
+        font-size: 0.76rem;
+        margin: -0.2rem 0 0.45rem;
+    }
+    /* The rotated backs rise only a few pixels above the fan box; 12px of headroom is desktop-sized. */
+    .back-fan {
+        padding-top: 6px;
+        min-height: min(72px, calc(var(--fan-card-w) * 1.4 + 12px));
+    }
+    .table-grid {
+        gap: 0.5rem;
+    }
+    .seat.center {
+        /* Room for one row of phone-sized table cards (about 92px high plus padding). */
+        min-height: 7rem;
+    }
+    .seat.bottom.my-hand {
+        padding-top: 0.45rem;
+    }
+    /* Never filled by the game; on phones it should not reserve a line above the hand. */
+    .my-hand .my-role-line {
+        min-height: 0;
+    }
+    .hand-scroll {
+        padding-top: 2px;
+        padding-bottom: 8px;
     }
 }
 /* Phones: trim nested padding so a full hand and three opponent seats get the width. */
