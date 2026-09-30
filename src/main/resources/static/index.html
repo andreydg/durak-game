@@ -26,8 +26,8 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-    <link rel="stylesheet" href="/css/theme.css?v=a7ed9f34f34c">
-    <link rel="stylesheet" href="/css/app.css?v=aeae75ef1f32">
+    <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
+    <link rel="stylesheet" href="/css/app.css?v=4b4e1f9c6299">
     <link rel="stylesheet" href="/css/content.css?v=915568db78e3">
     <script type="application/ld+json">
     {
@@ -51,6 +51,10 @@
 </head>
 <body>
 <div id="appAlert" class="app-alert hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<div id="liveAnnouncer" class="visually-hidden" aria-live="polite"></div>
+<section id="reconnectView" class="panel reconnect-view hidden" role="status">
+    <p>Reconnecting to room <strong id="reconnectCode" class="room-code"></strong>…</p>
+</section>
 <section id="lobbyView" class="lobby-root">
     <header class="lobby-hero">
         <nav class="site-nav" aria-label="Site navigation">
@@ -63,7 +67,7 @@
                 <span class="card-back-face"></span>
             </div>
             <div>
-                <h1 class="lobby-title">Durak <span>Дурак</span></h1>
+                <h1 id="lobbyHeading" class="lobby-title" tabindex="-1">Durak <span>Дурак</span></h1>
                 <p class="lobby-tagline">Create a room or join with a code.</p>
                 <div class="lobby-suits" aria-hidden="true">♠ ♥ ♦ ♣</div>
             </div>
@@ -105,7 +109,7 @@
         </form>
     </div>
     <div class="lobby-open-tables panel" id="lobbyOpenTables">
-        <h2>Open tables</h2>
+        <h2 id="openTablesHeading" tabindex="-1">Open tables</h2>
         <p class="lobby-hint muted" style="margin-top:-0.35rem;margin-bottom:0.75rem;">Rooms stay listed until four players join, the host starts, the table is inactive for 30 minutes, or it has waited for 2 hours. A completed round that returns to the lobby starts a fresh waiting window. Tap Join to use your name from the form above (or a random name if empty).</p>
         <div id="lobbyGameList" class="lobby-list-host" aria-live="polite"></div>
     </div>
@@ -138,7 +142,7 @@
     <div class="panel room-header">
         <div>
             <div class="room-title-row">
-                <h2 class="room-title">Game <span id="gameCodeLabel" class="room-code"></span></h2>
+                <h2 id="roomHeading" class="room-title" tabindex="-1">Game <span id="gameCodeLabel" class="room-code"></span></h2>
                 <span id="statusLabel" class="status-pill"></span>
                 <span id="visibilityLabel" class="visibility-pill"></span>
             </div>
@@ -158,11 +162,16 @@
         </div>
     </div>
 
-    <section id="resultPanel" class="panel result-panel hidden" aria-live="polite">
+    <div id="seatNotice" class="seat-notice hidden" role="alert">
+        <p id="seatNoticeText" class="seat-notice-text"></p>
+        <button id="seatNoticeLobbyBtn" type="button" class="btn btn-secondary">Back to lobby</button>
+    </div>
+
+    <section id="resultPanel" class="panel result-panel hidden" aria-labelledby="resultTitle">
         <div id="resultIcon" class="result-icon" aria-hidden="true">🏆</div>
         <div class="result-copy">
             <p class="result-eyebrow">Game complete</p>
-            <h2 id="resultTitle">Round finished</h2>
+            <h2 id="resultTitle" tabindex="-1">Round finished</h2>
             <p id="resultSummary" class="muted"></p>
             <p id="rematchWaiting" class="result-waiting muted hidden">Waiting for the host to deal the next game.</p>
         </div>
@@ -173,11 +182,11 @@
 
     <div id="playingArea" class="table-shell">
         <div class="hud">
-            <span class="pill" title="Attacker"><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
-            <span class="pill" title="Defender"><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
+            <span class="pill" title="Attacker"><span class="visually-hidden">Attacker: </span><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
+            <span class="pill" title="Defender"><span class="visually-hidden">Defender: </span><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
             <span id="trumpSuitHud" class="pill hidden" title="Trump suit"></span>
         </div>
-        <div id="openingLeadHud" class="opening-lead-hud hidden" aria-live="polite"></div>
+        <div id="openingLeadHud" class="opening-lead-hud hidden"></div>
         <div class="table-felt-wrap">
             <aside class="deck-outside deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
                 <div class="deck-tableau">
@@ -191,7 +200,7 @@
             <div class="seat top seat-top-3" id="seatTop3"></div>
             <div class="seat left" id="seatLeft"></div>
             <div class="seat center">
-                <div id="battleTableBanner" class="battle-table-banner hidden" aria-live="polite"></div>
+                <div id="battleTableBanner" class="battle-table-banner hidden"></div>
                 <div id="battleCards" class="battle-row"></div>
             </div>
             <div class="seat right" id="seatRight"></div>
@@ -200,7 +209,7 @@
                 <div class="muted my-role-line" id="myRoleLine" aria-live="polite"></div>
                 <div class="hand-scroll">
                     <div class="hand-scroll-x">
-                        <div id="myHand" class="hand-row"></div>
+                        <div id="myHand" class="hand-row" role="group" aria-label="Your cards"></div>
                     </div>
                 </div>
                 <div class="action-strip">
@@ -209,6 +218,7 @@
                     <button id="transferBtn">Transfer</button>
                     <button id="takeBtn">Take cards</button>
                     <button id="endRoundBtn">End round</button>
+                    <label for="defendTargetSelect" class="visually-hidden">Attack card to beat</label>
                     <select id="defendTargetSelect" class="hidden"></select>
                 </div>
                 <div id="actionHint" class="muted"></div>
@@ -220,12 +230,23 @@
     </div>
 </section>
 
+<dialog id="leaveDialog" class="leave-dialog" aria-labelledby="leaveDialogTitle" aria-describedby="leaveDialogText">
+    <form method="dialog">
+        <h2 id="leaveDialogTitle">Leave this game?</h2>
+        <p id="leaveDialogText">The game is still in progress. Leaving ends it for everyone at the table and sends the room back to the lobby.</p>
+        <div class="leave-dialog-actions">
+            <button type="submit" value="stay" class="btn btn-secondary" id="leaveCancelBtn" autofocus>Stay</button>
+            <button type="submit" value="leave" class="btn btn-danger" id="leaveConfirmBtn">Leave game</button>
+        </div>
+    </form>
+</dialog>
+
 <section id="messagesPanel" class="panel hidden">
     <h3>Messages</h3>
     <pre id="messages">Ready.</pre>
 </section>
 
-<script src="/js/logic.js?v=1e44c04d7a88"></script>
-<script src="/js/app.js?v=980a1a36811d"></script>
+<script src="/js/logic.js?v=7c1eccee0a62"></script>
+<script src="/js/app.js?v=884002d18404"></script>
 </body>
 </html>

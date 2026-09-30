@@ -9,6 +9,21 @@ body {
 }
 /* Must win over .stack etc., or #gameView stays visible and the table leaks onto the lobby. */
 .hidden { display: none !important; }
+/* View headings take focus on view changes; show a ring only for keyboard users. */
+[tabindex="-1"]:focus:not(:focus-visible) { outline: none; }
+/* Read by screen readers, not shown. */
+.visually-hidden {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
 .app-alert {
     position: fixed;
     z-index: 1000;
@@ -25,6 +40,62 @@ body {
     font-weight: 700;
     line-height: 1.4;
     pointer-events: none;
+}
+/* Same danger treatment as .app-alert, but in the page flow so its button can be used. */
+.seat-notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.65rem 1rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--danger);
+    border-radius: 10px;
+    color: var(--danger-strong);
+    background: color-mix(in srgb, var(--danger) 12%, white);
+    box-shadow: var(--shadow-soft);
+    font-weight: 700;
+    line-height: 1.4;
+}
+.seat-notice-text {
+    flex: 1 1 16rem;
+    margin: 0;
+}
+.leave-dialog {
+    width: min(28rem, calc(100vw - 2rem));
+    padding: 1.1rem 1.2rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    color: var(--text);
+    background: var(--bg);
+    box-shadow: var(--shadow);
+}
+.leave-dialog::backdrop {
+    background: rgba(40, 33, 20, 0.45);
+}
+.leave-dialog h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.15rem;
+}
+.leave-dialog p {
+    margin: 0 0 1rem;
+    color: var(--text-soft);
+    line-height: 1.45;
+}
+.leave-dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+.reconnect-view {
+    max-width: 880px;
+    margin: 2rem auto;
+    text-align: center;
+}
+.reconnect-view p {
+    margin: 0.4rem 0;
+    font-weight: 700;
 }
 .stack { display: grid; gap: 1rem; }
 .panel {
@@ -46,6 +117,9 @@ input, button, select {
 input::placeholder { color: var(--text-dim); }
 button { cursor: pointer; color: var(--text); background: var(--surface-strong); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
+/* A focused control that is only busy keeps focus (aria-disabled) but looks disabled. */
+button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-allowed; }
+.hand-card-btn[aria-disabled="true"] { cursor: progress; }
 .btn {
     border-radius: 999px;
     padding: 0.48rem 0.82rem;
@@ -149,6 +223,26 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     }
     .room-actions {
         justify-content: flex-start;
+    }
+    /* During play only Leave is left in the header: keep it beside the title, not on its own row. */
+    #gameView.game-view--active .room-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.5rem 0.75rem;
+    }
+    /*
+      Keep the header short on phones while playing: the seats already show every name, and
+      public/invite-only only matters in the waiting room (the pill returns there).
+    */
+    #gameView.game-view--active .visibility-pill {
+        display: none;
+    }
+    #gameView.game-view--active .room-meta {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        overflow: hidden;
+        font-size: 0.82rem;
     }
 }
 .pill {
@@ -319,9 +413,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     line-height: 1.35;
     color: #f8fafc;
 }
+/*
+  Every track is minmax(0, ...): a plain 1fr track grows to its content's min-content width,
+  which let a full hand or three opponent fans push the table wider than a phone screen.
+*/
 .table-grid {
     display: grid;
-    grid-template-columns: 1fr 1.15fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1fr);
     grid-template-rows: auto auto auto;
     gap: 0.7rem;
 }
@@ -329,7 +427,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .table-grid.players-2 .seat.left,
 .table-grid.players-2 .seat.right { display: none !important; }
 .table-grid.players-2 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
 }
 .table-grid.players-2 .seat-top-1 { grid-column: 1; grid-row: 1; }
 .table-grid.players-2 .seat-top-2,
@@ -350,7 +448,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .table-grid.players-3 .seat.left,
 .table-grid.players-3 .seat.right { display: none !important; }
 .table-grid.players-3 {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .table-grid.players-3 .seat-top-1 { grid-column: 1; grid-row: 1; }
 .table-grid.players-3 .seat-top-2 { grid-column: 2; grid-row: 1; }
@@ -383,6 +481,12 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     background: rgba(13, 39, 24, 0.32);
     padding: 0.55rem;
     min-height: 88px;
+    /* Grid items default to min-width:auto, which lets wide content stretch the whole table. */
+    min-width: 0;
+}
+/* Opponent seats size their card fan from the seat width (cqi units below). */
+.seat.top {
+    container-type: inline-size;
 }
 /* Your hand: solid rail so card PNGs never show table through */
 .seat.bottom.my-hand {
@@ -411,7 +515,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     cursor: pointer;
 }
 .help-toggle-btn:hover { background: var(--surface-strong); color: var(--accent-bright); }
-.seat-title { font-weight: 700; margin-bottom: 0.3rem; }
+.seat-title { font-weight: 700; margin-bottom: 0.3rem; overflow-wrap: anywhere; }
 .seat-role-inline {
     margin-left: 0.35rem;
     opacity: 0.95;
@@ -427,6 +531,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     white-space: nowrap;
     vertical-align: baseline;
 }
+.bot-thinking-tail { white-space: nowrap; }
 .bot-thinking-dots::after {
     content: "";
     display: inline-block;
@@ -439,6 +544,13 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     25% { content: "."; }
     50% { content: ".."; }
     75%, 100% { content: "..."; }
+}
+@media (prefers-reduced-motion: reduce) {
+    /* Still show that the bot is busy, without the ticking dots. */
+    .bot-thinking-dots::after {
+        animation: none;
+        content: "...";
+    }
 }
 .ai-badge {
     margin-left: 0.35rem;
@@ -460,6 +572,19 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .seat:not(.my-hand) .seat-title {
     color: #fff;
     text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+}
+/* Narrow opponent seats: role tags and bot status may wrap rather than widen the seat. */
+@container (max-width: 170px) {
+    .seat.top .seat-role-inline,
+    .seat.top .bot-thinking-inline { white-space: normal; }
+}
+/* Three opponents across a phone: smaller type so names mostly wrap between words. */
+@container (max-width: 130px) {
+    .seat.top .seat-title { font-size: 0.78rem; }
+    .seat.top .seat-role-inline,
+    .seat.top .ai-badge { margin-left: 0.2rem; }
+    .seat.top .ai-badge { font-size: 0.7rem; padding: 0.04rem 0.25rem; }
+    .seat.top .bot-thinking-inline { margin-left: 0.2rem; font-size: 0.7rem; }
 }
 .seat:not(.my-hand) .muted {
     color: rgba(255, 255, 255, 0.95);
@@ -488,33 +613,39 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 /* Opponent hand: fanned like table cards; overlap + rotate from bottom center */
 .back-fan {
+    /*
+      Card width follows the seat width so six fanned backs (about 3.7 card widths once rotated)
+      fit narrow three-opponent rows; 52px is the full-size card.
+    */
+    --fan-card-w: clamp(16px, calc((100cqi - 16px) / 3.7), 52px);
     display: flex;
     align-items: flex-end;
     flex-wrap: nowrap;
     justify-content: center;
     margin-top: 0.35rem;
-    min-height: 72px;
+    /* 72px suits full-size backs; smaller fans get a proportionally shorter band. */
+    min-height: min(72px, calc(var(--fan-card-w) * 1.4 + 18px));
     padding: 12px 8px 6px;
     overflow: visible;
 }
 .back-fan .card-back-face--fan {
     position: relative;
     flex: 0 0 auto;
-    width: 52px;
+    width: var(--fan-card-w);
     height: auto;
     aspect-ratio: 63 / 88;
     transform-origin: 50% 100%;
     /* transform + z-index set inline per index */
 }
 .back-fan:not(.back-fan--few) .card-back-face--fan {
-    margin-left: -34px;
+    margin-left: calc(var(--fan-card-w) * -0.654);
 }
 .back-fan:not(.back-fan--few) .card-back-face--fan:first-child {
     margin-left: 0;
 }
 .back-fan--few .card-back-face--fan {
-    width: 54px;
-    margin-left: -24px;
+    width: calc(var(--fan-card-w) * 1.04);
+    margin-left: calc(var(--fan-card-w) * -0.46);
 }
 .back-fan--few .card-back-face--fan:first-child {
     margin-left: 0;
@@ -601,6 +732,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     box-sizing: border-box;
 }
 .hand-scroll-x {
+    --hand-gap: clamp(4px, 1vw, 12px);
     width: 100%;
     max-width: 100%;
     overflow-x: auto;
@@ -610,16 +742,24 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     padding: 6px 4px 8px;
     box-sizing: border-box;
     -webkit-overflow-scrolling: touch;
+    /* Hand cards size themselves from this width (cqi) so a full six-card hand fits. */
+    container-type: inline-size;
 }
 .hand-row {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
     align-items: flex-end;
-    gap: clamp(4px, 1vw, 12px);
+    gap: var(--hand-gap);
     min-height: 124px;
     padding-bottom: 2px;
-    width: max(100%, min-content);
+    /*
+      At least the rail width (so short hands centre), otherwise exactly as wide as a
+      non-wrapping hand: the overflow then sits to the right where .hand-scroll-x can scroll
+      to it, instead of being centred off both edges.
+    */
+    width: fit-content;
+    min-width: 100%;
     margin: 0 auto;
 }
 @media (min-width: 900px) {
@@ -637,7 +777,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     box-shadow: 0 2px 8px rgba(0,0,0,0.22);
     flex: 0 0 auto;
     line-height: 0;
-    touch-action: none;
+    /* Cards use HTML5 drag and drop only; a swipe that starts on a card must still scroll. */
+    touch-action: manipulation;
 }
 .hand-card-btn:active { cursor: grabbing; }
 .hand-card-btn.dragging {
@@ -654,7 +795,12 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .hand-card-btn img {
     display: block;
-    width: clamp(52px, min(7.5vw, 92px), 92px);
+    /*
+      Usual size is clamp(52px, 7.5vw, 92px), but never wider than what lets six cards
+      (plus 6px button padding and the gaps) share the row, down to a 34px floor. Larger
+      hands scroll inside .hand-scroll-x.
+    */
+    width: max(34px, min(clamp(52px, 7.5vw, 92px), calc((100cqi - 5 * var(--hand-gap)) / 6 - 6.5px)));
     height: auto;
     aspect-ratio: 63 / 88;
     object-fit: cover;
@@ -691,40 +837,73 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
     color: var(--text);
 }
 @media (max-width: 700px) {
+    /*
+      Narrow tables have no room for a deck column, and an overlay drifts onto the seats. The
+      felt wrapper dissolves (display: contents) so the deck joins the HUD row in normal flow:
+      it can never cover a seat, whatever height the rows end up with.
+    */
+    #playingArea {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: end;
+        column-gap: 0.5rem;
+    }
+    #playingArea > .hud {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+    }
+    #playingArea > .opening-lead-hud {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
     .table-felt-wrap {
-        position: relative;
-        display: block;
+        display: contents;
     }
     .table-felt-wrap > .table-grid {
-        width: 100%;
+        grid-column: 1 / -1;
+        grid-row: 3;
+        min-width: 0;
     }
     .deck-outside {
-        position: absolute;
-        z-index: 20;
-        left: -0.65rem;
-        top: 43%;
-        width: 106px;
-        min-width: 106px;
-        height: 128px;
+        grid-column: 2;
+        grid-row: 1;
+        position: relative;
+        /* 0.42 x the drawn footprint of the talon + sideways trump (143 x 123 px): two HUD rows high */
+        width: 61px;
+        min-width: 61px;
+        height: 52px;
+        margin-bottom: 0.7rem;
         padding: 0;
-        transform: translateY(-50%);
     }
     .deck-tableau {
+        position: absolute;
+        left: 0;
+        top: 0;
         width: 150px;
+        height: 120px;
         max-width: none;
         margin: 0;
-        transform: scale(0.78);
-        transform-origin: left center;
+        transform-origin: 0 0;
+        /* Shift the footprint's top-left corner (-7px, 41.6px) onto the box origin, then scale. */
+        transform: scale(0.42) translate(7px, -41.6px);
     }
     .hand-row {
         flex-wrap: nowrap;
         justify-content: flex-start;
+        /* The desktop min-heights are sized for 92px cards; phone cards are much shorter. */
+        min-height: 0;
+    }
+    .hand-scroll-x {
+        min-height: 0;
     }
     .action-strip {
         position: sticky;
         z-index: 35;
         bottom: max(0.35rem, env(safe-area-inset-bottom, 0px));
-        padding: 0.45rem;
+        /* One compact row: a two-row strip hid the hand behind it on phones. */
+        gap: clamp(0.2rem, 1vw, 0.3rem);
+        padding: 0.3rem;
         border: 1px solid var(--border-strong);
         border-radius: 12px;
         background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -732,7 +911,89 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
         backdrop-filter: blur(10px);
     }
     .action-strip button {
-        min-height: 2.45rem;
+        /*
+          Zero basis: the five buttons share the row and only wrap their label ("Take / cards")
+          when narrow, which keeps all of them on one line from 320px up.
+        */
+        flex: 1 1 0;
+        min-height: 2.4rem;
+        padding: 0.2rem 0.15rem;
+        font-size: clamp(0.66rem, 3.4vw, 0.82rem);
+        line-height: 1.15;
+    }
+    .action-strip select {
+        flex: 1 1 100%;
+    }
+    /* Keyboard focus never parks a card behind the sticky strip. */
+    .hand-card-btn {
+        scroll-margin-bottom: 4.5rem;
+    }
+    /* Vertical trims so a fresh hand sits above the strip: */
+    #gameView.stack {
+        gap: 0.6rem;
+    }
+    .hud {
+        gap: 0.35rem;
+        margin-bottom: 0.45rem;
+    }
+    .hud .pill {
+        font-size: 0.82rem;
+    }
+    .deck-outside {
+        margin-bottom: 0.45rem;
+    }
+    .opening-lead-hud {
+        font-size: 0.76rem;
+        margin: -0.2rem 0 0.45rem;
+    }
+    /* The rotated backs rise only a few pixels above the fan box; 12px of headroom is desktop-sized. */
+    .back-fan {
+        padding-top: 6px;
+        min-height: min(72px, calc(var(--fan-card-w) * 1.4 + 12px));
+    }
+    .table-grid {
+        gap: 0.5rem;
+    }
+    .seat.center {
+        /* Room for one row of phone-sized table cards (about 92px high plus padding). */
+        min-height: 7rem;
+    }
+    .seat.bottom.my-hand {
+        padding-top: 0.45rem;
+    }
+    /* Never filled by the game; on phones it should not reserve a line above the hand. */
+    .my-hand .my-role-line {
+        min-height: 0;
+    }
+    .hand-scroll {
+        padding-top: 2px;
+        padding-bottom: 8px;
+    }
+}
+/* Phones: trim nested padding so a full hand and three opponent seats get the width. */
+@media (max-width: 480px) {
+    .table-shell {
+        padding-left: 0.4rem;
+        padding-right: 0.4rem;
+    }
+    .seat {
+        padding: 0.4rem;
+    }
+    .seat.bottom.my-hand {
+        padding-left: 0.25rem;
+        padding-right: 0.25rem;
+    }
+    .hand-scroll {
+        padding-left: 2px;
+        padding-right: 2px;
+    }
+    .hand-scroll-x {
+        padding-left: 2px;
+        padding-right: 2px;
+    }
+    .back-fan {
+        padding-left: 4px;
+        padding-right: 4px;
     }
 }
 
@@ -1016,7 +1277,8 @@ pre {
 .btn-primary:hover:not(:disabled) {
     filter: brightness(1.06);
 }
-.btn-primary:disabled {
+.btn-primary:disabled,
+button.btn-primary[aria-disabled="true"] {
     opacity: 0.5;
 }
 @media (max-width: 470px) {

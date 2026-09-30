@@ -31,6 +31,34 @@ test.describe("Hand privacy (anti-cheat)", () => {
         expect(authedMe.hand.length).toBe(6);
     });
 
+    test("the UI works under a script-src 'self' content security policy", async ({ page }) => {
+        const policy = "script-src 'self'; style-src 'self' 'unsafe-inline'";
+        await page.route(url => url.pathname === "/", async route => {
+            const response = await route.fetch();
+            await route.fulfill({response, headers: {...response.headers(), "content-security-policy": policy}});
+        });
+        await page.addInitScript(() => {
+            window.__cspViolations = [];
+            document.addEventListener("securitypolicyviolation", event => {
+                window.__cspViolations.push(`${event.violatedDirective} ${event.blockedURI} ${event.sample}`);
+            });
+        });
+
+        await page.goto("/");
+        await page.fill("#hostName", "Policy Host");
+        await page.click("#createBtn");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await page.click("#addBotBtn");
+        await expect(page.locator("#roleLabel")).toContainText("Elektronik", { timeout: 10_000 });
+        await page.click("#startBtn");
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6, { timeout: 10_000 });
+        await page.locator("#myHand .hand-card-btn").first().click();
+        await page.click("#helpToggleBtn");
+        await expect(page.locator("#gameplayHint")).toBeVisible();
+
+        expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+    });
+
     test("acting as another player without their token is rejected with 403", async ({ page }) => {
         await page.goto("/");
         await page.fill("#hostName", "Alice");

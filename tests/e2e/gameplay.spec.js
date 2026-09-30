@@ -57,7 +57,8 @@ test.describe("Gameplay against a bot", () => {
         await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6, { timeout: 10_000 });
 
         const firstCard = page.locator("#myHand .hand-card-btn").first();
-        await expect(firstCard).toHaveAttribute("aria-label", /Play/);
+        // Clicking only selects, so the accessible name is the card itself ("6 of clubs").
+        await expect(firstCard).toHaveAttribute("aria-label", /^(?:[6-9]|10|jack|queen|king|ace) of (?:clubs|diamonds|hearts|spades)$/);
         await expect(firstCard).toHaveAttribute("aria-pressed", "false");
         await firstCard.click();
         await expect(firstCard).toHaveClass(/selected/);

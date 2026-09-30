@@ -120,9 +120,409 @@ describe("shouldAcceptGameVersion", () => {
     });
 });
 
+describe("shouldApplySnapshot", () => {
+    const game = (code, version) => ({ code, version, players: [] });
+
+    it("applies the first snapshot and snapshots of another room", () => {
+        expect(L.shouldApplySnapshot(null, game("ABC234", 3))).toBe(true);
+        expect(L.shouldApplySnapshot(game("ABC234", 9), game("XYZ789", 1))).toBe(true);
+    });
+
+    it("never lets an older version of the same room replace newer state", () => {
+        expect(L.shouldApplySnapshot(game("ABC234", 14), game("ABC234", 13))).toBe(false);
+        expect(L.shouldApplySnapshot(game("ABC234", 14), game("ABC234", 14))).toBe(true);
+        expect(L.shouldApplySnapshot(game("ABC234", 14), game("ABC234", 15))).toBe(true);
+    });
+
+    it("rejects values that are not game snapshots", () => {
+        expect(L.shouldApplySnapshot(null, null)).toBe(false);
+        expect(L.shouldApplySnapshot(null, { code: "ABC234", version: 1 })).toBe(false);
+        expect(L.shouldApplySnapshot(null, { version: 1, players: [] })).toBe(false);
+        expect(L.shouldApplySnapshot(null, "<html>")).toBe(false);
+    });
+});
+
+describe("parseJsonBody", () => {
+    it("decodes JSON bodies, including problem+json and charset variants", () => {
+        expect(L.parseJsonBody("application/json", "{\"a\":1}")).toEqual({ ok: true, value: { a: 1 } });
+        expect(L.parseJsonBody("application/json;charset=UTF-8", "[1]")).toEqual({ ok: true, value: [1] });
+        expect(L.parseJsonBody("application/problem+json", "{\"message\":\"x\"}").value).toEqual({ message: "x" });
+    });
+
+    it("treats an empty body as null whatever its type (for example /leave)", () => {
+        expect(L.parseJsonBody(null, "")).toEqual({ ok: true, value: null });
+        expect(L.parseJsonBody("application/json", "  ")).toEqual({ ok: true, value: null });
+    });
+
+    it("reports HTML error pages and malformed JSON as unreadable instead of throwing", () => {
+        expect(L.parseJsonBody("text/html", "<html><body>502 Bad Gateway</body></html>")).toEqual({ ok: false, value: null });
+        expect(L.parseJsonBody("application/json", "<html>")).toEqual({ ok: false, value: null });
+        expect(L.parseJsonBody("", "{\"a\":1}")).toEqual({ ok: false, value: null });
+    });
+});
+
+describe("apiErrorMessage", () => {
+    it("prefers the server's message", () => {
+        expect(L.apiErrorMessage(409, { message: "Not your turn" })).toBe("Not your turn");
+        expect(L.apiErrorMessage(503, { message: " Temporary outage " })).toBe("Temporary outage");
+    });
+
+    it("never surfaces a parser error for bodies without a message", () => {
+        expect(L.apiErrorMessage(502, null)).toBe("The server is unavailable right now. Please try again.");
+        expect(L.apiErrorMessage(0, null)).toContain("Could not reach the server");
+        expect(L.apiErrorMessage(404, {})).toBe("Game not found");
+        expect(L.apiErrorMessage(410, null)).toContain("expired");
+        expect(L.apiErrorMessage(429, null)).toContain("Too many requests");
+        expect(L.apiErrorMessage(400, { message: 42 })).toBe("Request failed. Please try again.");
+    });
+});
+
+describe("sessionErrorKind", () => {
+    it("classifies failures by status, not message text", () => {
+        expect(L.sessionErrorKind(403)).toBe("seat-invalid");
+        expect(L.sessionErrorKind(404)).toBe("room-gone");
+        expect(L.sessionErrorKind(410)).toBe("room-gone");
+        for (const status of [0, 400, 409, 429, 500, 502, 503, undefined]) {
+            expect(L.sessionErrorKind(status)).toBe("transient");
+        }
+    });
+
+    it("only asks to verify a 404 from a move, which can be a refused move", () => {
+        // The server maps every NoSuchElementException to 404, "Attack card to defend not found" included.
+        expect(L.sessionErrorKind(404, "move")).toBe("verify");
+        expect(L.sessionErrorKind(404, "read")).toBe("room-gone");
+        expect(L.sessionErrorKind(404, "leave")).toBe("room-gone");
+        expect(L.sessionErrorKind(410, "move")).toBe("room-gone");
+        expect(L.sessionErrorKind(403, "move")).toBe("seat-invalid");
+        expect(L.sessionErrorKind(503, "move")).toBe("transient");
+    });
+});
+
+describe("isGameSnapshot", () => {
+    it("recognises GameResponse-shaped values only", () => {
+        expect(L.isGameSnapshot({ code: "ABC234", players: [] })).toBe(true);
+        expect(L.isGameSnapshot({ code: "", players: [] })).toBe(false);
+        expect(L.isGameSnapshot({ code: 5, players: [] })).toBe(false);
+        expect(L.isGameSnapshot({ code: "ABC234" })).toBe(false);
+        expect(L.isGameSnapshot({ game: { code: "ABC234", players: [] } })).toBe(false);
+        expect(L.isGameSnapshot(null)).toBe(false);
+        expect(L.isGameSnapshot("ABC234")).toBe(false);
+    });
+});
+
+describe("seatProblem", () => {
+    const players = (meHand, meHandSize = meHand.length) => [
+        { id: "me", hand: meHand, handSize: meHandSize },
+        { id: "bot", hand: [], handSize: 6 }
+    ];
+
+    it("accepts a seat that can see its own hand", () => {
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: players(["6C", "7C"]) }, "me")).toBeNull();
+    });
+
+    it("flags an in-progress view without the viewer's cards as unauthorized", () => {
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: players([], 6) }, "me")).toBe("unauthorized");
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: [{ id: "me", handSize: 3 }] }, "me")).toBe("unauthorized");
+    });
+
+    it("does not flag a viewer who is simply out of cards", () => {
+        expect(L.seatProblem({ status: "IN_PROGRESS", players: players([], 0) }, "me")).toBeNull();
+        expect(L.seatProblem({ status: "FINISHED", players: players([], 0) }, "me")).toBeNull();
+    });
+
+    it("flags a host who could start but is not allowed to", () => {
+        const lobby = { status: "LOBBY", hostPlayerId: "me", players: players([], 0), legalMoves: { canStart: false } };
+        expect(L.seatProblem(lobby, "me")).toBe("unauthorized");
+        expect(L.seatProblem({ ...lobby, legalMoves: { canStart: true } }, "me")).toBeNull();
+        expect(L.seatProblem({ ...lobby, players: [lobby.players[0]] }, "me")).toBeNull();
+        expect(L.seatProblem({ ...lobby, hostPlayerId: "bot" }, "me")).toBeNull();
+    });
+
+    it("flags a viewer who is not seated at all", () => {
+        expect(L.seatProblem({ status: "LOBBY", players: players([]) }, "someone-else")).toBe("not-seated");
+    });
+
+    it("ignores missing input", () => {
+        expect(L.seatProblem(null, "me")).toBeNull();
+        expect(L.seatProblem({ status: "LOBBY", players: [] }, "")).toBeNull();
+    });
+});
+
+describe("neighborCardCode", () => {
+    const before = ["6C", "7D", "8H", "9S", "JC"];
+
+    it("keeps a card that is still in the hand", () => {
+        expect(L.neighborCardCode(before, "8H", ["6C", "8H", "9S"])).toBe("8H");
+    });
+
+    it("moves to the card that slid into the played card's slot", () => {
+        expect(L.neighborCardCode(before, "8H", ["6C", "7D", "9S", "JC"])).toBe("9S");
+        expect(L.neighborCardCode(before, "6C", ["7D", "8H", "9S", "JC"])).toBe("7D");
+    });
+
+    it("falls back to the left neighbour at the end of the hand", () => {
+        expect(L.neighborCardCode(before, "JC", ["6C", "7D", "8H", "9S"])).toBe("9S");
+    });
+
+    it("skips neighbours that also left the hand", () => {
+        expect(L.neighborCardCode(before, "8H", ["6C", "JC", "AS"])).toBe("JC");
+    });
+
+    it("handles unknown cards and empty hands", () => {
+        expect(L.neighborCardCode(before, "AS", ["7D", "8H"])).toBe("7D");
+        expect(L.neighborCardCode(before, "8H", [])).toBeNull();
+        expect(L.neighborCardCode(null, "8H", ["QD"])).toBe("QD");
+    });
+});
+
+describe("focusRecoveryTarget", () => {
+    const handBefore = ["6C", "7D", "8H"];
+
+    it("sends a removed card's focus to its neighbour", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "card", code: "7D" }, handBefore, handAfter: ["6C", "8H"]
+        })).toEqual({ kind: "card", code: "8H" });
+    });
+
+    it("sends a disabled play button's focus next to the card that was played", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "attackBtn" },
+            handBefore,
+            handAfter: ["6C", "8H"],
+            lastPlayedCard: "7D"
+        })).toEqual({ kind: "card", code: "8H" });
+    });
+
+    it("sends Take/End round focus to the hand, not to another action", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "takeBtn" },
+            handBefore,
+            handAfter: handBefore,
+            availableControls: ["shareBtn"]
+        })).toEqual({ kind: "card", code: "6C" });
+    });
+
+    it("keeps a control that is still usable", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "endRoundBtn" }, stillAvailable: true
+        })).toEqual({ kind: "control", id: "endRoundBtn" });
+    });
+
+    it("moves a vanished room control to the next safe control, then the heading", () => {
+        expect(L.focusRecoveryTarget({
+            lost: { kind: "control", id: "addBotBtn" }, availableControls: ["startBtn", "shareBtn"]
+        })).toEqual({ kind: "control", id: "startBtn" });
+        expect(L.focusRecoveryTarget({ lost: { kind: "control", id: "addBotBtn" } }))
+            .toEqual({ kind: "heading" });
+        expect(L.focusRecoveryTarget({ lost: { kind: "card", code: "6C" }, handBefore: ["6C"], handAfter: [] }))
+            .toEqual({ kind: "heading" });
+    });
+});
+
+describe("viewKey", () => {
+    it("names each screen", () => {
+        expect(L.viewKey({ hasSession: false })).toBe("lobby");
+        expect(L.viewKey({ hasSession: false, reconnecting: true })).toBe("reconnecting");
+        expect(L.viewKey({ hasSession: true, status: "LOBBY" })).toBe("room");
+        expect(L.viewKey({ hasSession: true, status: "IN_PROGRESS" })).toBe("table");
+        expect(L.viewKey({ hasSession: true, status: "FINISHED" })).toBe("result");
+    });
+});
+
+describe("card and suit names", () => {
+    it("speaks card codes", () => {
+        expect(L.cardName("6C")).toBe("6 of clubs");
+        expect(L.cardName("10H")).toBe("10 of hearts");
+        expect(L.cardName("JS")).toBe("jack of spades");
+        expect(L.cardName("QD")).toBe("queen of diamonds");
+        expect(L.cardName("KC")).toBe("king of clubs");
+        expect(L.cardName("AH")).toBe("ace of hearts");
+    });
+
+    it("leaves unknown codes readable", () => {
+        expect(L.cardName("")).toBe("");
+        expect(L.cardName(null)).toBe("");
+        expect(L.cardName("ZZ")).toBe("ZZ");
+    });
+
+    it("names trump suits in either server format", () => {
+        expect(L.suitName("S")).toBe("spades");
+        expect(L.suitName("hearts")).toBe("hearts");
+        expect(L.suitName("x")).toBe("");
+    });
+});
+
+describe("fanCountLabel", () => {
+    it("states exact counts only below six, as the fan shows at most six backs", () => {
+        expect(L.fanCountLabel(0)).toBe("no cards");
+        expect(L.fanCountLabel(1)).toBe("1 card");
+        expect(L.fanCountLabel(5)).toBe("5 cards");
+        expect(L.fanCountLabel(6)).toBe("6 or more cards");
+        expect(L.fanCountLabel(7)).toBe("6 or more cards");
+        expect(L.fanCountLabel(24)).toBe("6 or more cards");
+    });
+});
+
+describe("roleDescription and tablePairLabel", () => {
+    it("describes roles in words", () => {
+        const game = { status: "IN_PROGRESS", attackerPlayerId: "a", defenderPlayerId: "d", takingCardsInProgress: true, takingPlayerId: "d" };
+        expect(L.roleDescription({ id: "a", team: 1 }, game)).toBe("attacker, team 1");
+        expect(L.roleDescription({ id: "d", team: null }, game)).toBe("defender, taking the cards");
+        expect(L.roleDescription({ id: "x" }, { status: "FINISHED", loserPlayerId: "x" })).toBe("the durak");
+        expect(L.roleDescription({ id: "y" }, { status: "LOBBY" })).toBe("");
+    });
+
+    it("describes table pairs", () => {
+        expect(L.tablePairLabel({ attackCard: "7H", defenseCard: "9H" })).toBe("7 of hearts, beaten by 9 of hearts");
+        expect(L.tablePairLabel({ attackCard: "7H", defenseCard: null })).toBe("7 of hearts, not beaten yet");
+    });
+});
+
+describe("describeTransition", () => {
+    const players = (meHand = ["6C", "8C"], botHandSize = 6) => [
+        { id: "me", name: "Alice", team: null, hand: meHand, handSize: meHand.length },
+        { id: "bot", name: "Elektronik", team: null, hand: [], handSize: botHandSize }
+    ];
+    const game = overrides => ({
+        code: "ABC234",
+        status: "IN_PROGRESS",
+        version: 1,
+        attackerPlayerId: "bot",
+        defenderPlayerId: "me",
+        takingCardsInProgress: false,
+        takingPlayerId: null,
+        trumpSuit: "S",
+        table: [],
+        players: players(),
+        legalMoves: {},
+        ...overrides
+    });
+
+    it("says nothing without a previous snapshot of the same room", () => {
+        expect(L.describeTransition(null, game({}), "me")).toEqual([]);
+        expect(L.describeTransition(game({ code: "XYZ789" }), game({}), "me")).toEqual([]);
+    });
+
+    it("announces an opponent's attack and prompts the defender", () => {
+        const next = game({ table: [{ attackCard: "7H", defenseCard: null, attackerId: "bot" }] });
+        expect(L.describeTransition(game({}), next, "me"))
+            .toEqual(["Elektronik attacks with 7 of hearts.", "Your turn to defend."]);
+    });
+
+    it("announces the viewer's own defence in the second person", () => {
+        const prev = game({ table: [{ attackCard: "7H", defenseCard: null, attackerId: "bot" }] });
+        const next = game({ table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "bot" }] });
+        expect(L.describeTransition(prev, next, "me")).toEqual(["You beat 7 of hearts with 9 of hearts."]);
+    });
+
+    it("prompts the attacker when every attack is beaten", () => {
+        const prev = game({ attackerPlayerId: "me", defenderPlayerId: "bot", table: [{ attackCard: "7H", attackerId: "me" }] });
+        const next = game({
+            attackerPlayerId: "me",
+            defenderPlayerId: "bot",
+            table: [{ attackCard: "7H", defenseCard: "KH", attackerId: "me" }],
+            legalMoves: { canEndRound: true }
+        });
+        expect(L.describeTransition(prev, next, "me")).toEqual([
+            "Elektronik beats 7 of hearts with king of hearts.",
+            "All attacks are beaten. Press End round or add a matching card."
+        ]);
+    });
+
+    it("announces a take and throw-ins", () => {
+        const prev = game({ attackerPlayerId: "me", defenderPlayerId: "bot", table: [{ attackCard: "7H", attackerId: "me" }] });
+        const taking = game({
+            attackerPlayerId: "me",
+            defenderPlayerId: "bot",
+            takingCardsInProgress: true,
+            takingPlayerId: "bot",
+            table: [{ attackCard: "7H", attackerId: "me" }]
+        });
+        expect(L.describeTransition(prev, taking, "me")).toEqual(["Elektronik takes the cards."]);
+        const thrown = { ...taking, table: [...taking.table, { attackCard: "7C", attackerId: "me" }] };
+        expect(L.describeTransition(taking, thrown, "me")).toEqual(["You throw in 7 of clubs."]);
+    });
+
+    it("announces a transfer", () => {
+        const prev = game({ table: [{ attackCard: "7H", attackerId: "bot" }] });
+        const next = game({
+            attackerPlayerId: "me",
+            defenderPlayerId: "bot",
+            table: [{ attackCard: "7H", attackerId: "bot" }, { attackCard: "7C", attackerId: "me" }]
+        });
+        expect(L.describeTransition(prev, next, "me")).toEqual(["You transfer with 7 of clubs."]);
+    });
+
+    it("ends a bout with the viewer's drawn and picked-up cards and who leads next", () => {
+        const prev = game({
+            takingCardsInProgress: true,
+            takingPlayerId: "me",
+            table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "bot" }, { attackCard: "7C", attackerId: "bot" }],
+            players: players(["6C"])
+        });
+        const next = game({ table: [], players: players(["6C", "7H", "9H", "7C"]) });
+        expect(L.describeTransition(prev, next, "me")).toEqual(["Bout over.", "You pick up 3 cards.", "Elektronik attacks next."]);
+
+        const discarded = game({
+            attackerPlayerId: "me",
+            defenderPlayerId: "bot",
+            table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "me" }],
+            players: players(["6C"])
+        });
+        const refilled = game({ attackerPlayerId: "bot", defenderPlayerId: "me", table: [], players: players(["6C", "JS", "AD"]) });
+        expect(L.describeTransition(discarded, refilled, "me"))
+            .toEqual(["Bout over.", "You draw jack of spades and ace of diamonds.", "Elektronik attacks next."]);
+    });
+
+    it("never announces how many cards an opponent drew", () => {
+        const prev = game({ attackerPlayerId: "me", defenderPlayerId: "bot", table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "me" }], players: players(["6C"], 2) });
+        const next = game({ table: [], players: players(["6C"], 6) });
+        expect(L.describeTransition(prev, next, "me").join(" ")).not.toMatch(/Elektronik draws|\d+ cards/);
+    });
+
+    it("announces a new game and whose turn it is", () => {
+        const lobby = game({ status: "LOBBY", attackerPlayerId: null, defenderPlayerId: null, trumpSuit: null });
+        expect(L.describeTransition(lobby, game({ attackerPlayerId: "me", defenderPlayerId: "bot" }), "me"))
+            .toEqual(["New game. Trump is spades.", "Your turn to attack."]);
+    });
+
+    it("announces the end of the game from the viewer's side, including a draw", () => {
+        const playing = game({});
+        expect(L.describeTransition(playing, game({ status: "FINISHED", loserPlayerId: "bot" }), "me"))
+            .toEqual(["Game over. Elektronik is the durak."]);
+        expect(L.describeTransition(playing, game({ status: "FINISHED", loserPlayerId: "me" }), "me"))
+            .toEqual(["Game over. You are the durak."]);
+        expect(L.describeTransition(playing, game({ status: "FINISHED", loserPlayerId: null }), "me"))
+            .toEqual(["Game over. It's a draw: nobody is the durak."]);
+    });
+
+    it("announces team results", () => {
+        const teamPlayers = [
+            { id: "me", name: "Alice", team: 0, hand: [], handSize: 0 },
+            { id: "b", name: "Boris", team: 1, hand: [], handSize: 2 }
+        ];
+        const playing = game({ players: teamPlayers });
+        expect(L.describeTransition(playing, game({ players: teamPlayers, status: "FINISHED", loserPlayerId: "b" }), "me"))
+            .toEqual(["Game over. Your team wins. Boris's team is the durak."]);
+    });
+
+    it("announces players joining and leaving", () => {
+        const lobby = game({ status: "LOBBY", players: [players()[0]] });
+        const joined = game({ status: "LOBBY", players: players() });
+        expect(L.describeTransition(lobby, joined, "me")).toEqual(["Elektronik joined."]);
+        expect(L.describeTransition(game({}), game({ status: "LOBBY", players: [players()[0]] }), "me"))
+            .toEqual(["Elektronik left.", "The game was stopped and the room is back in the lobby."]);
+    });
+
+    it("never uses an em dash", () => {
+        const text = L.describeTransition(game({}), game({ status: "FINISHED", loserPlayerId: "bot" }), "me").join(" ");
+        expect(text).not.toContain(String.fromCodePoint(0x2014));
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
-        expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");
+        expect(L.roomCodeFromSearch("?room=abc234")).toBe("ABC234");
         expect(L.roomCodeFromSearch("?foo=1&room=XY9Z88")).toBe("XY9Z88");
     });
 
@@ -132,9 +532,14 @@ describe("room invite links", () => {
         expect(L.roomCodeFromSearch("")).toBe("");
     });
 
+    it("uses the same alphabet as typed codes, so an invite never pre-fills an impossible code", () => {
+        expect(L.roomCodeFromSearch("?room=NOPE12")).toBe("");
+        expect(L.buildInviteUrl("https://durak.example", "NOPE12")).toBe("");
+    });
+
     it("builds a canonical same-origin invite URL", () => {
-        expect(L.buildInviteUrl("https://durak.example", "abc123"))
-            .toBe("https://durak.example/?room=ABC123");
+        expect(L.buildInviteUrl("https://durak.example", "abc234"))
+            .toBe("https://durak.example/?room=ABC234");
         expect(L.buildInviteUrl("https://durak.example/old/path", "bad"))
             .toBe("");
     });
@@ -162,6 +567,58 @@ describe("escapeHtml", () => {
     it("stringifies nullish input safely", () => {
         expect(L.escapeHtml(null)).toBe("");
         expect(L.escapeHtml(undefined)).toBe("");
+    });
+
+    it("escapes both quote characters so output is safe inside attributes", () => {
+        expect(L.escapeHtml(`"x" onmouseover='y'`)).toBe("&quot;x&quot; onmouseover=&#39;y&#39;");
+        expect(L.escapeHtml(`<a href="x">&</a>`)).toBe("&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
+    });
+
+    it("stringifies numbers", () => {
+        expect(L.escapeHtml(4)).toBe("4");
+        expect(L.escapeHtml(0)).toBe("0");
+    });
+});
+
+describe("normalizeRoomCode", () => {
+    it("accepts six characters from the server alphabet, case-insensitively", () => {
+        expect(L.normalizeRoomCode("ABC234")).toBe("ABC234");
+        expect(L.normalizeRoomCode("  xyz789 ")).toBe("XYZ789");
+        expect(L.normalizeRoomCode("hjkmnp")).toBe("HJKMNP");
+    });
+
+    it("rejects characters the server never generates", () => {
+        expect(L.normalizeRoomCode("NOPE12")).toBe("");  // O and 1
+        expect(L.normalizeRoomCode("ABCDI2")).toBe("");  // I
+        expect(L.normalizeRoomCode("ABC0Z2")).toBe("");  // 0
+    });
+
+    it("rejects wrong lengths and anything that could alter a request path", () => {
+        expect(L.normalizeRoomCode("ABC23")).toBe("");
+        expect(L.normalizeRoomCode("ABC2345")).toBe("");
+        expect(L.normalizeRoomCode("../bot")).toBe("");
+        expect(L.normalizeRoomCode("AB/C23")).toBe("");
+        expect(L.normalizeRoomCode("ABC 23")).toBe("");
+        expect(L.normalizeRoomCode("ABC23?")).toBe("");
+        expect(L.normalizeRoomCode("")).toBe("");
+        expect(L.normalizeRoomCode(null)).toBe("");
+        expect(L.normalizeRoomCode(undefined)).toBe("");
+    });
+});
+
+describe("isCardCode", () => {
+    it("accepts every dealt card", () => {
+        for (const rank of ["6", "7", "8", "9", "10", "J", "Q", "K", "A"]) {
+            for (const suit of ["C", "D", "H", "S"]) {
+                expect(L.isCardCode(rank + suit)).toBe(true);
+            }
+        }
+    });
+
+    it("rejects anything else", () => {
+        for (const bad of ["", "5C", "1C", "11C", "10X", "6c", "AS\"", "AS><img", "BACK", null, undefined, 6]) {
+            expect(L.isCardCode(bad)).toBe(false);
+        }
     });
 });
 
@@ -367,6 +824,16 @@ describe("lobbyRowsHtml", () => {
         const html = L.lobbyRowsHtml(evil, true, null);
         expect(html).not.toContain("<img src=x>");
         expect(html).toContain("&lt;img");
+    });
+
+    it("cannot break out of the data-code attribute", () => {
+        const evil = [{ code: `X" onclick="alert(1)`, playerNames: [], playerCount: "1<b>", maxPlayers: 4 }];
+        const container = document.createElement("div");
+        container.innerHTML = L.lobbyRowsHtml(evil, true, null);
+        const button = container.querySelector(".lobby-list-join");
+        expect(button.getAttribute("onclick")).toBeNull();
+        expect(button.getAttribute("data-code")).toBe(`X" onclick="alert(1)`);
+        expect(container.querySelector("b")).toBeNull();
     });
 });
 
