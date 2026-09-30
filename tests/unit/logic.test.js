@@ -120,6 +120,74 @@ describe("shouldAcceptGameVersion", () => {
     });
 });
 
+describe("shouldApplySnapshot", () => {
+    const game = (code, version) => ({ code, version, players: [] });
+
+    it("applies the first snapshot and snapshots of another room", () => {
+        expect(L.shouldApplySnapshot(null, game("ABC234", 3))).toBe(true);
+        expect(L.shouldApplySnapshot(game("ABC234", 9), game("XYZ789", 1))).toBe(true);
+    });
+
+    it("never lets an older version of the same room replace newer state", () => {
+        expect(L.shouldApplySnapshot(game("ABC234", 14), game("ABC234", 13))).toBe(false);
+        expect(L.shouldApplySnapshot(game("ABC234", 14), game("ABC234", 14))).toBe(true);
+        expect(L.shouldApplySnapshot(game("ABC234", 14), game("ABC234", 15))).toBe(true);
+    });
+
+    it("rejects values that are not game snapshots", () => {
+        expect(L.shouldApplySnapshot(null, null)).toBe(false);
+        expect(L.shouldApplySnapshot(null, { code: "ABC234", version: 1 })).toBe(false);
+        expect(L.shouldApplySnapshot(null, { version: 1, players: [] })).toBe(false);
+        expect(L.shouldApplySnapshot(null, "<html>")).toBe(false);
+    });
+});
+
+describe("parseJsonBody", () => {
+    it("decodes JSON bodies, including problem+json and charset variants", () => {
+        expect(L.parseJsonBody("application/json", "{\"a\":1}")).toEqual({ ok: true, value: { a: 1 } });
+        expect(L.parseJsonBody("application/json;charset=UTF-8", "[1]")).toEqual({ ok: true, value: [1] });
+        expect(L.parseJsonBody("application/problem+json", "{\"message\":\"x\"}").value).toEqual({ message: "x" });
+    });
+
+    it("treats an empty body as null whatever its type (for example /leave)", () => {
+        expect(L.parseJsonBody(null, "")).toEqual({ ok: true, value: null });
+        expect(L.parseJsonBody("application/json", "  ")).toEqual({ ok: true, value: null });
+    });
+
+    it("reports HTML error pages and malformed JSON as unreadable instead of throwing", () => {
+        expect(L.parseJsonBody("text/html", "<html><body>502 Bad Gateway</body></html>")).toEqual({ ok: false, value: null });
+        expect(L.parseJsonBody("application/json", "<html>")).toEqual({ ok: false, value: null });
+        expect(L.parseJsonBody("", "{\"a\":1}")).toEqual({ ok: false, value: null });
+    });
+});
+
+describe("apiErrorMessage", () => {
+    it("prefers the server's message", () => {
+        expect(L.apiErrorMessage(409, { message: "Not your turn" })).toBe("Not your turn");
+        expect(L.apiErrorMessage(503, { message: " Temporary outage " })).toBe("Temporary outage");
+    });
+
+    it("never surfaces a parser error for bodies without a message", () => {
+        expect(L.apiErrorMessage(502, null)).toBe("The server is unavailable right now. Please try again.");
+        expect(L.apiErrorMessage(0, null)).toContain("Could not reach the server");
+        expect(L.apiErrorMessage(404, {})).toBe("Game not found");
+        expect(L.apiErrorMessage(410, null)).toContain("expired");
+        expect(L.apiErrorMessage(429, null)).toContain("Too many requests");
+        expect(L.apiErrorMessage(400, { message: 42 })).toBe("Request failed. Please try again.");
+    });
+});
+
+describe("sessionErrorKind", () => {
+    it("classifies failures by status, not message text", () => {
+        expect(L.sessionErrorKind(403)).toBe("seat-invalid");
+        expect(L.sessionErrorKind(404)).toBe("room-gone");
+        expect(L.sessionErrorKind(410)).toBe("room-gone");
+        for (const status of [0, 400, 409, 429, 500, 502, 503, undefined]) {
+            expect(L.sessionErrorKind(status)).toBe("transient");
+        }
+    });
+});
+
 describe("room invite links", () => {
     it("reads and normalizes a valid room query", () => {
         expect(L.roomCodeFromSearch("?room=abc123")).toBe("ABC123");

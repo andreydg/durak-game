@@ -112,6 +112,58 @@
         return incoming >= current;
     }
 
+    /**
+     * Whether an incoming game snapshot (refresh or action response) may replace the current one.
+     * Snapshots of another room always replace; within a room, an older version never does.
+     */
+    function shouldApplySnapshot(current, incoming) {
+        if (!incoming || typeof incoming !== "object" || !Array.isArray(incoming.players) || !incoming.code) {
+            return false;
+        }
+        if (!current || current.code !== incoming.code) return true;
+        return shouldAcceptGameVersion(current.version, incoming.version);
+    }
+
+    /**
+     * Decodes a response body without trusting it: empty bodies (such as /leave) are null, and a
+     * body that is not declared as JSON (a proxy's HTML error page, say) is reported as unreadable.
+     */
+    function parseJsonBody(contentType, text) {
+        const body = String(text == null ? "" : text).trim();
+        if (!body) return { ok: true, value: null };
+        if (!/[/+]json\b/i.test(String(contentType || ""))) return { ok: false, value: null };
+        try {
+            return { ok: true, value: JSON.parse(body) };
+        } catch {
+            return { ok: false, value: null };
+        }
+    }
+
+    /** Message for a failed request: the server's own message when it sent one. */
+    function apiErrorMessage(status, payload) {
+        const serverMessage = payload && typeof payload.message === "string" ? payload.message.trim() : "";
+        if (serverMessage) return serverMessage;
+        const code = Number(status) || 0;
+        if (code === 0) return "Could not reach the server. Check your connection and try again.";
+        if (code === 403) return "You are not authorized to act as this player.";
+        if (code === 404) return "Game not found";
+        if (code === 410) return "Room expired due to inactivity.";
+        if (code === 429) return "Too many requests. Wait a moment and try again.";
+        if (code >= 500) return "The server is unavailable right now. Please try again.";
+        return "Request failed. Please try again.";
+    }
+
+    /**
+     * What a failed request means for the saved seat: 403 is a seat this browser can no longer
+     * use, 404/410 a room that is gone, anything else (network, 409, 429, 5xx) is transient.
+     */
+    function sessionErrorKind(status) {
+        const code = Number(status) || 0;
+        if (code === 403) return "seat-invalid";
+        if (code === 404 || code === 410) return "room-gone";
+        return "transient";
+    }
+
     /** Preserve a pending prompt refresh unless the new deadline is earlier or explicitly replaces it. */
     function shouldReplaceRefreshTimer(existingDueAt, requestedDueAt, replaceExisting = false) {
         if (replaceExisting) return true;
@@ -274,6 +326,10 @@
         reconnectDelayMs,
         gameRefreshDelayMs,
         shouldAcceptGameVersion,
+        shouldApplySnapshot,
+        parseJsonBody,
+        apiErrorMessage,
+        sessionErrorKind,
         shouldReplaceRefreshTimer,
         lobbyRefreshDelayMs,
         escapeHtml,

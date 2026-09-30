@@ -22,7 +22,10 @@ const {
     searchWithoutRoomParam,
     reconnectDelayMs,
     gameRefreshDelayMs,
-    shouldAcceptGameVersion,
+    shouldApplySnapshot,
+    parseJsonBody,
+    apiErrorMessage,
+    sessionErrorKind,
     shouldReplaceRefreshTimer,
     lobbyRefreshDelayMs,
     escapeHtml,
@@ -167,17 +170,100 @@ function gamePath(code, suffix = "") {
     return `/api/games/${encodeURIComponent(code)}${suffix}`;
 }
 
-async function api(path, method, body) {
-    const res = await fetch(path, {
-        method,
-        headers: {"Content-Type": "application/json", ...authHeaders()},
-        body: body ? JSON.stringify(body) : undefined
-    });
-    const payload = await res.json();
-    if (!res.ok) {
-        throw new Error(payload.message || "Request failed");
+/** A failed request; `status` is the HTTP status, or 0 when the server could not be reached. */
+class ApiError extends Error {
+    constructor(status, message) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status;
     }
-    return payload;
+}
+
+/**
+ * JSON request helper. Resolves to the decoded body (null for an empty one such as /leave) and
+ * rejects with an ApiError carrying {status, message}, including for network failures and for
+ * non-JSON error pages from a proxy.
+ */
+async function api(path, method, body) {
+    let res;
+    try {
+        res = await fetch(path, {
+            method,
+            headers: {"Content-Type": "application/json", ...authHeaders()},
+            body: body ? JSON.stringify(body) : undefined
+        });
+    } catch (_) {
+        throw new ApiError(0, apiErrorMessage(0, null));
+    }
+    let text = "";
+    try {
+        text = await res.text();
+    } catch (_) {
+        text = "";
+    }
+    const parsed = parseJsonBody(res.headers.get("content-type"), text);
+    if (!res.ok) {
+        throw new ApiError(res.status, apiErrorMessage(res.status, parsed.value));
+    }
+    if (!parsed.ok) {
+        throw new ApiError(res.status, "Unexpected response from the server. Please try again.");
+    }
+    return parsed.value;
+}
+
+/** Identifies the seat a request was made for, so late responses cannot leak into another session. */
+function sessionKey() {
+    return `${state.gameCode}\u0000${state.playerId}`;
+}
+
+function isCurrentSession(key) {
+    return Boolean(state.gameCode) && key === sessionKey();
+}
+
+/**
+ * The single entry point for game state from the server (refreshes, action responses, joins).
+ * Rejects snapshots for another seat or older than the one on screen, then renders.
+ */
+function applyGameSnapshot(snapshot, key = sessionKey()) {
+    if (!isCurrentSession(key) || !snapshot || snapshot.code !== state.gameCode) return false;
+    if (!shouldApplySnapshot(state.game, snapshot)) {
+        log(`Ignored stale game version ${snapshot.version}; current version is ${state.game?.version}.`);
+        return false;
+    }
+    const previous = state.game;
+    if (previous && previous.code === snapshot.code && previous.status !== snapshot.status) {
+        state.selectedHandCard = null;
+    }
+    state.game = snapshot;
+    const me = snapshot.players.find(p => p.id === state.playerId);
+    if (state.selectedHandCard && !(me?.hand || []).includes(state.selectedHandCard)) {
+        state.selectedHandCard = null;
+    }
+    syncBotThinkingFromGame(snapshot);
+    render();
+    return true;
+}
+
+/**
+ * Handles failures that invalidate the saved seat. Returns true when the error was consumed:
+ * 404/410 (room gone) end the session, 403 means this browser's seat can no longer act.
+ */
+function handleSessionError(err, key = sessionKey()) {
+    if (!err || !isCurrentSession(key)) return false;
+    const kind = sessionErrorKind(err.status);
+    const code = state.gameCode;
+    if (kind === "room-gone") {
+        clearSession();
+        showError(err.status === 410
+            ? `Room ${code} expired due to inactivity.`
+            : `Room ${code} no longer exists.`, "session");
+        return true;
+    }
+    if (kind === "seat-invalid") {
+        showError(`This browser's seat in room ${code} is no longer valid. Leave the room, then join again.`, "session");
+        return true;
+    }
+    return false;
 }
 
 function saveSession() {
@@ -458,25 +544,27 @@ async function performJoin(roomCode) {
         throw new Error("That room code is not valid. Room codes have 6 letters and digits (no 0, 1, I or O).");
     }
     const joined = await api(gamePath(code, "/join"), "POST", {playerName: playerNameInput.value.trim()});
-    state.gameCode = joined.game.code;
-    state.playerId = joined.playerId;
-    state.playerToken = joined.playerToken || "";
-    state.game = joined.game;
-    state.selectedHandCard = null;
-    saveSession();
-    clearConsumedInvite();
-    beginPolling();
-    connectWebSocket();
+    adoptSession(joined?.game, joined?.playerId, joined?.playerToken);
 }
 
 function adoptCreatedGame(created) {
-    state.gameCode = created.game.code;
-    state.playerId = created.hostPlayerId;
-    state.playerToken = created.playerToken || "";
-    state.game = created.game;
+    adoptSession(created?.game, created?.hostPlayerId, created?.playerToken);
+}
+
+/** Takes over the seat returned by create/join/quick play and shows its game. */
+function adoptSession(game, playerId, playerToken) {
+    if (!game || typeof game.code !== "string" || !Array.isArray(game.players) || !playerId) {
+        throw new ApiError(200, "Unexpected response from the server. Please try again.");
+    }
+    closeWebSocket();
+    state.gameCode = game.code;
+    state.playerId = String(playerId);
+    state.playerToken = playerToken ? String(playerToken) : "";
+    state.game = null;
     state.selectedHandCard = null;
     saveSession();
     clearConsumedInvite();
+    applyGameSnapshot(game);
     beginPolling();
     connectWebSocket();
 }
@@ -702,23 +790,11 @@ async function playCardToTable(cardCode, preferredAttackCard) {
     const attacksYouCanBeat = Object.keys(defs).filter(atk => (defs[atk] || []).includes(cardCode));
 
     if (lm.canTransfer && transferable.includes(cardCode)) {
-        await runAction("Transfer", async () => {
-            state.game = await api(gamePath(state.gameCode, "/transfer"), "POST", {
-                playerId: state.playerId,
-                card: cardCode
-            });
-            state.selectedHandCard = null;
-        });
+        await runAction("Transfer", playerAction("/transfer", {card: cardCode}));
         return;
     }
     if (lm.canAttack && attackable.includes(cardCode)) {
-        await runAction("Attack", async () => {
-            state.game = await api(gamePath(state.gameCode, "/attack"), "POST", {
-                playerId: state.playerId,
-                card: cardCode
-            });
-            state.selectedHandCard = null;
-        });
+        await runAction("Attack", playerAction("/attack", {card: cardCode}));
         return;
     }
     if (attacksYouCanBeat.length > 0) {
@@ -734,17 +810,22 @@ async function playCardToTable(cardCode, preferredAttackCard) {
             log("No attack to defend against.");
             return;
         }
-        await runAction("Defend", async () => {
-            state.game = await api(gamePath(state.gameCode, "/defend"), "POST", {
-                playerId: state.playerId,
-                attackCard: target,
-                defenseCard: cardCode
-            });
-            state.selectedHandCard = null;
-        });
+        await runAction("Defend", playerAction("/defend", {attackCard: target, defenseCard: cardCode}));
         return;
     }
     log(`Cannot play ${cardCode} to the table right now.`);
+}
+
+/**
+ * Builds a runAction body for a seat action: POSTs {playerId, ...extra} and resolves to the
+ * returned game snapshot, which runAction applies through the version check.
+ */
+function playerAction(suffix, extra = {}, {clearSelection = true} = {}) {
+    return async () => {
+        const game = await api(gamePath(state.gameCode, suffix), "POST", {playerId: state.playerId, ...extra});
+        if (clearSelection) state.selectedHandCard = null;
+        return game;
+    };
 }
 
 function render() {
@@ -975,35 +1056,27 @@ async function refreshGame(showMessage = false) {
 
     const requestedGameCode = state.gameCode;
     const requestedPlayerId = state.playerId;
+    const key = sessionKey();
     const request = (async () => {
         try {
             const query = new URLSearchParams({viewerPlayerId: requestedPlayerId}).toString();
             const refreshed = await api(gamePath(requestedGameCode, `?${query}`), "GET");
-            if (state.gameCode !== requestedGameCode || state.playerId !== requestedPlayerId) {
+            if (!isCurrentSession(key)) {
                 return false;
             }
-            if (!shouldAcceptGameVersion(state.game?.version, refreshed?.version)) {
-                clearError("connection");
-                log(`Ignored stale game refresh version ${refreshed?.version}; current version is ${state.game?.version}.`);
-                return true;
+            if (!refreshed || refreshed.code !== requestedGameCode || !Array.isArray(refreshed.players)) {
+                throw new ApiError(200, "Unexpected response from the server. Please try again.");
             }
-            const previousStatus = state.game?.status;
-            if (previousStatus && previousStatus !== refreshed.status) {
-                state.selectedHandCard = null;
-            }
-            state.game = refreshed;
-            syncBotThinkingFromGame(state.game);
-            render();
+            // A stale version is not a failure: the screen already shows something newer.
+            applyGameSnapshot(refreshed, key);
             clearError("connection");
             if (showMessage) log("Game refreshed.");
             return true;
         } catch (err) {
-            if (state.gameCode !== requestedGameCode || state.playerId !== requestedPlayerId) {
+            if (!isCurrentSession(key)) {
                 return false;
             }
-            if (err.message === "Game not found" || err.message.startsWith("Room expired")) {
-                clearSession();
-                showError(err.message === "Game not found" ? "This room no longer exists." : err.message, "session");
+            if (handleSessionError(err, key)) {
                 return false;
             }
             showError(`Connection problem: ${err.message}`, "connection");
@@ -1041,8 +1114,18 @@ function syncBotThinkingFromGame(game) {
     state.botThinkingEventAt = nextEventAt;
 }
 
+/** True for a GameResponse-shaped value (as opposed to the create/join envelopes or nothing). */
+function looksLikeGame(value) {
+    return Boolean(value && typeof value === "object" && typeof value.code === "string" && Array.isArray(value.players));
+}
+
+/**
+ * Runs one user action. `fn` may resolve to a game snapshot, which is applied through the same
+ * version check as refreshes, so a delayed response can never roll back newer state.
+ */
 async function runAction(name, fn, trigger = null) {
     clearError();
+    const key = sessionKey();
     const previousText = trigger ? trigger.textContent : "";
     if (trigger) {
         trigger.disabled = true;
@@ -1050,9 +1133,10 @@ async function runAction(name, fn, trigger = null) {
         trigger.textContent = `${name}…`;
     }
     try {
-        await fn();
-        syncBotThinkingFromGame(state.game);
-        render();
+        const result = await fn();
+        if (!(looksLikeGame(result) && applyGameSnapshot(result, key))) {
+            render();
+        }
         // The action response already carries updated game state.
         // Suppress the immediate websocket-triggered refetch to avoid double roundtrips.
         state.suppressWsRefreshUntilMs = Date.now() + 1200;
@@ -1060,8 +1144,15 @@ async function runAction(name, fn, trigger = null) {
         log(`${name} success.`);
         return true;
     } catch (err) {
-        showError(`${name}: ${err.message}`);
-        log(`${name} failed: ${err.message}`);
+        log(`${name} failed: ${err?.message}`);
+        if (handleSessionError(err, key)) {
+            return false;
+        }
+        showError(`${name}: ${err?.message || "Something went wrong. Please try again."}`);
+        if (err?.status === 409 && isCurrentSession(key)) {
+            // The move was rejected against newer server state: resynchronise promptly.
+            scheduleGameRefresh(0, true);
+        }
         return false;
     } finally {
         if (trigger) {
@@ -1117,14 +1208,12 @@ function stopPolling() {
 async function sendHeartbeat() {
     if (document.visibilityState === "hidden"
         || !state.gameCode || !state.playerId || state.game?.status === "FINISHED") return;
+    const key = sessionKey();
     try {
-        await fetch(gamePath(state.gameCode, "/heartbeat"), {
-            method: "POST",
-            headers: {"Content-Type": "application/json", ...authHeaders()},
-            body: JSON.stringify({playerId: state.playerId})
-        });
-    } catch (_) {
-        // Best effort: the normal refresh path reports persistent connection failures.
+        await api(gamePath(state.gameCode, "/heartbeat"), "POST", {playerId: state.playerId});
+    } catch (err) {
+        // Best effort, except that a rejected seat or a vanished room is reported like any request.
+        handleSessionError(err, key);
     }
 }
 
@@ -1344,32 +1433,27 @@ if (helpToggleBtn) {
     });
 }
 
-startBtn.addEventListener("click", async () => runAction("Start", async () => {
-    state.game = await api(gamePath(state.gameCode, "/start"), "POST", {playerId: state.playerId});
-}));
+startBtn.addEventListener("click", async () => runAction("Start", playerAction("/start", {}, {clearSelection: false})));
 
 if (rematchBtn) {
-    rematchBtn.addEventListener("click", async () => runAction("Play again", async () => {
-        state.game = await api(gamePath(state.gameCode, "/rematch"), "POST", {playerId: state.playerId});
-        state.selectedHandCard = null;
-    }, rematchBtn));
+    rematchBtn.addEventListener("click", async () => runAction("Play again", playerAction("/rematch"), rematchBtn));
+}
+
+function requireSelectedCard() {
+    if (!state.selectedHandCard) throw new Error("Select a card first.");
+    return state.selectedHandCard;
 }
 
 attackBtn.addEventListener("click", async () => runAction("Attack", async () => {
-    if (!state.selectedHandCard) throw new Error("Select a card first.");
-    state.game = await api(gamePath(state.gameCode, "/attack"), "POST", {playerId: state.playerId, card: state.selectedHandCard});
-    state.selectedHandCard = null;
+    return playerAction("/attack", {card: requireSelectedCard()})();
 }));
 
 transferBtn.addEventListener("click", async () => runAction("Transfer", async () => {
-    if (!state.selectedHandCard) throw new Error("Select a card first.");
-    state.game = await api(gamePath(state.gameCode, "/transfer"), "POST", {playerId: state.playerId, card: state.selectedHandCard});
-    state.selectedHandCard = null;
+    return playerAction("/transfer", {card: requireSelectedCard()})();
 }));
 
 defendBtn.addEventListener("click", async () => runAction("Defend", async () => {
-    if (!state.selectedHandCard) throw new Error("Select a card first.");
-    const card = state.selectedHandCard;
+    const card = requireSelectedCard();
     const lm = state.game.legalMoves || {};
     const defs = lm.defensesByAttackCard || {};
     const attacksYouCanBeat = Object.keys(defs).filter(atk => (defs[atk] || []).includes(card));
@@ -1378,30 +1462,15 @@ defendBtn.addEventListener("click", async () => runAction("Defend", async () => 
         target = attacksYouCanBeat[0];
     }
     if (!target) throw new Error("No attack card available to defend.");
-    state.game = await api(gamePath(state.gameCode, "/defend"), "POST", {
-        playerId: state.playerId,
-        attackCard: target,
-        defenseCard: card
-    });
-    state.selectedHandCard = null;
+    return playerAction("/defend", {attackCard: target, defenseCard: card})();
 }));
 
-takeBtn.addEventListener("click", async () => runAction("Take cards", async () => {
-    state.game = await api(gamePath(state.gameCode, "/take"), "POST", {playerId: state.playerId});
-    state.selectedHandCard = null;
-}));
+takeBtn.addEventListener("click", async () => runAction("Take cards", playerAction("/take")));
 
-endRoundBtn.addEventListener("click", async () => runAction("End round", async () => {
-    state.game = await api(gamePath(state.gameCode, "/end-round"), "POST", {playerId: state.playerId});
-    state.selectedHandCard = null;
-}));
+endRoundBtn.addEventListener("click", async () => runAction("End round", playerAction("/end-round")));
 
 if (addBotBtn) {
-    addBotBtn.addEventListener("click", async () => runAction("Add bot", async () => {
-        state.game = await api(gamePath(state.gameCode, "/bots"), "POST", {
-            playerId: state.playerId
-        });
-    }));
+    addBotBtn.addEventListener("click", async () => runAction("Add bot", playerAction("/bots", {}, {clearSelection: false})));
 }
 
 defendTargetSelect.addEventListener("change", () => {
