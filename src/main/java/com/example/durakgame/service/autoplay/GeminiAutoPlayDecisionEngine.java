@@ -180,6 +180,9 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         if (options.isEmpty()) {
             return heuristic(game, playerId, legalMoves, "no_legal_moves");
         }
+        if (alreadyPassed(game, legalMoves)) {
+            return Decision.of(null, "forced", "already_passed");
+        }
         if (options.size() == 1 && isForced(game, options.getFirst())) {
             return Decision.of(options.getFirst(), "forced", "single_legal_option");
         }
@@ -232,6 +235,20 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
      */
     private static boolean isForced(Game game, AutoPlayAction onlyOption) {
         return onlyOption.type() != AutoPlayAction.Type.ATTACK || game.getTable().isEmpty();
+    }
+
+    /**
+     * The bot already passed (END_ROUND) in this bout and nothing changed since: any new card on the
+     * table clears every pass. Only throw-ins are left to choose from, and playing one would contradict
+     * that pass, so the bot waits for the other players instead of asking the model again.
+     */
+    private static boolean alreadyPassed(Game game, ViewerLegalMoves legalMoves) {
+        if (legalMoves.canEndRound() || !legalMoves.canAttack()) {
+            return false;
+        }
+        List<AttackEntry> table = game.getTable();
+        return !table.isEmpty()
+                && (game.isTakingCardsInProgress() || table.stream().allMatch(AttackEntry::isDefended));
     }
 
     private Decision heuristic(Game game, String playerId, ViewerLegalMoves legalMoves, String reason) {

@@ -261,6 +261,28 @@ class GeminiAutoPlayDecisionEngineTest {
         assertTrue(logLines("autoplay_decision").getLast().contains(" source=forced reason=single_legal_option "));
     }
 
+    @Test
+    void aBotThatAlreadyPassedWaitsInsteadOfBeingPushedIntoAThrowIn() {
+        GeminiAutoPlayDecisionEngine engine = engine(settings());
+        // Three players: the bot led, the defender beat the card, the bot passed; the third seat has not.
+        Game game = new GameBuilder()
+                .player(BOT, BOT_NAME, true, "7S", "KC")
+                .player(HUMAN, HUMAN_NAME, false, "QH", "8C", "9D")
+                .player("third-seat", "Third", false, "10C", "JD")
+                .roles(0, 2)
+                .talon("6D", "7D", "JC", "KS")
+                .defended("7H", "9H", BOT)
+                .approvals(BOT)
+                .build();
+        ViewerLegalMoves moves = game.computeViewerLegalMoves(BOT);
+        assertTrue(moves.canAttack() && !moves.canEndRound());
+
+        assertEquals(null, engine.choose(game, BOT, moves));
+        assertEquals(0, transport.calls());
+        assertTrue(logLines("autoplay_decision").getLast()
+                .contains(" source=forced reason=already_passed action=none "));
+    }
+
     /* ------------------------------------------------------------------ validation */
 
     @Test
@@ -619,9 +641,15 @@ class GeminiAutoPlayDecisionEngineTest {
         private boolean taking;
         private int takeLimit;
         private String code = "TEST01";
+        private Set<String> approvals = Set.of();
 
         GameBuilder code(String gameCode) {
             code = gameCode;
+            return this;
+        }
+
+        GameBuilder approvals(String... playerIds) {
+            approvals = Set.of(playerIds);
             return this;
         }
 
@@ -680,7 +708,7 @@ class GeminiAutoPlayDecisionEngineTest {
             return Game.fromSnapshot(new Game.Snapshot(
                     code, 0L, 0L, 0L, players.getFirst().id(), GameStatus.IN_PROGRESS,
                     Suit.SPADES, Card.fromCode("KS"), attacker, defender, null, taking, takeLimit, 0L,
-                    players, talon, table, Set.of(), discarded, known, false, null, null, bouts));
+                    players, talon, table, approvals, discarded, known, false, null, null, bouts));
         }
 
         private static List<Card> cards(String... codes) {

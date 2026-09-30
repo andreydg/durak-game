@@ -72,7 +72,7 @@ The API and lobby list enforce expiration immediately. Firestore documents also 
 
 ## Auto-play (Gemini)
 
-The host can add bot players in the lobby. Bots use the primary LLM to choose moves. Every move the engine returns is checked against the bot's legal moves: card codes are normalized (`6c` is `6C`), and an answer that is still illegal (or missing, or unparseable) is replaced by the deterministic heuristic's move. The heuristic is also used whenever the model is disabled or unavailable, and a decision with a single forced option never calls the model. When the model defends against several attacks at once it returns a plan for all of them; the bot replays the rest of that plan on its next defend decisions in the same bout (while the table still matches it exactly) instead of asking again.
+The host can add bot players in the lobby. Bots use the primary LLM to choose moves. Every move the engine returns is checked against the bot's legal moves: card codes are normalized (`6c` is `6C`), and an answer that is still illegal (or missing, or unparseable) is replaced by the deterministic heuristic's move. The heuristic is also used whenever the model is disabled or unavailable. A decision with a single forced option never calls the model, and neither does a bot that already passed in the current bout: nothing has changed since (any new card clears passes), so it waits for the other players instead of being pushed into a throw-in it just declined. When the model defends against several attacks at once it returns a plan for all of them; the bot replays the rest of that plan on its next defend decisions in the same bout (while the table still matches it exactly) instead of asking again.
 
 Environment variables:
 
