@@ -16,12 +16,47 @@ test.describe("Lobby & room creation", () => {
 
     test("invalid room code shows an accessible error", async ({ page }) => {
         await page.goto("/");
-        await page.fill("#gameCode", "NOPE12");
+        // Well-formed (server alphabet) but not an existing room.
+        await page.fill("#gameCode", "ZZZZ22");
         await page.click("#joinBtn");
 
         await expect(page.locator("#appAlert")).toBeVisible();
         await expect(page.locator("#appAlert")).toContainText("Game not found");
         await expect(page.locator("#appAlert")).toHaveAttribute("role", "alert");
+    });
+
+    test("a malformed room code is rejected before any request is sent", async ({ page }) => {
+        const joinRequests = [];
+        page.on("request", request => {
+            if (request.method() === "POST" && request.url().includes("/join")) joinRequests.push(request.url());
+        });
+        await page.goto("/");
+
+        for (const typed of ["NOPE12", "../bots", "ab c23"]) {
+            await page.fill("#gameCode", typed);
+            await page.click("#joinBtn");
+            await expect(page.locator("#appAlert")).toContainText("room code is not valid");
+        }
+        expect(joinRequests).toEqual([]);
+        await expect(page.locator("#lobbyView")).toBeVisible();
+    });
+
+    test("a typed room code is normalized and URL-encoded into the join path", async ({ page }) => {
+        let joinPath = null;
+        await page.route("**/api/games/*/join", route => {
+            joinPath = new URL(route.request().url()).pathname;
+            return route.fulfill({
+                status: 404,
+                contentType: "application/json",
+                body: JSON.stringify({message: "Game not found"})
+            });
+        });
+        await page.goto("/");
+        await page.fill("#gameCode", "  hjk234 ");
+        await page.click("#joinBtn");
+
+        await expect(page.locator("#appAlert")).toContainText("Game not found");
+        expect(joinPath).toBe("/api/games/HJK234/join");
     });
 
     test("error alert is opaque and cannot block controls behind it", async ({ page }) => {
@@ -45,7 +80,7 @@ test.describe("Lobby & room creation", () => {
 
     test("join form submits with Enter", async ({ page }) => {
         await page.goto("/");
-        await page.fill("#gameCode", "NOPE12");
+        await page.fill("#gameCode", "ZZZZ22");
         await page.press("#gameCode", "Enter");
 
         await expect(page.locator("#appAlert")).toContainText("Game not found");
@@ -140,7 +175,7 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#gameView")).toBeVisible();
         await expect(page.locator("#gameCodeLabel")).toHaveText(/^[A-Z0-9]{6}$/);
         const currentCode = (await page.locator("#gameCodeLabel").textContent())?.trim() ?? "";
-        const invitedCode = currentCode === "ABC123" ? "XYZ789" : "ABC123";
+        const invitedCode = currentCode === "ABC234" ? "XYZ789" : "ABC234";
         const savedSession = await page.evaluate(() => ({
             gameCode: sessionStorage.getItem("durak_game_code"),
             playerId: sessionStorage.getItem("durak_player_id"),

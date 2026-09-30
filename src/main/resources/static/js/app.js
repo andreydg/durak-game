@@ -26,6 +26,8 @@ const {
     shouldReplaceRefreshTimer,
     lobbyRefreshDelayMs,
     escapeHtml,
+    normalizeRoomCode,
+    isCardCode,
     roleTags,
     playerTeam,
     onAttackingSide,
@@ -158,6 +160,11 @@ function effectivePlayerToken() {
 function authHeaders() {
     const token = effectivePlayerToken();
     return token ? {"X-Durak-Token": token} : {};
+}
+
+/** Every game request path goes through here so a stored or typed code is always encoded. */
+function gamePath(code, suffix = "") {
+    return `/api/games/${encodeURIComponent(code)}${suffix}`;
 }
 
 async function api(path, method, body) {
@@ -445,9 +452,12 @@ async function performJoin(roomCode) {
     const raw = roomCode != null && String(roomCode).trim() !== ""
         ? String(roomCode).trim()
         : gameCodeInput.value.trim();
-    const code = raw.toUpperCase();
-    if (!code) throw new Error("Enter a room code.");
-    const joined = await api(`/api/games/${code}/join`, "POST", {playerName: playerNameInput.value.trim()});
+    if (!raw) throw new Error("Enter a room code.");
+    const code = normalizeRoomCode(raw);
+    if (!code) {
+        throw new Error("That room code is not valid. Room codes have 6 letters and digits (no 0, 1, I or O).");
+    }
+    const joined = await api(gamePath(code, "/join"), "POST", {playerName: playerNameInput.value.trim()});
     state.gameCode = joined.game.code;
     state.playerId = joined.playerId;
     state.playerToken = joined.playerToken || "";
@@ -480,8 +490,18 @@ if (lobbyGameList) {
     });
 }
 
+/** Only real card codes reach a URL; anything else shows a card back. */
 function cardImage(code) {
-    return `/cards/${code}.png`;
+    return isCardCode(code) ? `/cards/${code}.png` : "/cards/BACK.png";
+}
+
+function cardImg(code, className) {
+    const img = document.createElement("img");
+    if (className) img.className = className;
+    img.src = cardImage(code);
+    img.alt = String(code || "");
+    img.title = String(code || "");
+    return img;
 }
 
 function renderSeat(el, player, game) {
@@ -500,7 +520,7 @@ function renderSeat(el, player, game) {
         backs += `<span class="card-back-face card-back-face--fan" style="transform: rotate(${angle}deg); z-index: ${i + 1};" aria-hidden="true"></span>`;
     }
     const fanClass = "back-fan" + (fewFan ? " back-fan--few" : "");
-    const teamClass = game.players.length === 4 && player.team !== null && player.team !== undefined
+    const teamClass = game.players.length === 4 && Number.isInteger(player.team)
         ? ` seat-title--team${player.team}` : "";
     const tags = roleTags(player, game);
     const aiBadge = player.bot ? `<span class="ai-badge" title="Bot">🤖</span>` : "";
@@ -540,10 +560,10 @@ function renderBattle(game) {
     for (const pairData of game.table) {
         const pair = document.createElement("div");
         pair.className = "battle-pair";
-        pair.dataset.attackCard = pairData.attackCard;
-        pair.innerHTML = `<img class="battle-card attack" src="${cardImage(pairData.attackCard)}" title="${pairData.attackCard}" alt="${pairData.attackCard}">`;
+        pair.dataset.attackCard = String(pairData.attackCard || "");
+        pair.appendChild(cardImg(pairData.attackCard, "battle-card attack"));
         if (pairData.defenseCard) {
-            pair.innerHTML += `<img class="battle-card defense" src="${cardImage(pairData.defenseCard)}" title="${pairData.defenseCard}" alt="${pairData.defenseCard}">`;
+            pair.appendChild(cardImg(pairData.defenseCard, "battle-card defense"));
         }
         battleCards.appendChild(pair);
     }
@@ -556,7 +576,9 @@ function renderMyHand(game, me) {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "hand-card-btn" + (state.selectedHandCard === code ? " selected" : "");
-        btn.innerHTML = `<img src="${cardImage(code)}" draggable="false" title="${code}" alt="${code}">`;
+        const img = cardImg(code);
+        img.draggable = false;
+        btn.appendChild(img);
         btn.setAttribute("aria-label", `Play ${prettyCard(code)}`);
         btn.setAttribute("aria-pressed", String(state.selectedHandCard === code));
         btn.draggable = true;
@@ -681,7 +703,7 @@ async function playCardToTable(cardCode, preferredAttackCard) {
 
     if (lm.canTransfer && transferable.includes(cardCode)) {
         await runAction("Transfer", async () => {
-            state.game = await api(`/api/games/${state.gameCode}/transfer`, "POST", {
+            state.game = await api(gamePath(state.gameCode, "/transfer"), "POST", {
                 playerId: state.playerId,
                 card: cardCode
             });
@@ -691,7 +713,7 @@ async function playCardToTable(cardCode, preferredAttackCard) {
     }
     if (lm.canAttack && attackable.includes(cardCode)) {
         await runAction("Attack", async () => {
-            state.game = await api(`/api/games/${state.gameCode}/attack`, "POST", {
+            state.game = await api(gamePath(state.gameCode, "/attack"), "POST", {
                 playerId: state.playerId,
                 card: cardCode
             });
@@ -713,7 +735,7 @@ async function playCardToTable(cardCode, preferredAttackCard) {
             return;
         }
         await runAction("Defend", async () => {
-            state.game = await api(`/api/games/${state.gameCode}/defend`, "POST", {
+            state.game = await api(gamePath(state.gameCode, "/defend"), "POST", {
                 playerId: state.playerId,
                 attackCard: target,
                 defenseCard: cardCode
@@ -818,11 +840,15 @@ function render() {
     }
     if (trumpSuitHud && game.trumpSuit) {
         const sym = trumpSuitGlyph(game.trumpSuit);
-        trumpSuitHud.innerHTML = `<span class="pill-role" aria-hidden="true">${sym}</span>`;
+        const glyph = document.createElement("span");
+        glyph.className = "pill-role";
+        glyph.setAttribute("aria-hidden", "true");
+        glyph.textContent = sym;
+        trumpSuitHud.replaceChildren(glyph);
         trumpSuitHud.title = `Trump ${sym}`;
         trumpSuitHud.classList.remove("hidden");
     } else if (trumpSuitHud) {
-        trumpSuitHud.innerHTML = "";
+        trumpSuitHud.replaceChildren();
         trumpSuitHud.classList.add("hidden");
     }
     const host = game.players.find(p => p.id === game.hostPlayerId);
@@ -952,7 +978,7 @@ async function refreshGame(showMessage = false) {
     const request = (async () => {
         try {
             const query = new URLSearchParams({viewerPlayerId: requestedPlayerId}).toString();
-            const refreshed = await api(`/api/games/${requestedGameCode}?${query}`, "GET");
+            const refreshed = await api(gamePath(requestedGameCode, `?${query}`), "GET");
             if (state.gameCode !== requestedGameCode || state.playerId !== requestedPlayerId) {
                 return false;
             }
@@ -1092,7 +1118,7 @@ async function sendHeartbeat() {
     if (document.visibilityState === "hidden"
         || !state.gameCode || !state.playerId || state.game?.status === "FINISHED") return;
     try {
-        await fetch(`/api/games/${state.gameCode}/heartbeat`, {
+        await fetch(gamePath(state.gameCode, "/heartbeat"), {
             method: "POST",
             headers: {"Content-Type": "application/json", ...authHeaders()},
             body: JSON.stringify({playerId: state.playerId})
@@ -1153,7 +1179,7 @@ function connectWebSocket() {
     }
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const gameCode = state.gameCode;
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${gameCode}`);
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${encodeURIComponent(gameCode)}`);
     state.ws = ws;
     ws.onopen = () => {
         if (state.ws !== ws || state.gameCode !== gameCode) return;
@@ -1303,7 +1329,7 @@ document.getElementById("leaveBtn").addEventListener("click", async () => {
     clearError();
     try {
         if (code && playerId) {
-            await api(`/api/games/${code}/leave`, "POST", {playerId});
+            await api(gamePath(code, "/leave"), "POST", {playerId});
         }
     } catch (err) {
         log(`Leave notify failed: ${err.message}`);
@@ -1319,25 +1345,25 @@ if (helpToggleBtn) {
 }
 
 startBtn.addEventListener("click", async () => runAction("Start", async () => {
-    state.game = await api(`/api/games/${state.gameCode}/start`, "POST", {playerId: state.playerId});
+    state.game = await api(gamePath(state.gameCode, "/start"), "POST", {playerId: state.playerId});
 }));
 
 if (rematchBtn) {
     rematchBtn.addEventListener("click", async () => runAction("Play again", async () => {
-        state.game = await api(`/api/games/${state.gameCode}/rematch`, "POST", {playerId: state.playerId});
+        state.game = await api(gamePath(state.gameCode, "/rematch"), "POST", {playerId: state.playerId});
         state.selectedHandCard = null;
     }, rematchBtn));
 }
 
 attackBtn.addEventListener("click", async () => runAction("Attack", async () => {
     if (!state.selectedHandCard) throw new Error("Select a card first.");
-    state.game = await api(`/api/games/${state.gameCode}/attack`, "POST", {playerId: state.playerId, card: state.selectedHandCard});
+    state.game = await api(gamePath(state.gameCode, "/attack"), "POST", {playerId: state.playerId, card: state.selectedHandCard});
     state.selectedHandCard = null;
 }));
 
 transferBtn.addEventListener("click", async () => runAction("Transfer", async () => {
     if (!state.selectedHandCard) throw new Error("Select a card first.");
-    state.game = await api(`/api/games/${state.gameCode}/transfer`, "POST", {playerId: state.playerId, card: state.selectedHandCard});
+    state.game = await api(gamePath(state.gameCode, "/transfer"), "POST", {playerId: state.playerId, card: state.selectedHandCard});
     state.selectedHandCard = null;
 }));
 
@@ -1352,7 +1378,7 @@ defendBtn.addEventListener("click", async () => runAction("Defend", async () => 
         target = attacksYouCanBeat[0];
     }
     if (!target) throw new Error("No attack card available to defend.");
-    state.game = await api(`/api/games/${state.gameCode}/defend`, "POST", {
+    state.game = await api(gamePath(state.gameCode, "/defend"), "POST", {
         playerId: state.playerId,
         attackCard: target,
         defenseCard: card
@@ -1361,18 +1387,18 @@ defendBtn.addEventListener("click", async () => runAction("Defend", async () => 
 }));
 
 takeBtn.addEventListener("click", async () => runAction("Take cards", async () => {
-    state.game = await api(`/api/games/${state.gameCode}/take`, "POST", {playerId: state.playerId});
+    state.game = await api(gamePath(state.gameCode, "/take"), "POST", {playerId: state.playerId});
     state.selectedHandCard = null;
 }));
 
 endRoundBtn.addEventListener("click", async () => runAction("End round", async () => {
-    state.game = await api(`/api/games/${state.gameCode}/end-round`, "POST", {playerId: state.playerId});
+    state.game = await api(gamePath(state.gameCode, "/end-round"), "POST", {playerId: state.playerId});
     state.selectedHandCard = null;
 }));
 
 if (addBotBtn) {
     addBotBtn.addEventListener("click", async () => runAction("Add bot", async () => {
-        state.game = await api(`/api/games/${state.gameCode}/bots`, "POST", {
+        state.game = await api(gamePath(state.gameCode, "/bots"), "POST", {
             playerId: state.playerId
         });
     }));

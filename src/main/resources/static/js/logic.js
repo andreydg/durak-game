@@ -128,10 +128,27 @@
         return Math.min(30_000, 4_000 * (2 ** failures));
     }
 
+    const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
+
+    /** Safe for element text and for quoted attribute values alike. */
     function escapeHtml(text) {
-        const d = document.createElement("div");
-        d.textContent = text == null ? "" : String(text);
-        return d.innerHTML;
+        return (text == null ? "" : String(text)).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+    }
+
+    /** Room codes are six characters from the server's alphabet (GameService.CODE_ALPHABET). */
+    const ROOM_CODE_PATTERN = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
+
+    /** Normalizes typed input to a room code, or returns "" when it cannot be one. */
+    function normalizeRoomCode(input) {
+        const code = String(input == null ? "" : input).trim().toUpperCase();
+        return ROOM_CODE_PATTERN.test(code) ? code : "";
+    }
+
+    const CARD_CODE_PATTERN = /^(?:[6-9]|10|[JQKA])[CDHS]$/;
+
+    /** True for the 36 card codes the server deals ("6C" .. "AS"). */
+    function isCardCode(code) {
+        return typeof code === "string" && CARD_CODE_PATTERN.test(code);
     }
 
     function roleTags(player, game) {
@@ -239,7 +256,7 @@
             <li class="${rowClass}">
                 <div class="lobby-list-meta">
                     <span class="lobby-list-code">${escapeHtml(r.code)}</span>
-                    <span class="muted">${(r.playerNames || []).map(escapeHtml).join(", ")} · ${r.playerCount}/${r.maxPlayers} players</span>
+                    <span class="muted">${(r.playerNames || []).map(escapeHtml).join(", ")} · ${escapeHtml(r.playerCount)}/${escapeHtml(r.maxPlayers)} players</span>
                 </div>
                 ${actionCol}
             </li>`;
@@ -260,6 +277,8 @@
         shouldReplaceRefreshTimer,
         lobbyRefreshDelayMs,
         escapeHtml,
+        normalizeRoomCode,
+        isCardCode,
         roleTags,
         playerTeam,
         onAttackingSide,

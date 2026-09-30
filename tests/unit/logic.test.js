@@ -163,6 +163,58 @@ describe("escapeHtml", () => {
         expect(L.escapeHtml(null)).toBe("");
         expect(L.escapeHtml(undefined)).toBe("");
     });
+
+    it("escapes both quote characters so output is safe inside attributes", () => {
+        expect(L.escapeHtml(`"x" onmouseover='y'`)).toBe("&quot;x&quot; onmouseover=&#39;y&#39;");
+        expect(L.escapeHtml(`<a href="x">&</a>`)).toBe("&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
+    });
+
+    it("stringifies numbers", () => {
+        expect(L.escapeHtml(4)).toBe("4");
+        expect(L.escapeHtml(0)).toBe("0");
+    });
+});
+
+describe("normalizeRoomCode", () => {
+    it("accepts six characters from the server alphabet, case-insensitively", () => {
+        expect(L.normalizeRoomCode("ABC234")).toBe("ABC234");
+        expect(L.normalizeRoomCode("  xyz789 ")).toBe("XYZ789");
+        expect(L.normalizeRoomCode("hjkmnp")).toBe("HJKMNP");
+    });
+
+    it("rejects characters the server never generates", () => {
+        expect(L.normalizeRoomCode("NOPE12")).toBe("");  // O and 1
+        expect(L.normalizeRoomCode("ABCDI2")).toBe("");  // I
+        expect(L.normalizeRoomCode("ABC0Z2")).toBe("");  // 0
+    });
+
+    it("rejects wrong lengths and anything that could alter a request path", () => {
+        expect(L.normalizeRoomCode("ABC23")).toBe("");
+        expect(L.normalizeRoomCode("ABC2345")).toBe("");
+        expect(L.normalizeRoomCode("../bot")).toBe("");
+        expect(L.normalizeRoomCode("AB/C23")).toBe("");
+        expect(L.normalizeRoomCode("ABC 23")).toBe("");
+        expect(L.normalizeRoomCode("ABC23?")).toBe("");
+        expect(L.normalizeRoomCode("")).toBe("");
+        expect(L.normalizeRoomCode(null)).toBe("");
+        expect(L.normalizeRoomCode(undefined)).toBe("");
+    });
+});
+
+describe("isCardCode", () => {
+    it("accepts every dealt card", () => {
+        for (const rank of ["6", "7", "8", "9", "10", "J", "Q", "K", "A"]) {
+            for (const suit of ["C", "D", "H", "S"]) {
+                expect(L.isCardCode(rank + suit)).toBe(true);
+            }
+        }
+    });
+
+    it("rejects anything else", () => {
+        for (const bad of ["", "5C", "1C", "11C", "10X", "6c", "AS\"", "AS><img", "BACK", null, undefined, 6]) {
+            expect(L.isCardCode(bad)).toBe(false);
+        }
+    });
 });
 
 describe("playerTeam", () => {
@@ -367,6 +419,16 @@ describe("lobbyRowsHtml", () => {
         const html = L.lobbyRowsHtml(evil, true, null);
         expect(html).not.toContain("<img src=x>");
         expect(html).toContain("&lt;img");
+    });
+
+    it("cannot break out of the data-code attribute", () => {
+        const evil = [{ code: `X" onclick="alert(1)`, playerNames: [], playerCount: "1<b>", maxPlayers: 4 }];
+        const container = document.createElement("div");
+        container.innerHTML = L.lobbyRowsHtml(evil, true, null);
+        const button = container.querySelector(".lobby-list-join");
+        expect(button.getAttribute("onclick")).toBeNull();
+        expect(button.getAttribute("data-code")).toBe(`X" onclick="alert(1)`);
+        expect(container.querySelector("b")).toBeNull();
     });
 });
 
