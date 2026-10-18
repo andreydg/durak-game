@@ -1,0 +1,106 @@
+name: Deploy
+
+# Releases main to Cloud Run once CI has passed for that exact commit. Runs one at a time; a run
+# whose commit is no longer the head of main stops before deploying, so an older build can never
+# replace a newer one. Setup: scripts/setup-github-deploy.sh (see README "Releases").
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Redeploys the current head of main, for example after fixing the setup.
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy to Cloud Run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL }}
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE: durak-game
+      REPOSITORY: durak-game
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Check that this commit is still the head of main
+        id: head
+        run: |
+          head="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "${head}" = "${SHA}" ]; then
+            echo "current=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::main moved on to ${head}; leaving ${SHA} undeployed (the newer commit's run deploys)."
+            echo "current=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Authenticate to Google Cloud
+        if: steps.head.outputs.current == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: steps.head.outputs.current == 'true'
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Build and push the image
+        if: steps.head.outputs.current == 'true'
+        run: |
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${SHA}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build --tag "${image}" .
+          docker push "${image}"
+          echo "IMAGE=${image}" >> "${GITHUB_ENV}"
+
+      # The build takes minutes; check again so a newer commit that landed meanwhile wins.
+      - name: Check again that this commit is still the head of main
+        id: still-head
+        if: steps.head.outputs.current == 'true'
+        run: |
+          head="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "${head}" = "${SHA}" ]; then
+            echo "current=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::main moved on to ${head} during the build; leaving ${SHA} undeployed."
+            echo "current=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Deploy
+        if: steps.still-head.outputs.current == 'true'
+        run: DEPLOY_ONLY=true ./scripts/deploy-cloud-run.sh
+
+      - name: Check the service serves this image with all traffic
+        if: steps.still-head.outputs.current == 'true'
+        run: |
+          service="$(gcloud run services describe "${SERVICE}" --region "${REGION}" --project "${PROJECT_ID}" --format=json)"
+          image="$(jq -r '.spec.template.spec.containers[0].image' <<<"${service}")"
+          latest_percent="$(jq -r '[.status.traffic[]? | select(.latestRevision == true) | .percent] | add // 0' <<<"${service}")"
+          echo "image=${image} traffic to latest revision=${latest_percent}%"
+          if [ "${image}" != "${IMAGE}" ] || [ "${latest_percent}" != "100" ]; then
+            echo "::error::Cloud Run is not sending all traffic to the latest revision with ${IMAGE}."
+            exit 1
+          fi
+          echo "SERVICE_URL=$(jq -r '.status.url' <<<"${service}")" >> "${GITHUB_ENV}"
+
+      - name: Smoke test
+        if: steps.still-head.outputs.current == 'true'
+        run: ./scripts/smoke-test.sh "${{ vars.PUBLIC_URL || env.SERVICE_URL }}"

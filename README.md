@@ -162,6 +162,8 @@ Optional environment variables:
 - `SERVICE` (default `durak-game`)
 - `REPOSITORY` (default `durak-game`)
 - `TAG` (default `latest`)
+- `IMAGE` (deploy this prebuilt image instead of building one with Cloud Build)
+- `DEPLOY_ONLY` (default `false`; `true` only rolls out a new revision: no API, secret, TTL, repository or public-access setup, and the service keeps its secret mapping. The release workflow uses it.)
 - `ALLOW_UNAUTHENTICATED` (default `true`)
 - `GEMINI_SECRET` (default `gemini-api-key`)
 - `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
@@ -181,15 +183,43 @@ PROJECT_ID="my-gcp-project" REGION="europe-west1" SERVICE="durak-prod" TAG="$(gi
 
 The deployed Durak service and its Gemini key can live in different projects. The script resolves the secret project's numeric id, verifies the configured secret and version without reading the secret value, grants the Cloud Run runtime identity `roles/secretmanager.secretAccessor` on that one secret, and injects it as `GEMINI_API_KEY`. The key is never passed to Cloud Build or stored in the container image. The account running the script must be able to update that secret's IAM policy and act as the selected runtime service account.
 
-For the current production layout, Durak runs in `andreyg-main` while `gemini-api-key` is stored in project `527294552477`:
+Production runs in `andreyg-main` (region `us-west1`) on the Firestore database `durak-store`, with the `gemini-api-key` secret in the same project:
 
 ```bash
-PROJECT_ID="andreyg-main" GEMINI_SECRET_PROJECT="527294552477" REGION="us-west1" ./scripts/deploy-cloud-run.sh
+PROJECT_ID="andreyg-main" REGION="us-west1" FIRESTORE_DATABASE_ID="durak-store" TAG="$(git rev-parse --short HEAD)" ./scripts/deploy-cloud-run.sh
 ```
+
+### 3) Releases from main
+
+After the one-time setup below, every commit on `main` that passes CI is released by [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+
+- It runs after the CI workflow succeeds for a push to `main`, one release at a time (concurrency group `production`).
+- It deploys only if the commit is still the head of `main`, checked before the build and again before deploying. When merges land close together, only the newest commit is released, and an older build can never replace a newer one.
+- It builds the image on the runner, pushes it to the `durak-game` Artifact Registry repository tagged with the commit SHA, and runs the deploy script with `DEPLOY_ONLY=true`, so every setting comes from this repository.
+- It then checks that the latest revision runs that image with all traffic, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh): health must be `UP` and the home page must load this commit's `main.js` hash.
+
+Run it by hand from the Actions tab (`workflow_dispatch`) to redeploy the head of `main`.
+
+One-time setup, with an account that can change IAM in the project. It creates a deployer service account with only what a release needs and lets GitHub's OIDC tokens for this repository's deploy workflow on `main` act as it (Workload Identity Federation, no keys). It then stores the identifiers as repository variables. It is safe to re-run, and should be re-run after changing the service's runtime identity:
+
+```bash
+PROJECT_ID="andreyg-main" REGION="us-west1" GITHUB_REPOSITORY="andreydg/durak-game" PUBLIC_URL="https://durak.andreyg.com" ./scripts/setup-github-deploy.sh
+```
+
+After the first release from the workflow succeeds, disable any other automatic deploy of the service, such as a Cloud Build trigger on `main`. Two independent deployers can finish out of order and leave an older commit live.
+
+**Rolling back.** Traffic can move back to an earlier revision without a rebuild:
+
+```bash
+gcloud run revisions list --service durak-game --region us-west1 --project andreyg-main --limit 10
+gcloud run services update-traffic durak-game --to-revisions REVISION=100 --region us-west1 --project andreyg-main
+```
+
+Only roll back to revision `durak-game-00037` or later. Older revisions predate snapshot codec v9 and cannot read rooms saved since. After a rollback, traffic stays pinned to that revision: the next release fails its traffic check until `gcloud run services update-traffic durak-game --to-latest ...` restores normal routing.
 
 ### Single-instance deployment requirement
 
-The deploy script pins the service to one instance (`--max-instances 1`). Keep it that way for now:
+The deploy script pins the service to one instance, both service-wide (`--max 1`) and per revision (`--max-instances 1`); Cloud Run applies the lower of the two. Keep it that way for now:
 
 - Websocket sessions, lobby invalidation revisions, and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
 - Concurrent-write protection uses in-process per-game locks (plus a stale-version check on every Firestore save as a safety net). Multiple instances would rely on the version check alone and reject racing writes instead of serializing them.
