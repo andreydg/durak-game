@@ -9,7 +9,7 @@ import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Suit;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
-import com.example.durakgame.service.store.InMemoryGameStore;
+import com.example.durakgame.service.store.GameStore;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -20,8 +20,12 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -30,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Every path that starts, finishes or interrupts a deal writes exactly one lifecycle line. */
 class GameLifecycleLogTest {
-    private final InMemoryGameStore store = new InMemoryGameStore();
+    private final SeededStore store = new SeededStore();
     private final GameWebSocketHandler webSocket = new GameWebSocketHandler(new ObjectMapper());
     private ListAppender<ILoggingEvent> logs;
     private Logger lifecycleLogger;
@@ -203,6 +207,39 @@ class GameLifecycleLogTest {
 
     private static List<Card> cards(String... codes) {
         return new ArrayList<>(Arrays.stream(codes).map(Card::fromCode).toList());
+    }
+
+    /**
+     * Stores snapshots as given, so a test can seed a room built from a snapshot. How the real
+     * stores guard against stale or out-of-order writes is not what these tests are about.
+     */
+    private static final class SeededStore implements GameStore {
+        private final Map<String, Game.Snapshot> rooms = new ConcurrentHashMap<>();
+
+        @Override
+        public void save(Game game) {
+            rooms.put(game.getCode(), game.toSnapshot());
+        }
+
+        @Override
+        public Optional<Game> findByCode(String code) {
+            return Optional.ofNullable(rooms.get(code)).map(Game::fromSnapshot);
+        }
+
+        @Override
+        public void deleteByCode(String code) {
+            rooms.remove(code);
+        }
+
+        @Override
+        public boolean existsByCode(String code) {
+            return rooms.containsKey(code);
+        }
+
+        @Override
+        public Collection<Game> listAll() {
+            return rooms.values().stream().map(Game::fromSnapshot).toList();
+        }
     }
 
     private static boolean waitUntil(java.util.function.BooleanSupplier condition, long timeoutMs)
