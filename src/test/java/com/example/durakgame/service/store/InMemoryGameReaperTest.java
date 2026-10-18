@@ -69,9 +69,11 @@ class InMemoryGameReaperTest {
     private static Game agedLobby(String code, long minutesAgo) {
         long createdAtMs = Instant.now().minus(minutesAgo, ChronoUnit.MINUTES).toEpochMilli();
         Game.PlayerSnapshot host = new Game.PlayerSnapshot("host", "Host", createdAtMs, false, null, List.of(), "");
-        return Game.fromSnapshot(new Game.Snapshot(
+        Game game = Game.fromSnapshot(new Game.Snapshot(
                 code, createdAtMs, createdAtMs, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()));
+        game.markNotPersisted(); // seeded as a new room, not a copy of a stored one
+        return game;
     }
 }

@@ -10,8 +10,11 @@ import java.util.Optional;
 
 public interface GameStore {
     /**
-     * Persists the game. Implementations reject stale writes: saving a game whose
-     * {@code version} is not newer than the stored one throws {@link StaleGameWriteException}.
+     * Persists the game as a compare-and-swap: the save succeeds only if the store still holds the
+     * version the game was loaded from or last saved as ({@link Game#getLoadedVersion()}), or holds
+     * nothing under its code for a game never persisted. Otherwise it throws
+     * {@link StaleGameWriteException}, whatever the game's own version. On success the game is
+     * marked persisted, so saving the same object again expects the version just written.
      */
     void save(Game game);
 

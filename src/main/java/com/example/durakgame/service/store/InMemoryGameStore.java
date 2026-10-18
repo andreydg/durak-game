@@ -20,13 +20,19 @@ public class InMemoryGameStore implements GameStore {
 
     @Override
     public void save(Game game) {
+        // Taken from the caller's object: the copy below reports the version being written instead.
+        long expectedVersion = game.getLoadedVersion();
         Game stored = copyOf(game);
-        games.merge(stored.getCode(), stored, (existing, incoming) -> {
-            if (existing.getVersion() >= incoming.getVersion()) {
-                throw new StaleGameWriteException(incoming.getCode(), incoming.getVersion(), existing.getVersion());
+        games.compute(stored.getCode(), (code, existing) -> {
+            boolean matches = expectedVersion == Game.NOT_PERSISTED
+                    ? existing == null
+                    : existing != null && existing.getVersion() == expectedVersion;
+            if (!matches) {
+                throw new StaleGameWriteException(code, expectedVersion, existing == null ? null : existing.getVersion());
             }
-            return incoming;
+            return stored;
         });
+        game.markPersisted();
     }
 
     @Override

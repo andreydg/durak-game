@@ -18,6 +18,8 @@ import java.util.Set;
 
 public class Game implements Serializable {
     public static final int MAX_HAND_SIZE = 6;
+    /** {@link #getLoadedVersion()} of a game no store holds yet: saving it must create it. */
+    public static final long NOT_PERSISTED = -1;
     /* Deals must not be predictable from earlier ones (java.util.Random's state is recoverable). */
     private static final SecureRandom SHUFFLE_RANDOM = new SecureRandom();
 
@@ -48,6 +50,11 @@ public class Game implements Serializable {
     private String loserPlayerName;
     private Integer loserTeam;
     private long version = 0;
+    /*
+     * Version this copy had when it was loaded or last saved; stores accept a save only while they
+     * still hold exactly that version (compare-and-swap). Not part of the snapshot or the codec.
+     */
+    private long loadedVersion = NOT_PERSISTED;
 
     public record Snapshot(
             String code,
@@ -582,6 +589,24 @@ public class Game implements Serializable {
         return version;
     }
 
+    /** The version a save expects the store to hold, or {@link #NOT_PERSISTED} for a game never stored. */
+    public synchronized long getLoadedVersion() {
+        return loadedVersion;
+    }
+
+    /** Called by a store after a successful save, so saving this object again expects the version just written. */
+    public synchronized void markPersisted() {
+        loadedVersion = version;
+    }
+
+    /**
+     * Treats this game as never stored, so the next save creates it and fails if its code is taken.
+     * For seeding a store with a game rebuilt from a snapshot.
+     */
+    public synchronized void markNotPersisted() {
+        loadedVersion = NOT_PERSISTED;
+    }
+
     /**
      * Bouts finished in the current deal, whether defended (cards discarded) or taken. Every player
      * can count these at the table, so bots may use it to judge the game phase; it resets whenever the
@@ -708,6 +733,7 @@ public class Game implements Serializable {
         game.takeLimit = snapshot.takeLimit();
         game.boutsCompleted = Math.max(0, snapshot.boutsCompleted());
         game.version = snapshot.version();
+        game.loadedVersion = snapshot.version();
         game.talon.clear();
         game.talon.addAll(snapshot.talon());
         game.table.clear();

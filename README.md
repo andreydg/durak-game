@@ -37,7 +37,7 @@ Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) a
 | Layer | Tool | Command | Covers |
 | --- | --- | --- | --- |
 | Backend | JUnit / Maven | `./mvnw test` | Game rules (including a seeded rules fuzzer), `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, security headers, stores |
-| Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
+| Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transactional compare-and-swap, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
 | Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js), plus static-page contracts: search metadata, versioned assets and the import map, CSP-safe markup, card images |
 | End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, finished results/rematches, hand privacy / anti-cheat), plus UI behaviour with synthetic games: phone/desktop layout (no horizontal overflow, hand above the sticky action strip), double-submit guards, keyboard focus, screen-reader names and announcements, leave confirmation, reconnecting after reload, API error handling, saved-seat validity, running under a strict CSP, and card URLs from the previous (PNG) frontend still drawing after a deploy |
 
@@ -192,7 +192,7 @@ PROJECT_ID="andreyg-main" GEMINI_SECRET_PROJECT="527294552477" REGION="us-west1"
 The deploy script pins the service to one instance (`--max-instances 1`). Keep it that way for now:
 
 - Websocket sessions, lobby invalidation revisions, and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
-- Concurrent-write protection uses in-process per-game locks (plus a stale-version check on every Firestore save as a safety net). Multiple instances would rely on the version check alone and reject racing writes instead of serializing them.
+- Concurrent-write protection uses in-process per-game locks, plus a compare-and-swap on every save as a safety net: a save succeeds only if the store still holds the version the game was loaded from. Multiple instances would rely on that check alone and reject racing writes instead of serializing them.
 
 Because a websocket occupies a request slot for as long as the tab is open, the single instance's `--concurrency` (200 by default, Cloud Run's maximum is 1000) is effectively the number of simultaneously open tabs it can serve. The script also sets `--timeout 3600` so Cloud Run doesn't cut every websocket after its default five minutes, and `--cpu-boost` for faster cold starts. The container defaults `JAVA_OPTS` to `-XX:MaxRAMPercentage=75.0`; without it the JVM would cap the heap at a quarter of the 512 MiB instance.
 
