@@ -26,6 +26,12 @@ set -euo pipefail
 #   SERVICE=durak-game  REPOSITORY=durak-game  DEPLOYER_SA_NAME=durak-deployer
 #   POOL_ID=github  PROVIDER_ID=durak-game
 #   RUNTIME_SERVICE_ACCOUNT=... (defaults to the service's current identity)
+#   ALLOW_DEFAULT_COMPUTE_SA=false (see below)
+#
+# The deployer may act as the service's runtime identity, so whatever that identity can do, code
+# merged to main can do. The script therefore refuses while the service still runs as the project's
+# default compute service account (broad project roles): give the service its own identity first
+# (scripts/setup-runtime-identity.sh), or set ALLOW_DEFAULT_COMPUTE_SA=true to accept the risk.
 
 : "${PROJECT_ID:?Set PROJECT_ID (your GCP project id)}"
 : "${GITHUB_REPOSITORY:?Set GITHUB_REPOSITORY (owner/name)}"
@@ -37,6 +43,7 @@ DEPLOYER_SA_NAME="${DEPLOYER_SA_NAME:-durak-deployer}"
 POOL_ID="${POOL_ID:-github}"
 PROVIDER_ID="${PROVIDER_ID:-durak-game}"
 RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
+ALLOW_DEFAULT_COMPUTE_SA="${ALLOW_DEFAULT_COMPUTE_SA:-false}"
 GCLOUD_BIN="${GCLOUD_BIN:-gcloud}"
 GH_BIN="${GH_BIN:-gh}"
 # A new service account can take a few seconds to become visible to IAM policy updates.
@@ -78,6 +85,13 @@ if [[ -z "${RUNTIME_SERVICE_ACCOUNT}" ]]; then
 fi
 if [[ -z "${RUNTIME_SERVICE_ACCOUNT}" ]]; then
   echo "Error: could not read ${SERVICE}'s runtime identity; deploy the service once with the deploy script, or set RUNTIME_SERVICE_ACCOUNT." >&2
+  exit 1
+fi
+if [[ "${RUNTIME_SERVICE_ACCOUNT}" == *-compute@developer.gserviceaccount.com && "${ALLOW_DEFAULT_COMPUTE_SA}" != "true" ]]; then
+  echo "Error: ${SERVICE} runs as the default compute service account (${RUNTIME_SERVICE_ACCOUNT})." >&2
+  echo "The deployer may act as the runtime identity, so this would give code merged to main that account's" >&2
+  echo "broad project roles. Give the service its own identity first (scripts/setup-runtime-identity.sh and" >&2
+  echo "README \"Runtime identity\"), then re-run; or set ALLOW_DEFAULT_COMPUTE_SA=true to accept the risk." >&2
   exit 1
 fi
 

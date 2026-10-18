@@ -144,6 +144,19 @@ run_setup "${RETRY_CALLS}" FAIL_BINDING_ATTEMPTS="2" >"${TMP_DIR}/retry.out" 2>"
 [[ "$(grep -c $'^run\tservices\tadd-iam-policy-binding' "${RETRY_CALLS}")" == "3" ]] \
   || fail "expected the service binding to succeed on the third attempt"
 
+# The deployer may act as the runtime identity, so the broad default compute account is refused.
+DEFAULT_SA_CALLS="${TMP_DIR}/default-sa.calls"
+if run_setup "${DEFAULT_SA_CALLS}" RUNTIME_SERVICE_ACCOUNT="629903314059-compute@developer.gserviceaccount.com" \
+    >"${TMP_DIR}/default-sa.out" 2>"${TMP_DIR}/default-sa.err"; then
+  fail "setup unexpectedly let the deployer act as the default compute service account"
+fi
+assert_contains "${TMP_DIR}/default-sa.err" "runs as the default compute service account"
+assert_not_contains "${DEFAULT_SA_CALLS}" 'add-iam-policy-binding'
+ALLOWED_DEFAULT_CALLS="${TMP_DIR}/allowed-default.calls"
+run_setup "${ALLOWED_DEFAULT_CALLS}" RUNTIME_SERVICE_ACCOUNT="629903314059-compute@developer.gserviceaccount.com" \
+  ALLOW_DEFAULT_COMPUTE_SA="true" >"${TMP_DIR}/allowed-default.out"
+assert_contains "${ALLOWED_DEFAULT_CALLS}" $'service-accounts\tadd-iam-policy-binding\t629903314059-compute@developer.gserviceaccount.com'
+
 NO_SERVICE_CALLS="${TMP_DIR}/no-service.calls"
 if run_setup "${NO_SERVICE_CALLS}" FAIL_SERVICE_DESCRIBE="true" >"${TMP_DIR}/no-service.out" 2>"${TMP_DIR}/no-service.err"; then
   fail "setup unexpectedly continued without a runtime identity"

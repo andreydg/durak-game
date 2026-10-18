@@ -200,13 +200,13 @@ After the one-time setup below, every commit on `main` that passes CI is release
 
 Run it by hand from the Actions tab (`workflow_dispatch`) to redeploy the head of `main`.
 
-One-time setup, with an account that can change IAM in the project. It creates a deployer service account with only what a release needs and lets GitHub's OIDC tokens for this repository's deploy workflow on `main` act as it (Workload Identity Federation, no keys). It then stores the identifiers as repository variables. It is safe to re-run, and should be re-run after changing the service's runtime identity:
+One-time setup, with an account that can change IAM in the project. First give the service its own runtime identity (`scripts/setup-runtime-identity.sh`). The deployer may act as that identity, and the script refuses while the service still runs as the default compute account, whose project roles would then reach anything merged to `main`. The script creates a deployer service account with only what a release needs and lets GitHub's OIDC tokens for this repository's deploy workflow on `main` act as it (Workload Identity Federation, no keys). It then stores the identifiers as repository variables. It is safe to re-run, and should be re-run after changing the service's runtime identity:
 
 ```bash
 PROJECT_ID="andreyg-main" REGION="us-west1" GITHUB_REPOSITORY="andreydg/durak-game" PUBLIC_URL="https://durak.andreyg.com" ./scripts/setup-github-deploy.sh
 ```
 
-After the first release from the workflow succeeds, disable any other automatic deploy of the service, such as a Cloud Build trigger on `main`. Two independent deployers can finish out of order and leave an older commit live.
+After the first release from the workflow succeeds, disable any other automatic deploy of the service, such as a Cloud Build trigger on `main`. Two independent deployers can finish out of order and leave an older commit live. A GitHub-type trigger has no `--disabled` flag. Export it with `gcloud beta builds triggers export TRIGGER --destination trigger.yaml`, set `disabled: true`, then run `gcloud builds triggers import --source trigger.yaml` (add `--project` to both commands).
 
 **Rolling back.** Traffic can move back to an earlier revision without a rebuild:
 
