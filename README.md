@@ -83,7 +83,7 @@ If your Firestore database id is not `(default)`, set:
 
 Rooms use activity-based expiration: waiting lobbies expire after 30 minutes of inactivity (and always within 2 hours of entering the current lobby phase), active games after 24 hours, and finished games after 60 minutes. Returning to the lobby after a played round starts a fresh lobby phase. These values can be changed with `LOBBY_IDLE_MINUTES`, `LOBBY_MAX_AGE_MINUTES`, `ACTIVE_GAME_IDLE_HOURS`, and `FINISHED_GAME_RETENTION_MINUTES`.
 
-The API and lobby list enforce expiration immediately. Firestore documents also carry `lastActivityAt`, `lobbyStartedAt`, and `expireAt`; configure a TTL policy on `games.expireAt` for eventual storage cleanup. The deploy script enables that policy by default because Firestore TTL deletion is asynchronous and is not used for live lobby correctness.
+The API and lobby list enforce expiration immediately but never delete: an expired room answers 410 and is hidden from the lobby list, because a read may hold a stale copy and deleting could remove a room that a concurrent heartbeat just renewed. Storage cleanup is separate. Firestore documents carry `lastActivityAt`, `lobbyStartedAt`, and `expireAt`, and a TTL policy on `games.expireAt` (which the deploy script configures by default) deletes expired rooms asynchronously. With the in-memory store, a reaper evicts them every minute (`GAME_REAPER_INTERVAL_MS`).
 
 ## Auto-play (Gemini)
 

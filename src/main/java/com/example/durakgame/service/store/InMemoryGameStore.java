@@ -39,6 +39,23 @@ public class InMemoryGameStore implements GameStore {
         games.remove(code);
     }
 
+    /**
+     * Removes the game only while the stored copy is still at {@code version}, atomically with
+     * {@link #save}. A cleanup decision made on an older copy then cannot remove a game that was
+     * saved (e.g. renewed by a heartbeat) in the meantime. Returns true when the game was removed.
+     */
+    public boolean deleteIfVersion(String code, long version) {
+        boolean[] removed = {false};
+        games.computeIfPresent(code, (key, stored) -> {
+            if (stored.getVersion() != version) {
+                return stored;
+            }
+            removed[0] = true;
+            return null;
+        });
+        return removed[0];
+    }
+
     @Override
     public boolean existsByCode(String code) {
         return games.containsKey(code);
