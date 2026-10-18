@@ -197,3 +197,28 @@ The deploy script pins the service to one instance (`--max-instances 1`). Keep i
 Because a websocket occupies a request slot for as long as the tab is open, the single instance's `--concurrency` (200 by default, Cloud Run's maximum is 1000) is effectively the number of simultaneously open tabs it can serve. The script also sets `--timeout 3600` so Cloud Run doesn't cut every websocket after its default five minutes, and `--cpu-boost` for faster cold starts. The container defaults `JAVA_OPTS` to `-XX:MaxRAMPercentage=75.0`; without it the JVM would cap the heap at a quarter of the 512 MiB instance.
 
 Game state itself persists in Firestore on Cloud Run, so a restart does not lose active rooms. To scale beyond one instance later, move websocket fan-out and bot status to a shared channel (for example Firestore listeners or Pub/Sub).
+
+### Runtime identity
+
+Unless told otherwise, Cloud Run runs the service as the project's default compute service account, which has broad project roles (Editor, Cloud Run Admin and more) and is often shared with other services and with Cloud Build triggers. Give the game its own identity with only the access it uses: Firestore, limited by an IAM condition to the game's database, and the Gemini key secret. The script is safe to re-run and does not change the running service:
+
+```bash
+PROJECT_ID="andreyg-main" FIRESTORE_DATABASE_ID="durak-store" ./scripts/setup-runtime-identity.sh
+```
+
+Then check the new identity on a tagged revision that receives no traffic. Its health check reads Firestore, and the revision only starts if it can read the Gemini secret:
+
+```bash
+IMAGE="$(gcloud run services describe durak-game --region us-west1 --project andreyg-main --format='value(spec.template.spec.containers[0].image)')"
+gcloud run deploy durak-game --image "${IMAGE}" --service-account "durak-runtime@andreyg-main.iam.gserviceaccount.com" --no-traffic --tag runtime-check --region us-west1 --project andreyg-main
+curl -s "https://runtime-check---durak-game-629903314059.us-west1.run.app/actuator/health"   # expect "status":"UP"
+```
+
+If it reports `UP`, send traffic to it and drop the tag. `--to-latest` also restores "latest revision gets all traffic", which later deploys rely on:
+
+```bash
+gcloud run services update-traffic durak-game --to-latest --region us-west1 --project andreyg-main
+gcloud run services update-traffic durak-game --remove-tags runtime-check --region us-west1 --project andreyg-main
+```
+
+Later deploys keep the identity: the deploy script reads it from the service, and image-only updates leave it unchanged. Leave the default compute account's roles alone; Cloud Build and other services may depend on them.

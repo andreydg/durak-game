@@ -96,11 +96,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Validate deploy script syntax
-        run: bash -n scripts/deploy-cloud-run.sh
+      - name: Validate deployment script syntax
+        run: for script in scripts/*.sh; do bash -n "$script"; done
 
-      - name: Test Secret Manager deployment contract
-        run: bash tests/scripts/deploy-cloud-run.test.sh
+      - name: Test deployment script contracts
+        run: for test in tests/scripts/*.test.sh; do bash "$test"; done
 
   e2e:
     name: End-to-end tests (Playwright)
