@@ -182,12 +182,14 @@ public class GameService {
         Player host = new Player(resolved);
         String code = generateUniqueCode();
         Game game = new Game(code, host, false);
+        GameLifecycleLog.Before before = GameLifecycleLog.Before.of(game);
         String botName = GuestNameGenerator.randomBotNameDistinctFrom(List.of(host.getName()));
         game.addPlayer(botName, MAX_PLAYERS, true);
         game.start(host.getId());
         gameStore.save(game);
         log.info("game_quick_started code={} hostPlayerId={} hostName={} botName={}",
                 game.getCode(), host.getId(), host.getName(), botName);
+        GameLifecycleLog.afterSave(before, game, "quick_play");
         scheduleAutoPlay(code);
         return game;
     }
@@ -309,15 +311,15 @@ public class GameService {
         String normalizedCode = normalizeCode(gameCode);
         Player joined = withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
+            GameLifecycleLog.Before before = GameLifecycleLog.Before.of(game);
             List<String> taken = game.getPlayers().stream().map(Player::getName).toList();
             String resolved = resolveDisplayName(playerName, taken);
             Player player = game.addPlayer(resolved, MAX_PLAYERS);
             if (game.getStatus() == GameStatus.LOBBY && game.getPlayers().size() == MAX_PLAYERS) {
                 game.start(game.getHostPlayerId());
-                log.info("game_started code={} hostPlayerId={} players={}",
-                        game.getCode(), game.getHostPlayerId(), game.getPlayers().size());
             }
             gameStore.save(game);
+            GameLifecycleLog.afterSave(before, game, "table_full");
             if (game.isPublicRoom()) {
                 publishLobbyChange();
             }
@@ -333,6 +335,7 @@ public class GameService {
         String normalizedCode = normalizeCode(gameCode);
         Player bot = withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
+            GameLifecycleLog.Before before = GameLifecycleLog.Before.of(game);
             if (!Objects.equals(game.getHostPlayerId(), hostPlayerId)) {
                 throw new IllegalStateException("Only host can add bots");
             }
@@ -347,6 +350,7 @@ public class GameService {
                 game.start(game.getHostPlayerId());
             }
             gameStore.save(game);
+            GameLifecycleLog.afterSave(before, game, "table_full");
             if (game.isPublicRoom()) {
                 publishLobbyChange();
             }
@@ -389,17 +393,16 @@ public class GameService {
     }
 
     public Game startGame(String gameCode, String playerId) {
-        Game game = mutateGame(gameCode, g -> g.start(playerId));
+        Game game = mutateGame(gameCode, "host", g -> g.start(playerId));
         if (game.isPublicRoom()) {
             publishLobbyChange();
         }
-        log.info("game_started code={} hostPlayerId={} players={}", game.getCode(), playerId, game.getPlayers().size());
         scheduleAutoPlay(game.getCode());
         return game;
     }
 
     public Game rematch(String gameCode, String playerId) {
-        Game game = mutateGame(gameCode, g -> g.rematch(playerId));
+        Game game = mutateGame(gameCode, "rematch", g -> g.rematch(playerId));
         log.info("game_rematched code={} hostPlayerId={} players={}",
                 game.getCode(), playerId, game.getPlayers().size());
         scheduleAutoPlay(game.getCode());
@@ -442,14 +445,12 @@ public class GameService {
         String normalizedCode = normalizeCode(gameCode);
         Game game = withGameLockRetryingStale(normalizedCode, () -> {
             Game g = getGame(normalizedCode);
-            GameStatus before = g.getStatus();
+            GameLifecycleLog.Before before = GameLifecycleLog.Before.of(g);
             g.endRound(playerId);
             gameStore.save(g);
             log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
-                    g.getCode(), playerId, before, g.getStatus(), g.getTable().size());
-            if (before != GameStatus.FINISHED && g.getStatus() == GameStatus.FINISHED) {
-                log.info("game_ended code={} loserPlayerId={}", g.getCode(), g.getLoserPlayerId());
-            }
+                    g.getCode(), playerId, before.status(), g.getStatus(), g.getTable().size());
+            GameLifecycleLog.afterSave(before, g, "player");
             return g;
         });
         scheduleAutoPlay(normalizedCode);
@@ -467,6 +468,7 @@ public class GameService {
         String normalizedCode = normalizeCode(gameCode);
         return withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
+            GameLifecycleLog.Before before = GameLifecycleLog.Before.of(game);
 
             if (game.getStatus() == GameStatus.IN_PROGRESS) {
                 boolean removed = game.removePlayerAndResetToLobby(playerId);
@@ -485,12 +487,14 @@ public class GameService {
             boolean hasHumanPlayer = game.getPlayers().stream().anyMatch(player -> !player.isBot());
             if (!hasHumanPlayer) {
                 gameStore.deleteByCode(normalizedCode);
+                GameLifecycleLog.roomClosed(before, game);
                 if (game.isPublicRoom()) {
                     publishLobbyChange();
                 }
                 return true;
             }
             gameStore.save(game);
+            GameLifecycleLog.afterSave(before, game, "leave");
             if (game.isPublicRoom()) {
                 publishLobbyChange();
             }
@@ -629,11 +633,18 @@ public class GameService {
     }
 
     private Game mutateGame(String gameCode, Consumer<Game> mutation) {
+        return mutateGame(gameCode, "player", mutation);
+    }
+
+    /** {@code trigger} names what changed the game in its lifecycle log line, if the deal starts or ends. */
+    private Game mutateGame(String gameCode, String trigger, Consumer<Game> mutation) {
         String normalizedCode = normalizeCode(gameCode);
         return withGameLockRetryingStale(normalizedCode, () -> {
             Game game = getGame(normalizedCode);
+            GameLifecycleLog.Before before = GameLifecycleLog.Before.of(game);
             mutation.accept(game);
             gameStore.save(game);
+            GameLifecycleLog.afterSave(before, game, trigger);
             return game;
         });
     }
@@ -844,6 +855,7 @@ public class GameService {
             if (fresh.getStatus() != GameStatus.IN_PROGRESS) {
                 return false;
             }
+            GameLifecycleLog.Before before = GameLifecycleLog.Before.of(fresh);
             ViewerLegalMoves freshMoves = fresh.computeViewerLegalMoves(player.getId());
             if (!isLegal(action, freshMoves)) {
                 log.info("autoplay_skip code={} playerId={} playerName={} reason=illegal_or_stale_action action={}",
@@ -858,6 +870,7 @@ public class GameService {
                 return false;
             }
             gameStore.save(fresh);
+            GameLifecycleLog.afterSave(before, fresh, "bot");
             webSocketHandler.broadcastGameUpdated(fresh.getCode(), fresh.getVersion());
             return true;
         });
