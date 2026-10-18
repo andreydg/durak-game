@@ -13,11 +13,15 @@ import java.security.Principal;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Reusable websocket test double with write-overlap and failure instrumentation. */
 final class TestWebSocketSession implements WebSocketSession {
+    private static final AtomicInteger IDS = new AtomicInteger();
+    private final String id = "session-" + IDS.incrementAndGet();
+    final Map<String, Object> attributes = new ConcurrentHashMap<>();
     final AtomicInteger sendAttempts = new AtomicInteger();
     final AtomicInteger inFlight = new AtomicInteger();
     final AtomicInteger maxInFlight = new AtomicInteger();
@@ -32,6 +36,20 @@ final class TestWebSocketSession implements WebSocketSession {
 
     TestWebSocketSession(String path) {
         this.uri = URI.create("ws://localhost" + path);
+    }
+
+    /** A session whose handshake recorded {@code clientKey} as the client's address. */
+    TestWebSocketSession(String path, String clientKey) {
+        this(path);
+        attributes.put(WebSocketAdmission.CLIENT_KEY_ATTRIBUTE, clientKey);
+    }
+
+    boolean awaitClosed(Duration timeout) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (open && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        return !open;
     }
 
     boolean awaitMessageCount(int expected, Duration timeout) throws InterruptedException {
@@ -50,10 +68,10 @@ final class TestWebSocketSession implements WebSocketSession {
         return sendAttempts.get() >= expected;
     }
 
-    @Override public String getId() { return "session-1"; }
+    @Override public String getId() { return id; }
     @Override public URI getUri() { return uri; }
     @Override public HttpHeaders getHandshakeHeaders() { return HttpHeaders.EMPTY; }
-    @Override public Map<String, Object> getAttributes() { return Map.of(); }
+    @Override public Map<String, Object> getAttributes() { return attributes; }
     @Override public Principal getPrincipal() { return null; }
     @Override public InetSocketAddress getLocalAddress() { return null; }
     @Override public InetSocketAddress getRemoteAddress() { return null; }

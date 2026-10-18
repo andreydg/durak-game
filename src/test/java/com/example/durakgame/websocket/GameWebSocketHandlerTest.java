@@ -2,49 +2,42 @@ package com.example.durakgame.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpHeaders;
 import org.springframework.web.socket.CloseStatus;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketExtension;
-import org.springframework.web.socket.WebSocketMessage;
-import org.springframework.web.socket.WebSocketSession;
 
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.security.Principal;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GameWebSocketHandlerTest {
+    private static final String GAME_PATH = "/ws/games/ABC123";
 
     private final GameWebSocketHandler handler = new GameWebSocketHandler(new ObjectMapper());
 
     @Test
-    void failedSessionCannotAbortABroadcastAndIsQuarantined() throws Exception {
-        StubSession session = new StubSession();
+    void failedSessionCannotAbortABroadcastAndIsDropped() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession(GAME_PATH);
         handler.afterConnectionEstablished(session);
         session.sendFailure = new IllegalStateException("TEXT_FULL_WRITING");
 
         assertDoesNotThrow(() -> handler.broadcastGameUpdated("ABC123", 4L));
+        assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
         assertDoesNotThrow(() -> handler.broadcastGameUpdated("ABC123", 5L));
 
         assertEquals(1, session.sendAttempts.get());
+        assertEquals(CloseStatus.SESSION_NOT_RELIABLE.getCode(), session.closeStatus.getCode());
     }
 
     @Test
-    void concurrentBroadcastsSerializeWritesPerSession() throws Exception {
-        StubSession session = new StubSession();
+    void concurrentBroadcastsAreWrittenOneAtATime() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession(GAME_PATH);
         session.sendDelayMs = 100;
         handler.afterConnectionEstablished(session);
 
@@ -66,21 +59,80 @@ class GameWebSocketHandlerTest {
             pool.shutdownNow();
         }
 
+        assertTrue(session.awaitMessageCount(2, Duration.ofSeconds(2)));
         assertEquals(1, session.maxInFlight.get());
-        assertEquals(2, session.messages.size());
     }
 
     @Test
     void reconnectingSessionReceivesCurrentBotThinkingState() throws Exception {
         handler.broadcastBotThinking("ABC123", "bot", true, "planning defence...");
-        StubSession session = new StubSession();
+        TestWebSocketSession session = new TestWebSocketSession(GAME_PATH);
 
         handler.afterConnectionEstablished(session);
 
-        assertEquals(1, session.messages.size());
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(2)));
         String payload = session.messages.getFirst().getPayload();
         assertTrue(payload.contains("\"thinking\":true"));
         assertTrue(payload.contains("planning defence..."));
+    }
+
+    @Test
+    void aSlowClientHoldsUpNeitherTheBroadcasterNorOtherClients() throws Exception {
+        TestWebSocketSession slow = new TestWebSocketSession(GAME_PATH);
+        slow.sendDelayMs = 1_000;
+        TestWebSocketSession fast = new TestWebSocketSession(GAME_PATH);
+        handler.afterConnectionEstablished(slow);
+        handler.afterConnectionEstablished(fast);
+
+        long started = System.nanoTime();
+        handler.broadcastGameUpdated("ABC123", 1L);
+        handler.broadcastGameUpdated("ABC123", 2L);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue(elapsedMs < 500, "broadcasting waited " + elapsedMs + " ms for a slow client");
+        assertTrue(fast.awaitMessageCount(2, Duration.ofMillis(500)), "the fast client waited for the slow one");
+        assertTrue(slow.awaitMessageCount(2, Duration.ofSeconds(5)), "the slow client still gets every update");
+    }
+
+    @Test
+    void aClientThatFallsTooFarBehindIsClosed() throws Exception {
+        TestWebSocketSession stuck = new TestWebSocketSession(GAME_PATH);
+        stuck.sendDelayMs = 10_000;
+        handler.afterConnectionEstablished(stuck);
+
+        for (int i = 0; i <= SessionSender.QUEUE_CAPACITY + 1; i++) {
+            handler.broadcastGameUpdated("ABC123", (long) i);
+        }
+
+        assertTrue(stuck.awaitClosed(Duration.ofSeconds(2)));
+        assertEquals(CloseStatus.SESSION_NOT_RELIABLE.getCode(), stuck.closeStatus.getCode());
+    }
+
+    @Test
+    void sessionsBeyondTheClientCapAreClosedUntilOneLeaves() throws Exception {
+        GameWebSocketHandler capped = new GameWebSocketHandler(new ObjectMapper(), new WebSocketAdmission(10, 2, 1));
+        TestWebSocketSession first = new TestWebSocketSession(GAME_PATH, "203.0.113.7");
+        TestWebSocketSession second = new TestWebSocketSession(GAME_PATH, "203.0.113.7");
+        TestWebSocketSession third = new TestWebSocketSession(GAME_PATH, "203.0.113.7");
+        TestWebSocketSession otherClient = new TestWebSocketSession(GAME_PATH, "198.51.100.9");
+
+        capped.afterConnectionEstablished(first);
+        capped.afterConnectionEstablished(second);
+        capped.afterConnectionEstablished(third);
+        capped.afterConnectionEstablished(otherClient);
+
+        assertFalse(third.isOpen());
+        assertEquals(CloseStatus.POLICY_VIOLATION.getCode(), third.closeStatus.getCode());
+        assertTrue(otherClient.isOpen());
+
+        capped.afterConnectionClosed(first, CloseStatus.NORMAL);
+        TestWebSocketSession replacement = new TestWebSocketSession(GAME_PATH, "203.0.113.7");
+        capped.afterConnectionEstablished(replacement);
+
+        assertTrue(replacement.isOpen());
+        capped.broadcastGameUpdated("ABC123", 1L);
+        assertTrue(replacement.awaitMessageCount(1, Duration.ofSeconds(2)));
+        assertEquals(0, third.messages.size());
     }
 
     private static void await(CountDownLatch latch) {
@@ -90,56 +142,5 @@ class GameWebSocketHandlerTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(ex);
         }
-    }
-
-    private static final class StubSession implements WebSocketSession {
-        private final AtomicInteger sendAttempts = new AtomicInteger();
-        private final AtomicInteger inFlight = new AtomicInteger();
-        private final AtomicInteger maxInFlight = new AtomicInteger();
-        private final List<TextMessage> messages = new ArrayList<>();
-        private volatile boolean open = true;
-        private volatile long sendDelayMs;
-        private volatile RuntimeException sendFailure;
-        private int textLimit = 64 * 1024;
-        private int binaryLimit = 64 * 1024;
-
-        @Override public String getId() { return "session-1"; }
-        @Override public URI getUri() { return URI.create("ws://localhost/ws/games/ABC123"); }
-        @Override public HttpHeaders getHandshakeHeaders() { return HttpHeaders.EMPTY; }
-        @Override public Map<String, Object> getAttributes() { return Map.of(); }
-        @Override public Principal getPrincipal() { return null; }
-        @Override public InetSocketAddress getLocalAddress() { return null; }
-        @Override public InetSocketAddress getRemoteAddress() { return null; }
-        @Override public String getAcceptedProtocol() { return null; }
-        @Override public void setTextMessageSizeLimit(int messageSizeLimit) { textLimit = messageSizeLimit; }
-        @Override public int getTextMessageSizeLimit() { return textLimit; }
-        @Override public void setBinaryMessageSizeLimit(int messageSizeLimit) { binaryLimit = messageSizeLimit; }
-        @Override public int getBinaryMessageSizeLimit() { return binaryLimit; }
-        @Override public List<WebSocketExtension> getExtensions() { return List.of(); }
-
-        @Override
-        public void sendMessage(WebSocketMessage<?> message) {
-            sendAttempts.incrementAndGet();
-            if (sendFailure != null) {
-                throw sendFailure;
-            }
-            int current = inFlight.incrementAndGet();
-            maxInFlight.accumulateAndGet(current, Math::max);
-            try {
-                if (sendDelayMs > 0) {
-                    Thread.sleep(sendDelayMs);
-                }
-                messages.add((TextMessage) message);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException(ex);
-            } finally {
-                inFlight.decrementAndGet();
-            }
-        }
-
-        @Override public boolean isOpen() { return open; }
-        @Override public void close() { open = false; }
-        @Override public void close(CloseStatus status) { open = false; }
     }
 }

@@ -158,6 +158,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
      * {@code getRemoteAddr()} with that leftmost value and hidden the header, so read the raw request.
      */
     String clientKey(HttpServletRequest request) {
+        return clientKeyOf(request, forwardedForHops);
+    }
+
+    /** {@link #clientKey} for callers outside the filter chain, such as the websocket handshake. */
+    public static String clientKeyOf(HttpServletRequest request, int forwardedForHops) {
         HttpServletRequest raw = unwrap(request);
         String address = null;
         List<String> hops = forwardedFor(raw);

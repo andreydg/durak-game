@@ -2,6 +2,7 @@ package com.example.durakgame.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -21,21 +22,36 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     private static final int MAX_SESSIONS_PER_GAME = 50;
 
     private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
+    /* Every write goes through the session's sender, so broadcasting never waits for a client. */
+    private final Map<String, SessionSender> senders = new ConcurrentHashMap<>();
     private final Map<String, Map<String, String>> botThinking = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper;
+    private final WebSocketAdmission admission;
 
     public GameWebSocketHandler(ObjectMapper objectMapper) {
+        this(objectMapper, WebSocketAdmission.unlimited());
+    }
+
+    @Autowired
+    public GameWebSocketHandler(ObjectMapper objectMapper, WebSocketAdmission admission) {
         this.objectMapper = objectMapper;
+        this.admission = admission;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws IOException {
+        if (!admission.admit(session)) {
+            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections"));
+            return;
+        }
         String gameCode = gameCodeFromSession(session);
         Set<WebSocketSession> sessions = gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet());
         if (sessions.size() >= MAX_SESSIONS_PER_GAME) {
+            admission.release(session);
             session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections for this game"));
             return;
         }
+        senders.put(session.getId(), new SessionSender(session));
         sessions.add(session);
         replayBotThinking(gameCode, session);
     }
@@ -46,6 +62,11 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
     }
 
     private void removeSession(String gameCode, WebSocketSession session) {
+        SessionSender sender = senders.remove(session.getId());
+        if (sender != null) {
+            sender.stop();
+        }
+        admission.release(session);
         String normalizedCode = normalizeCode(gameCode);
         Set<WebSocketSession> sessions = gameSessions.get(normalizedCode);
         if (sessions == null) {
@@ -109,7 +130,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         for (Map.Entry<String, String> entry : gameThinking.entrySet()) {
             TextMessage message = new TextMessage(
                     botThinkingJson(entry.getKey(), true, entry.getValue(), System.currentTimeMillis()));
-            if (!sendSafely(session, message)) {
+            if (!send(session, message)) {
                 removeSession(gameCode, session);
                 return;
             }
@@ -140,31 +161,17 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         TextMessage message = new TextMessage(payload);
-        sessions.removeIf(session -> !session.isOpen());
         for (WebSocketSession session : sessions) {
-            if (!sendSafely(session, message)) {
+            if (!send(session, message)) {
                 removeSession(gameCode, session);
             }
         }
     }
 
-    /**
-     * Spring websocket sessions do not permit overlapping sends. Bot work and HTTP
-     * actions can broadcast concurrently, so serialize per connection and quarantine
-     * a failed connection instead of allowing its exception to abort game logic.
-     */
-    private boolean sendSafely(WebSocketSession session, TextMessage message) {
-        try {
-            synchronized (session) {
-                if (!session.isOpen()) {
-                    return false;
-                }
-                session.sendMessage(message);
-            }
-            return true;
-        } catch (IOException | RuntimeException ignored) {
-            return false;
-        }
+    /** Queues without blocking; false when the session is gone or too far behind (its sender closes it). */
+    private boolean send(WebSocketSession session, TextMessage message) {
+        SessionSender sender = senders.get(session.getId());
+        return sender != null && sender.send(message);
     }
 
     private static String gameCodeFromSession(WebSocketSession session) {

@@ -4,6 +4,7 @@ import com.example.durakgame.service.LobbyUpdatePublisher;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -28,9 +29,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Component
 public class LobbyWebSocketHandler extends TextWebSocketHandler implements LobbyUpdatePublisher {
-    private static final int MAX_SESSIONS = 500;
+    /** Bursts of changes within this window go out as one message carrying the latest revision. */
+    static final long MIN_BROADCAST_INTERVAL_MS = 100;
 
     private final Set<WebSocketSession> sessions = ConcurrentHashMap.newKeySet();
+    /* Every write goes through the session's sender, so publishing never waits for a client. */
+    private final Map<String, SessionSender> senders = new ConcurrentHashMap<>();
     private final String streamId = UUID.randomUUID().toString();
     private final AtomicLong revision = new AtomicLong();
     private final AtomicLong deliveredRevision = new AtomicLong();
@@ -38,28 +42,44 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
     private final ExecutorService broadcastExecutor = Executors.newSingleThreadExecutor(
             Thread.ofVirtual().name("lobby-websocket-", 0).factory());
     private final ObjectMapper objectMapper;
+    private final WebSocketAdmission admission;
 
     public LobbyWebSocketHandler(ObjectMapper objectMapper) {
+        this(objectMapper, WebSocketAdmission.unlimited());
+    }
+
+    @Autowired
+    public LobbyWebSocketHandler(ObjectMapper objectMapper, WebSocketAdmission admission) {
         this.objectMapper = objectMapper;
+        this.admission = admission;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws IOException {
-        synchronized (sessions) {
-            if (sessions.size() >= MAX_SESSIONS) {
-                session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many lobby connections"));
-                return;
-            }
-            sessions.add(session);
+        if (!admission.admit(session)) {
+            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections"));
+            return;
         }
-        if (!sendSafely(session, message("LOBBIES_READY", revision.get()))) {
-            sessions.remove(session);
+        SessionSender sender = new SessionSender(session);
+        senders.put(session.getId(), sender);
+        sessions.add(session);
+        if (!sender.send(message("LOBBIES_READY", revision.get()))) {
+            remove(session);
         }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        remove(session);
+    }
+
+    private void remove(WebSocketSession session) {
         sessions.remove(session);
+        SessionSender sender = senders.remove(session.getId());
+        if (sender != null) {
+            sender.stop();
+        }
+        admission.release(session);
     }
 
     @Override
@@ -79,7 +99,11 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
         }
     }
 
-    /** Coalesces bursts while retaining a monotonic revision that lets clients ignore stale deliveries. */
+    /**
+     * Coalesces bursts while retaining a monotonic revision that lets clients ignore stale deliveries.
+     * Sending only queues, so a short pause after each broadcast is what lets a burst collapse: every
+     * client refetches the lobby list per message.
+     */
     private void drainBroadcasts() {
         long sentRevision = deliveredRevision.get();
         try {
@@ -87,7 +111,10 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
                 sentRevision = revision.get();
                 broadcast(message("LOBBIES_CHANGED", sentRevision));
                 deliveredRevision.set(sentRevision);
+                Thread.sleep(MIN_BROADCAST_INTERVAL_MS);
             }
+        } catch (InterruptedException stopped) {
+            Thread.currentThread().interrupt();
         } finally {
             broadcastScheduled.set(false);
             if (revision.get() != deliveredRevision.get()) {
@@ -97,10 +124,10 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
     }
 
     private void broadcast(TextMessage message) {
-        sessions.removeIf(session -> !session.isOpen());
         for (WebSocketSession session : sessions) {
-            if (!sendSafely(session, message)) {
-                sessions.remove(session);
+            SessionSender sender = senders.get(session.getId());
+            if (sender == null || !sender.send(message)) {
+                remove(session);
             }
         }
     }
@@ -119,21 +146,6 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
             return new TextMessage(objectMapper.writeValueAsString(payload));
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("Failed to serialize lobby websocket payload", ex);
-        }
-    }
-
-    /** Spring websocket sessions reject overlapping writes, so serialize per connection. */
-    private boolean sendSafely(WebSocketSession session, TextMessage message) {
-        try {
-            synchronized (session) {
-                if (!session.isOpen()) {
-                    return false;
-                }
-                session.sendMessage(message);
-            }
-            return true;
-        } catch (IOException | RuntimeException ignored) {
-            return false;
         }
     }
 }

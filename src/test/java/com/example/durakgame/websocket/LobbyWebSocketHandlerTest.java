@@ -32,7 +32,8 @@ class LobbyWebSocketHandlerTest {
 
         // The already-scheduled revision broadcast may race with this connection and deliver an
         // equivalent LOBBIES_CHANGED before or after READY. Ordering and message count are not
-        // protocol guarantees; the synchronous READY snapshot is.
+        // protocol guarantees; the READY snapshot taken at connection time is.
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
         Map<String, Object> ready = payloadOfType(session, "LOBBIES_READY");
         assertFalse(String.valueOf(ready.get("streamId")).isBlank());
         assertEquals(1, ((Number) ready.get("revision")).intValue());
@@ -47,6 +48,8 @@ class LobbyWebSocketHandlerTest {
         try {
             restarted.afterConnectionEstablished(second);
 
+            assertTrue(first.awaitMessageCount(1, Duration.ofSeconds(1)));
+            assertTrue(second.awaitMessageCount(1, Duration.ofSeconds(1)));
             assertNotEquals(
                     payload(first.messages.getFirst().getPayload()).get("streamId"),
                     payload(second.messages.getFirst().getPayload()).get("streamId")
@@ -74,6 +77,7 @@ class LobbyWebSocketHandlerTest {
     void failedSessionCannotAbortPublishingAndIsQuarantined() throws Exception {
         TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
         handler.afterConnectionEstablished(session);
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
         session.sendFailure = new IllegalStateException("TEXT_FULL_WRITING");
 
         assertDoesNotThrow(handler::lobbiesChanged);
@@ -88,6 +92,7 @@ class LobbyWebSocketHandlerTest {
     void burstInvalidationsAreCoalescedWithoutLosingLatestRevision() throws Exception {
         TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
         handler.afterConnectionEstablished(session);
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
         session.sendDelayMs = 75;
 
         for (int i = 0; i < 20; i++) {
@@ -105,17 +110,37 @@ class LobbyWebSocketHandlerTest {
     }
 
     @Test
-    void globalConnectionSetIsBounded() throws Exception {
-        for (int i = 0; i < 500; i++) {
-            handler.afterConnectionEstablished(new TestWebSocketSession("/ws/lobbies"));
+    void connectionsBeyondTheTotalCapAreClosed() throws Exception {
+        LobbyWebSocketHandler capped = new LobbyWebSocketHandler(objectMapper, new WebSocketAdmission(3, 3, 1));
+        try {
+            for (int i = 0; i < 3; i++) {
+                capped.afterConnectionEstablished(new TestWebSocketSession("/ws/lobbies", "198.51.100." + i));
+            }
+            TestWebSocketSession overflow = new TestWebSocketSession("/ws/lobbies", "198.51.100.99");
+
+            capped.afterConnectionEstablished(overflow);
+
+            assertFalse(overflow.isOpen());
+            assertEquals(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION.getCode(),
+                    overflow.closeStatus.getCode());
+        } finally {
+            capped.close();
         }
-        TestWebSocketSession overflow = new TestWebSocketSession("/ws/lobbies");
+    }
 
-        handler.afterConnectionEstablished(overflow);
+    @Test
+    void aSlowClientDoesNotDelayOtherClients() throws Exception {
+        TestWebSocketSession slow = new TestWebSocketSession("/ws/lobbies");
+        TestWebSocketSession fast = new TestWebSocketSession("/ws/lobbies");
+        handler.afterConnectionEstablished(slow);
+        handler.afterConnectionEstablished(fast);
+        assertTrue(slow.awaitMessageCount(1, Duration.ofSeconds(1)));
+        assertTrue(fast.awaitMessageCount(1, Duration.ofSeconds(1)));
+        slow.sendDelayMs = 2_000;
 
-        assertFalse(overflow.isOpen());
-        assertEquals(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION.getCode(),
-                overflow.closeStatus.getCode());
+        handler.lobbiesChanged();
+
+        assertTrue(fast.awaitMessageCount(2, Duration.ofMillis(500)), "the fast client waited for the slow one");
     }
 
     private Map<String, Object> payload(String json) throws Exception {
