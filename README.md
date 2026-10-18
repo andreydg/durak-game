@@ -214,7 +214,14 @@ gcloud run deploy durak-game --image "${IMAGE}" --service-account "durak-runtime
 curl -s "https://runtime-check---durak-game-629903314059.us-west1.run.app/actuator/health"   # expect "status":"UP"
 ```
 
-If it reports `UP`, send traffic to it and drop the tag. `--to-latest` also restores "latest revision gets all traffic", which later deploys rely on:
+The health check only reads a document. Before switching, also check that the identity can write: create a Quick Play game on the tag URL and read it back. That covers Firestore transactions, and the bot's first move exercises the Gemini key:
+
+```bash
+CODE="$(curl -s -X POST -H 'Content-Type: application/json' -d '{"hostName":"Identity check"}' https://runtime-check---durak-game-629903314059.us-west1.run.app/api/games/quick-play | python3 -c 'import json,sys; print(json.load(sys.stdin)["game"]["code"])')"
+curl -s -o /dev/null -w '%{http_code}\n' "https://runtime-check---durak-game-629903314059.us-west1.run.app/api/games/${CODE}"   # expect 200
+```
+
+If both checks pass, send traffic to it and drop the tag. `--to-latest` also restores "latest revision gets all traffic", which later deploys rely on:
 
 ```bash
 gcloud run services update-traffic durak-game --to-latest --region us-west1 --project andreyg-main
