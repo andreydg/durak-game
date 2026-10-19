@@ -1,8 +1,10 @@
 package com.example.durakgame.websocket;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 
 import java.time.Duration;
@@ -17,6 +19,9 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /** Several tests block a write or a close on a latch; a regression must fail, not hang the build. */
 @Timeout(10)
@@ -96,6 +101,36 @@ class GameWebSocketHandlerTest {
         assertTrue(elapsedMs < 500, "broadcasting waited " + elapsedMs + " ms for a slow client");
         assertTrue(fast.awaitMessageCount(2, Duration.ofMillis(500)), "the fast client waited for the slow one");
         assertTrue(slow.awaitMessageCount(2, Duration.ofSeconds(5)), "the slow client still gets every update");
+    }
+
+    @Test
+    void aBinaryMessageClosesTheSessionFromItsSender() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession(GAME_PATH);
+        handler.afterConnectionEstablished(session);
+
+        handler.handleMessage(session, new BinaryMessage(new byte[] {1}));
+
+        assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+        assertEquals(CloseStatus.NOT_ACCEPTABLE.getCode(), session.closeStatus.getCode());
+        assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
+        assertEquals(1, session.closeCalls.get());
+    }
+
+    @Test
+    void aFailureWhileOpeningClosesTheSessionInsteadOfThrowing() throws Exception {
+        ObjectMapper failing = mock(ObjectMapper.class);
+        when(failing.writeValueAsString(any())).thenThrow(new JsonProcessingException("cannot serialize") { });
+        GameWebSocketHandler broken = new GameWebSocketHandler(failing);
+        // Leaves a status to replay to new sessions, which then fails to serialize.
+        assertThrows(IllegalStateException.class, () -> broken.broadcastBotThinking("ABCD23", "bot", true, "planning..."));
+        TestWebSocketSession session = new TestWebSocketSession(GAME_PATH);
+
+        // Thrown on, Spring would close the session the ordinary way.
+        assertDoesNotThrow(() -> broken.afterConnectionEstablished(session));
+
+        assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+        assertEquals(CloseStatus.SERVER_ERROR.getCode(), session.closeStatus.getCode());
+        assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
     }
 
     @Test

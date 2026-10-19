@@ -4,8 +4,11 @@ import com.example.durakgame.service.LobbyUpdatePublisher;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -30,6 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class LobbyWebSocketHandler extends TextWebSocketHandler implements LobbyUpdatePublisher {
     /** Bursts of changes within this window go out as one message carrying the latest revision. */
     static final long MIN_BROADCAST_INTERVAL_MS = 100;
+    private static final Logger log = LoggerFactory.getLogger(LobbyWebSocketHandler.class);
 
     private final Set<WebSocketSession> sessions = ConcurrentHashMap.newKeySet();
     /* Every write goes through the session's sender, so publishing never waits for a client. */
@@ -60,11 +64,37 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
             SessionSender.closeNow(session, CloseStatus.SERVICE_OVERLOAD);
             return;
         }
-        SessionSender sender = new SessionSender(session);
-        senders.put(session.getId(), sender);
-        sessions.add(session);
-        if (!sender.send(message("LOBBIES_READY", revision.get()))) {
-            sessions.remove(session);
+        try {
+            SessionSender sender = new SessionSender(session);
+            senders.put(session.getId(), sender);
+            sessions.add(session);
+            if (!sender.send(message("LOBBIES_READY", revision.get()))) {
+                sessions.remove(session);
+            }
+        } catch (RuntimeException ex) {
+            // Thrown on, it would make Spring close the session the ordinary way (see handleBinaryMessage).
+            log.warn("websocket_open_failed sessionId={}", session.getId(), ex);
+            closeConnection(session, CloseStatus.SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Clients only listen, so a binary message ends the session. The inherited handling closes it
+     * the ordinary way, which leaves the connection open until the client answers, while
+     * afterConnectionClosed has already given back its place; this drops it after the close frame.
+     */
+    @Override
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+        closeConnection(session, CloseStatus.NOT_ACCEPTABLE.withReason("Binary messages not supported"));
+    }
+
+    /** From the session's sender thread, or from this one (the connection's own) if it has no sender. */
+    private void closeConnection(WebSocketSession session, CloseStatus status) {
+        SessionSender sender = senders.get(session.getId());
+        if (sender != null) {
+            sender.close(status);
+        } else {
+            SessionSender.closeNow(session, status);
         }
     }
 

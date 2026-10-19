@@ -2,6 +2,8 @@ package com.example.durakgame.websocket;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 })
 class WebSocketHandshakeIntegrationTest {
     private static final int OPCODE_TEXT = 0x1;
+    private static final int OPCODE_BINARY = 0x2;
     private static final int OPCODE_CLOSE = 0x8;
     private static final int END_OF_STREAM = -1;
     private static final int STILL_OPEN = -2;
@@ -239,6 +242,107 @@ class WebSocketHandshakeIntegrationTest {
         }
     }
 
+    /**
+     * The second review's probe, on both endpoints: one binary message, and the server's 1003 close
+     * frame never answered. The inherited handling closed the ordinary way, so the connection
+     * stayed open waiting for the reply after afterConnectionClosed had already given back its
+     * place, and one address could keep any number of them open.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"/ws/lobbies", "/ws/games/BNRY23"})
+    void aBinaryMessageDropsTheConnectionAndGivesBackItsPlace(String path) throws Exception {
+        String address = path.startsWith("/ws/games/") ? "203.0.113.110" : "203.0.113.111";
+        List<Handshake> open = new ArrayList<>();
+        try {
+            Handshake idle = handshake(path, "localhost:" + port, origin(), address);
+            open.add(idle);
+            assertEquals(101, idle.status());
+            for (int i = 0; i < 6; i++) {
+                Handshake binary = handshake(path, "localhost:" + port, origin(), address);
+                open.add(binary);
+                assertEquals(101, binary.status(), "attempt " + i);
+                try (Handshake third = handshake(path, "localhost:" + port, origin(), address)) {
+                    assertEquals(429, third.status(), "both places are taken, attempt " + i);
+                }
+
+                binary.sendFrame(OPCODE_BINARY, new byte[] {1});
+
+                assertEquals(CloseStatus.NOT_ACCEPTABLE.getCode(), binary.readUntilCloseFrame(), "attempt " + i);
+                assertEquals(END_OF_STREAM, binary.nextByteWithin(Duration.ofSeconds(3)),
+                        "dropped right after the close frame, without waiting for the client's reply");
+            }
+
+            // Each of the six gave its place back exactly once: one is free again, and only one.
+            open.add(handshake(path, "localhost:" + port, origin(), address));
+            assertEquals(101, open.getLast().status());
+            try (Handshake over = handshake(path, "localhost:" + port, origin(), address)) {
+                assertEquals(429, over.status());
+            }
+        } finally {
+            for (Handshake handshake : open) {
+                handshake.close();
+            }
+        }
+    }
+
+    @Test
+    void aBinaryMessageGivesBackItsPlaceInTheRoomOnce() throws Exception {
+        String room = "/ws/games/BNRY24";
+        List<Handshake> open = new ArrayList<>();
+        try {
+            for (int i = 0; i < 3; i++) {
+                open.add(handshake(room, "localhost:" + port, origin(), "203.0.113.12" + i));
+                assertEquals(101, open.getLast().status());
+            }
+            try (Handshake fourth = handshake(room, "localhost:" + port, origin(), "203.0.113.129")) {
+                assertEquals(429, fourth.status(), "the room is full");
+            }
+
+            Handshake binary = open.getFirst();
+            binary.sendFrame(OPCODE_BINARY, new byte[] {1});
+            assertEquals(CloseStatus.NOT_ACCEPTABLE.getCode(), binary.readUntilCloseFrame());
+            assertEquals(END_OF_STREAM, binary.nextByteWithin(Duration.ofSeconds(3)));
+
+            open.add(handshake(room, "localhost:" + port, origin(), "203.0.113.129"));
+            assertEquals(101, open.getLast().status(), "the dropped socket's place in the room is free");
+            try (Handshake fifth = handshake(room, "localhost:" + port, origin(), "203.0.113.128")) {
+                assertEquals(429, fifth.status(), "and only that one");
+            }
+        } finally {
+            for (Handshake handshake : open) {
+                handshake.close();
+            }
+        }
+    }
+
+    /**
+     * The neighbouring path Tomcat handles itself: a text message over its buffer is refused as a
+     * protocol error, and Tomcat drops the connection with the close frame.
+     */
+    @Test
+    void anOversizedTextMessageDropsTheConnectionToo() throws Exception {
+        String address = "203.0.113.130";
+        try (Handshake big = handshake("/ws/lobbies", "localhost:" + port, origin(), address)) {
+            assertEquals(101, big.status());
+
+            big.sendFrame(OPCODE_TEXT, "x".repeat(20_000).getBytes(StandardCharsets.US_ASCII));
+
+            assertEquals(CloseStatus.TOO_BIG_TO_PROCESS.getCode(), big.readUntilCloseFrame());
+            assertEquals(END_OF_STREAM, big.nextByteWithin(Duration.ofSeconds(3)));
+        }
+        List<Handshake> open = new ArrayList<>();
+        try {
+            for (int i = 0; i < 2; i++) {
+                open.add(handshake("/ws/lobbies", "localhost:" + port, origin(), address));
+                assertEquals(101, open.getLast().status(), "its place was given back");
+            }
+        } finally {
+            for (Handshake handshake : open) {
+                handshake.close();
+            }
+        }
+    }
+
     private String origin() {
         return "http://localhost:" + port;
     }
@@ -316,6 +420,22 @@ class WebSocketHandshakeIntegrationTest {
 
     /** A client connection; it reads only when a test asks and never sends anything after the request. */
     private record Handshake(Socket socket, DataInputStream in, int status) implements AutoCloseable {
+        /** Sends one frame masked as clients must, with an all-zero mask so the payload goes as is. */
+        void sendFrame(int opcode, byte[] payload) throws IOException {
+            ByteArrayOutputStream frame = new ByteArrayOutputStream();
+            frame.write(0x80 | opcode);
+            if (payload.length < 126) {
+                frame.write(0x80 | payload.length);
+            } else {
+                frame.write(0x80 | 126);
+                frame.write(payload.length >>> 8);
+                frame.write(payload.length & 0xFF);
+            }
+            frame.write(new byte[4]);
+            frame.write(payload);
+            socket.getOutputStream().write(frame.toByteArray());
+        }
+
         /** The opcode of the first frame the server sends, or -1 if none arrives in time. */
         int firstFrameOpcode() throws IOException {
             try {

@@ -135,6 +135,48 @@ class SessionSenderTest {
         assertEquals(1, session.closeCalls.get());
     }
 
+    /** For closes decided on the connection's own events, such as a message the server doesn't accept. */
+    @Test
+    void aCloseRequestRunsOnTheSendersThreadAfterTheWriteInFlight() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
+        session.sendGate = new CountDownLatch(1);
+        session.closeGate = new CountDownLatch(1);
+        SessionSender sender = new SessionSender(session);
+        assertTrue(sender.send(new TextMessage("in flight")));
+        assertTrue(session.awaitSendAttempts(1, Duration.ofSeconds(2)));
+        assertTrue(sender.send(new TextMessage("queued")));
+
+        long started = System.nanoTime();
+        sender.close(CloseStatus.NOT_ACCEPTABLE);
+        sender.close(CloseStatus.SERVER_ERROR);
+        long requestMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue(requestMs < 200, "asking to close waited " + requestMs + " ms");
+        assertFalse(sender.send(new TextMessage("after close")));
+        assertEquals(0, session.closeCalls.get(), "the write in flight goes first");
+        session.sendGate.countDown();
+        assertTrue(session.awaitCloseCalls(1, Duration.ofSeconds(2)));
+        assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
+        session.closeGate.countDown();
+        assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+        assertEquals(CloseStatus.NOT_ACCEPTABLE.getCode(), session.closeStatus.getCode(), "the first status wins");
+        assertTrue(awaitDone(sender));
+        assertEquals(1, session.closeCalls.get());
+        assertEquals(List.of("in flight"), session.messages.stream().map(TextMessage::getPayload).toList());
+    }
+
+    @Test
+    void aCloseRequestAfterTheConnectionClosedDoesNothing() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
+        SessionSender sender = new SessionSender(session);
+
+        sender.stop();
+        sender.close(CloseStatus.NOT_ACCEPTABLE);
+
+        assertTrue(awaitDone(sender));
+        assertEquals(0, session.closeCalls.get());
+    }
+
     @Test
     void aStoppedSenderAcceptsNothingAndClosesNothing() throws Exception {
         TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");

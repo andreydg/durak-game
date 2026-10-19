@@ -66,14 +66,27 @@ final class SessionSender {
                 return true;
             }
             // The backlog would arrive too late to matter; the client re-reads the game when it reconnects.
-            queue.clear();
-            closing = CloseStatus.SESSION_NOT_RELIABLE;
-            changed.signal();
+            requestClose(CloseStatus.SESSION_NOT_RELIABLE);
         } finally {
             lock.unlock();
         }
         log.info("websocket_session_dropped reason=send_queue_full sessionId={}", session.getId());
         return false;
+    }
+
+    /**
+     * Closes the session from the sender's own thread, as a full queue does: anything still queued
+     * is dropped, the write in flight finishes first, and the connection goes right after the close
+     * frame ({@link #closeNow}). For closes the server decides on the connection's own events, such
+     * as a message it doesn't accept. Returns at once; the first status wins.
+     */
+    void close(CloseStatus status) {
+        lock.lock();
+        try {
+            requestClose(status);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /** The connection closed: drops queued messages and ends the thread. Safe to call more than once. */
@@ -128,12 +141,18 @@ final class SessionSender {
     private void markClosing() {
         lock.lock();
         try {
-            queue.clear();
-            if (closing == null) {
-                closing = CloseStatus.SESSION_NOT_RELIABLE;
-            }
+            requestClose(CloseStatus.SESSION_NOT_RELIABLE);
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** Holds the lock. Writes nothing more and has the thread close with {@code status}, unless already closing. */
+    private void requestClose(CloseStatus status) {
+        queue.clear();
+        if (closing == null && !stopped) {
+            closing = status;
+            changed.signal();
         }
     }
 

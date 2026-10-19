@@ -2,8 +2,11 @@ package com.example.durakgame.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -17,6 +20,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
+    private static final Logger log = LoggerFactory.getLogger(GameWebSocketHandler.class);
+
     private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
     /* Every write goes through the session's sender, so broadcasting never waits for a client. */
     private final Map<String, SessionSender> senders = new ConcurrentHashMap<>();
@@ -42,9 +47,25 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         String gameCode = gameCodeFromSession(session);
-        senders.put(session.getId(), new SessionSender(session));
-        gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet()).add(session);
-        replayBotThinking(gameCode, session);
+        try {
+            senders.put(session.getId(), new SessionSender(session));
+            gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet()).add(session);
+            replayBotThinking(gameCode, session);
+        } catch (RuntimeException ex) {
+            // Thrown on, it would make Spring close the session the ordinary way (see handleBinaryMessage).
+            log.warn("websocket_open_failed sessionId={}", session.getId(), ex);
+            closeConnection(session, CloseStatus.SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Clients only listen, so a binary message ends the session. The inherited handling closes it
+     * the ordinary way, which leaves the connection open until the client answers, while
+     * afterConnectionClosed has already given back its place; this drops it after the close frame.
+     */
+    @Override
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+        closeConnection(session, CloseStatus.NOT_ACCEPTABLE.withReason("Binary messages not supported"));
     }
 
     @Override
@@ -55,6 +76,16 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             sender.stop();
         }
         admission.release(session);
+    }
+
+    /** From the session's sender thread, or from this one (the connection's own) if it has no sender. */
+    private void closeConnection(WebSocketSession session, CloseStatus status) {
+        SessionSender sender = senders.get(session.getId());
+        if (sender != null) {
+            sender.close(status);
+        } else {
+            SessionSender.closeNow(session, status);
+        }
     }
 
     /**

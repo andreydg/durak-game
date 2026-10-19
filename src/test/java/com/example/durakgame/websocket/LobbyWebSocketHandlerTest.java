@@ -1,10 +1,12 @@
 package com.example.durakgame.websocket;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 
 import java.time.Duration;
@@ -16,6 +18,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @Timeout(10)
 class LobbyWebSocketHandlerTest {
@@ -133,6 +138,38 @@ class LobbyWebSocketHandlerTest {
             assertEquals(1, admission.openSessions());
         } finally {
             capped.close();
+        }
+    }
+
+    @Test
+    void aBinaryMessageClosesTheSessionFromItsSender() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
+        handler.afterConnectionEstablished(session);
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
+
+        handler.handleMessage(session, new BinaryMessage(new byte[] {1}));
+
+        assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+        assertEquals(CloseStatus.NOT_ACCEPTABLE.getCode(), session.closeStatus.getCode());
+        assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
+        assertEquals(1, session.closeCalls.get());
+    }
+
+    @Test
+    void aFailureWhileOpeningClosesTheSessionInsteadOfThrowing() throws Exception {
+        ObjectMapper failing = mock(ObjectMapper.class);
+        when(failing.writeValueAsString(any())).thenThrow(new JsonProcessingException("cannot serialize") { });
+        LobbyWebSocketHandler broken = new LobbyWebSocketHandler(failing);
+        TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
+        try {
+            // Thrown on, Spring would close the session the ordinary way.
+            assertDoesNotThrow(() -> broken.afterConnectionEstablished(session));
+
+            assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+            assertEquals(CloseStatus.SERVER_ERROR.getCode(), session.closeStatus.getCode());
+            assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
+        } finally {
+            broken.close();
         }
     }
 
