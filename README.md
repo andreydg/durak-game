@@ -174,6 +174,8 @@ Optional environment variables:
 - `SERVICE` (default `durak-game`)
 - `REPOSITORY` (default `durak-game`)
 - `TAG` (default `latest`)
+- `IMAGE` (deploy this prebuilt image instead of building one with Cloud Build)
+- `DEPLOY_ONLY` (default `false`; `true` only rolls out a new revision: no API, secret, TTL, repository or public-access setup, and the service keeps its secret mapping. The release workflow uses it.)
 - `ALLOW_UNAUTHENTICATED` (default `true`)
 - `GEMINI_SECRET` (default `gemini-api-key`)
 - `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
@@ -193,15 +195,75 @@ PROJECT_ID="my-gcp-project" REGION="europe-west1" SERVICE="durak-prod" TAG="$(gi
 
 The deployed Durak service and its Gemini key can live in different projects. The script resolves the secret project's numeric id, verifies the configured secret and version without reading the secret value, grants the Cloud Run runtime identity `roles/secretmanager.secretAccessor` on that one secret, and injects it as `GEMINI_API_KEY`. The key is never passed to Cloud Build or stored in the container image. The account running the script must be able to update that secret's IAM policy and act as the selected runtime service account.
 
-For the current production layout, Durak runs in `andreyg-main` while `gemini-api-key` is stored in project `527294552477`:
+Production runs in `andreyg-main` (region `us-west1`) on the Firestore database `durak-store`, with the `gemini-api-key` secret in the same project:
 
 ```bash
-PROJECT_ID="andreyg-main" GEMINI_SECRET_PROJECT="527294552477" REGION="us-west1" ./scripts/deploy-cloud-run.sh
+PROJECT_ID="andreyg-main" REGION="us-west1" FIRESTORE_DATABASE_ID="durak-store" TAG="$(git rev-parse --short HEAD)" ./scripts/deploy-cloud-run.sh
 ```
+
+### 3) Releases from main
+
+After the one-time setup below, every commit on `main` that passes CI is released by [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+
+- It runs after the CI workflow succeeds for a push to `main`, one release at a time (concurrency group `production`). Waiting releases keep their turn (`queue: max`). With GitHub's default queue, a later arrival cancels the one waiting, so a re-run of an older commit's CI could evict the head's release.
+- [`scripts/release-gate.sh`](scripts/release-gate.sh) lets it deploy only a commit that is still the head of `main` and whose latest CI run on a push to `main` passed. The gate runs before anything touches Google Cloud and again after the build, before deploying. When merges land close together, only the newest commit is released, and an older build can never replace a newer one.
+- It builds the image on the runner, pushes it to the `durak-game` Artifact Registry repository tagged with the commit SHA, and runs the deploy script with `DEPLOY_ONLY=true`, so every setting comes from this repository.
+- It then checks that the latest revision runs that image with all traffic, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh). Health must be `UP`, the home page must be this commit's `index.html` byte for byte (import map included), and every versioned stylesheet and module it references must serve this commit's file. A change to one module changes only that module's hash in the import map, so checking `main.js` alone would miss it.
+
+Run it by hand from the Actions tab (`workflow_dispatch`, on `main`) to redeploy the head of `main`. The same gate applies: the run fails without deploying while that commit's CI is still running or has failed.
+
+One-time setup, with an account that can change IAM in the project. First give the service its own runtime identity (`scripts/setup-runtime-identity.sh`). The deployer may act as that identity, and the script refuses while the service still runs as the default compute account, whose project roles would then reach anything merged to `main`. The script creates a deployer service account with only what a release needs and lets GitHub's OIDC tokens for this repository's deploy workflow on `main` act as it (Workload Identity Federation, no keys). It then stores the identifiers as repository variables. It is safe to re-run, and should be re-run after changing the service's runtime identity:
+
+```bash
+PROJECT_ID="andreyg-main" REGION="us-west1" GITHUB_REPOSITORY="andreydg/durak-game" PUBLIC_URL="https://durak.andreyg.com" ./scripts/setup-github-deploy.sh
+```
+
+**Switching from the Cloud Build trigger (one time).** Until then, the Cloud Build trigger `rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo` also deploys every push to `main`, in no particular order. Its last step points the service at its own image, with no check of what is newer. Disabling the trigger stops only new builds: one already queued or running can still finish after a release and put its image back. So switch with merges to `main` frozen, and resume them only after checking that the workflow wrote last:
+
+1. Give the service its own runtime identity, then run the setup script above.
+2. Freeze merges to `main`. From now on any push starts both deployers.
+3. Disable the trigger. A GitHub-type trigger has no `--disabled` flag, so export it, set `disabled: true` in the file, and import it:
+
+   ```bash
+   gcloud beta builds triggers export rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo --region global --project andreyg-main --destination trigger.yaml
+   gcloud builds triggers import --source trigger.yaml --region global --project andreyg-main
+   ```
+
+4. Drain it: cancel, or wait out, every build the trigger still has queued or running.
+
+   ```bash
+   TRIGGER_ID="$(gcloud builds triggers describe rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo --region global --project andreyg-main --format='value(id)')"
+   gcloud builds list --ongoing --filter="buildTriggerId=${TRIGGER_ID}" --region global --project andreyg-main
+   gcloud builds cancel BUILD_ID --region global --project andreyg-main
+   ```
+
+5. Release through the workflow: merge this workflow (the only merge during the freeze), or, if it is already on `main`, run Deploy from the Actions tab. Wait for it to pass.
+6. Check that the workflow's release was the last write and that nothing else can still write. The check is read-only:
+
+   ```bash
+   PROJECT_ID="andreyg-main" REGION="us-west1" GITHUB_REPOSITORY="andreydg/durak-game" LEGACY_TRIGGER="rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo" ./scripts/check-release-handover.sh
+   ```
+
+   It requires three things:
+   - the trigger is disabled;
+   - none of its builds is queued or running;
+   - the service runs the workflow's image for the head of `main` (`…/durak-game/durak-game:SHA`), its latest revision is ready, and that revision has all traffic.
+
+   The trigger tags its images with the commit too, but under `cloud-run-source-deploy`. If one of its builds finished after the release, run Deploy again, then repeat the check.
+7. Resume merges.
+
+**Rolling back.** Traffic can move back to an earlier revision without a rebuild:
+
+```bash
+gcloud run revisions list --service durak-game --region us-west1 --project andreyg-main --limit 10
+gcloud run services update-traffic durak-game --to-revisions REVISION=100 --region us-west1 --project andreyg-main
+```
+
+Only roll back to revision `durak-game-00037` or later. Older revisions predate snapshot codec v9 and cannot read rooms saved since. After a rollback, traffic stays pinned to that revision: the next release fails its traffic check until `gcloud run services update-traffic durak-game --to-latest ...` restores normal routing.
 
 ### Single-instance deployment requirement
 
-The deploy script pins the service to one instance (`--max-instances 1`). Keep it that way for now:
+The deploy script pins the service to one instance, both service-wide (`--max 1`) and per revision (`--max-instances 1`); Cloud Run applies the lower of the two. Keep it that way for now:
 
 - Websocket sessions, lobby invalidation revisions, and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
 - Concurrent-write protection uses in-process per-game locks, plus a compare-and-swap on every save as a safety net: a save succeeds only if the store still holds the version the game was loaded from. Multiple instances would rely on that check alone and reject racing writes instead of serializing them.

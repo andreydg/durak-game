@@ -104,7 +104,10 @@ assert_contains "${DEFAULT_CALLS}" $'--service-account\t629903314059-compute@dev
 assert_contains "${DEFAULT_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.8-flash'
 assert_contains "${DEFAULT_CALLS}" $'--update-secrets\tGEMINI_API_KEY=projects/629903314059/secrets/gemini-api-key:latest'
 assert_not_contains "${DEFAULT_CALLS}" $'secrets\tversions\taccess'
+assert_contains "${DEFAULT_CALLS}" $'--max\t1'
 assert_contains "${DEFAULT_CALLS}" $'--max-instances\t1'
+assert_contains "${DEFAULT_CALLS}" $'builds\tsubmit\t--tag\tus-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:latest'
+assert_contains "${DEFAULT_CALLS}" $'--allow-unauthenticated'
 assert_contains "${DEFAULT_CALLS}" $'--min-instances\t0'
 assert_contains "${DEFAULT_CALLS}" $'--concurrency\t200'
 assert_contains "${DEFAULT_CALLS}" $'--timeout\t3600'
@@ -195,5 +198,49 @@ fi
 assert_contains "${TMP_DIR}/unknown-runtime-project.err" \
   "could not resolve project number for PROJECT_ID=andreyg-main"
 assert_not_contains "${UNKNOWN_RUNTIME_PROJECT_CALLS}" $'builds\tsubmit'
+
+# A prebuilt image (the deploy workflow's) is deployed as is: no Cloud Build run.
+PREBUILT_CALLS="${TMP_DIR}/prebuilt.calls"
+run_deploy "${PREBUILT_CALLS}" \
+  IMAGE="us-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123" \
+  >"${TMP_DIR}/prebuilt.out"
+assert_not_contains "${PREBUILT_CALLS}" $'builds\tsubmit'
+assert_contains "${PREBUILT_CALLS}" $'--image\tus-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123'
+assert_contains "${PREBUILT_CALLS}" $'secrets\tadd-iam-policy-binding'
+
+# Deploy-only (the workflow's mode) needs nothing beyond deploying the one service: no API enabling,
+# no secret or IAM work, no TTL, no repository creation, no public-access policy, no project lookups,
+# and the service keeps its secret mapping.
+DEPLOY_ONLY_CALLS="${TMP_DIR}/deploy-only.calls"
+run_deploy "${DEPLOY_ONLY_CALLS}" \
+  DEPLOY_ONLY="true" \
+  CONFIGURE_FIRESTORE_TTL="true" \
+  IMAGE="us-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123" \
+  >"${TMP_DIR}/deploy-only.out"
+assert_contains "${DEPLOY_ONLY_CALLS}" $'run\tdeploy\tdurak-game'
+assert_contains "${DEPLOY_ONLY_CALLS}" $'--image\tus-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123'
+assert_contains "${DEPLOY_ONLY_CALLS}" $'--service-account\t629903314059-compute@developer.gserviceaccount.com'
+assert_contains "${DEPLOY_ONLY_CALLS}" $'--max\t1'
+assert_contains "${DEPLOY_ONLY_CALLS}" $'--max-instances\t1'
+assert_contains "${DEPLOY_ONLY_CALLS}" $'--concurrency\t200'
+assert_contains "${DEPLOY_ONLY_CALLS}" $'--timeout\t3600'
+assert_contains "${DEPLOY_ONLY_CALLS}" 'LOGGING_STRUCTURED_FORMAT_CONSOLE=com.example.durakgame.logging.CloudLoggingJsonFormatter'
+for unexpected in $'services\tenable' $'secrets\t' $'firestore\t' $'artifacts\t' $'builds\tsubmit' \
+    $'projects\tdescribe' '--update-secrets' 'allow-unauthenticated'; do
+  assert_not_contains "${DEPLOY_ONLY_CALLS}" "${unexpected}"
+done
+assert_contains "${TMP_DIR}/deploy-only.out" "Gemini secret: kept from the current service"
+
+# Deploy-only only updates an existing service; it must not guess an identity for a new one.
+DEPLOY_ONLY_MISSING_CALLS="${TMP_DIR}/deploy-only-missing.calls"
+if run_deploy "${DEPLOY_ONLY_MISSING_CALLS}" \
+  DEPLOY_ONLY="true" \
+  FAIL_SERVICE_DESCRIBE="true" \
+  IMAGE="us-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123" \
+  >"${TMP_DIR}/deploy-only-missing.out" 2>"${TMP_DIR}/deploy-only-missing.err"; then
+  fail "deploy-only unexpectedly continued without an existing service"
+fi
+assert_contains "${TMP_DIR}/deploy-only-missing.err" "DEPLOY_ONLY updates an existing service"
+assert_not_contains "${DEPLOY_ONLY_MISSING_CALLS}" $'run\tdeploy'
 
 echo "Secret Manager deployment contract tests passed."
