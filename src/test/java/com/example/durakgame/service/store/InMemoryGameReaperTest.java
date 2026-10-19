@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -63,6 +64,29 @@ class InMemoryGameReaperTest {
 
         assertTrue(store.existsByCode("LIVE01"));
         assertFalse(store.existsByCode("DEAD01"));
+    }
+
+    @Test
+    void reapSparesGameRenewedAfterTheSweepReadIt() {
+        InMemoryGameStore racingStore = new InMemoryGameStore() {
+            @Override
+            public Collection<Game> listAll() {
+                Collection<Game> seen = super.listAll();
+                // A heartbeat that loaded the room before its deadline saves after the sweep read it.
+                Game renewed = findByCode("IDLE01").orElseThrow();
+                renewed.markActive();
+                save(renewed);
+                return seen;
+            }
+        };
+        InMemoryGameReaper racingReaper = new InMemoryGameReaper(racingStore, GameExpiryPolicy.defaults());
+        racingStore.save(agedLobby("IDLE01", 45));                 // idle past 30 min, renewed mid-sweep
+        racingStore.save(agedLobby("DEAD01", 45));                 // equally idle and untouched, reaped
+
+        racingReaper.reap();
+
+        assertTrue(racingStore.existsByCode("IDLE01"));
+        assertFalse(racingStore.existsByCode("DEAD01"));
     }
 
     /** A LOBBY game whose createdAt is {@code minutesAgo} in the past, via snapshot reconstruction. */

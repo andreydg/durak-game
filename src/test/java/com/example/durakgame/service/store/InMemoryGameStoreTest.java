@@ -78,6 +78,24 @@ class InMemoryGameStoreTest {
     }
 
     @Test
+    void deleteIfVersionRemovesOnlyTheVersionItWasGiven() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        Game game = new Game("CODE01", new Player("Host"));
+        store.save(game);
+        long seenVersion = game.getVersion();
+
+        Game renewed = store.findByCode("CODE01").orElseThrow();
+        renewed.markActive();   // e.g. a heartbeat saved after the version was read
+        store.save(renewed);
+
+        assertFalse(store.deleteIfVersion("CODE01", seenVersion));
+        assertTrue(store.existsByCode("CODE01"));
+        assertTrue(store.deleteIfVersion("CODE01", renewed.getVersion()));
+        assertFalse(store.existsByCode("CODE01"));
+        assertFalse(store.deleteIfVersion("CODE01", renewed.getVersion()));
+    }
+
+    @Test
     void rejectsStaleWriteForDistinctOlderCopy() {
         InMemoryGameStore store = new InMemoryGameStore();
         Game game = new Game("CODE01", new Player("Host"));

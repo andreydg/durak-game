@@ -116,7 +116,7 @@ class FirestoreGameStoreEmulatorTest {
     }
 
     @Test
-    void expiredLobbyIsHiddenAndScheduledForCleanup() {
+    void expiredLobbyIsHiddenButNotDeleted() {
         String code = uniqueCode();
         Instant activity = Instant.now().minus(31, ChronoUnit.MINUTES);
         long timestamp = activity.toEpochMilli();
@@ -132,6 +132,8 @@ class FirestoreGameStoreEmulatorTest {
             store.save(game);
 
             assertFalse(store.listOpenLobbySummaries().stream().anyMatch(p -> p.code().equals(code)));
+            // The read only hides it; the TTL policy on expireAt does the storage cleanup.
+            assertTrue(store.existsByCode(code));
         } finally {
             store.deleteByCode(code);
         }

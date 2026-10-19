@@ -1,5 +1,8 @@
 package com.example.durakgame.service;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.durakgame.controller.dto.LobbyGameSummary;
 import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
@@ -16,6 +19,7 @@ import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -215,14 +219,49 @@ class GameServiceTest {
     }
 
     @Test
-    void getGameDeletesExpiredRoomAndReturnsGoneSemantics() {
+    void getGameRejectsExpiredRoomWithoutDeletingOrPublishing() {
         InMemoryGameStore store = new InMemoryGameStore();
-        GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
+        AtomicInteger invalidations = new AtomicInteger();
+        GameService service = new GameService(
+                store,
+                noOpEngine,
+                webSocket,
+                new GameExpiryPolicy(30, 24, 60),
+                invalidations::incrementAndGet
+        );
         Game expired = lobbyAt("OLD001", Instant.now().minus(31, ChronoUnit.MINUTES));
         store.save(expired);
 
         assertThrows(RoomExpiredException.class, () -> service.getGame(expired.getCode()));
-        assertFalse(store.existsByCode(expired.getCode()));
+        // A read may hold a stale copy, so it never deletes; storage cleanup removes the room later.
+        assertTrue(store.existsByCode(expired.getCode()));
+        assertThrows(RoomExpiredException.class, () -> service.getGame(expired.getCode()));
+        assertEquals(0, invalidations.get(), "nothing was removed, so the lobby is not invalidated");
+    }
+
+    @Test
+    void expiredRoomIsLoggedOnceAcrossRepeatedReads() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
+        store.save(lobbyAt("LOGX01", Instant.now().minus(31, ChronoUnit.MINUTES)));
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(GameService.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        serviceLogger.addAppender(logs);
+        try {
+            for (int i = 0; i < 3; i++) {
+                assertThrows(RoomExpiredException.class, () -> service.getGame("LOGX01"));
+            }
+            assertTrue(service.listOpenLobbies().isEmpty());
+        } finally {
+            serviceLogger.detachAppender(logs);
+        }
+
+        long expiredLines = logs.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(line -> line.startsWith("game_expired code=LOGX01 "))
+                .count();
+        assertEquals(1, expiredLines);
     }
 
     @Test
@@ -531,7 +570,7 @@ class GameServiceTest {
     }
 
     @Test
-    void listOpenLobbiesDeletesExpiredAndPrioritizesPopulatedRoomsWithoutHeartbeatReordering() {
+    void listOpenLobbiesHidesExpiredAndPrioritizesPopulatedRoomsWithoutHeartbeatReordering() {
         InMemoryGameStore store = new InMemoryGameStore();
         GameService service = newService(store, new GameExpiryPolicy(30, 24, 60));
         Game old = lobbyAt("OLD001", Instant.now().minus(31, ChronoUnit.MINUTES));
@@ -547,7 +586,7 @@ class GameServiceTest {
         List<String> codes = service.listOpenLobbies().stream().map(LobbyGameSummary::code).toList();
 
         assertEquals(List.of("MID001", "AAA001", "ZZZ001"), codes);
-        assertFalse(store.existsByCode("OLD001"));
+        assertTrue(store.existsByCode("OLD001"), "hidden from the list, but left for storage cleanup");
     }
 
     @Test
@@ -560,11 +599,12 @@ class GameServiceTest {
         store.save(overAgeWithRecentHeartbeat);
 
         assertTrue(service.listOpenLobbies().isEmpty());
-        assertFalse(store.existsByCode("MAXAGE"));
+        assertThrows(RoomExpiredException.class, () -> service.getGame("MAXAGE"));
+        assertTrue(store.existsByCode("MAXAGE"));
     }
 
     @Test
-    void deletingExpiredLobbyPublishesOneInvalidation() {
+    void hidingExpiredLobbyPublishesNoInvalidation() {
         InMemoryGameStore store = new InMemoryGameStore();
         AtomicInteger invalidations = new AtomicInteger();
         GameService service = new GameService(
@@ -578,9 +618,14 @@ class GameServiceTest {
         store.save(lobbyAt("NEW001", Instant.now().minus(1, ChronoUnit.MINUTES)));
 
         service.listOpenLobbies();
-        service.listOpenLobbies();
+        // A heartbeat bypasses the projection cache without publishing, so this listing filters again.
+        service.heartbeat("NEW001", "host");
+        List<String> codes = service.listOpenLobbies().stream().map(LobbyGameSummary::code).toList();
 
-        assertEquals(1, invalidations.get());
+        // Publishing would loop: every client refreshes, the list hides the same room, and publishes again.
+        assertEquals(0, invalidations.get());
+        assertEquals(List.of("NEW001"), codes);
+        assertTrue(store.existsByCode("OLD001"));
     }
 
     @Test

@@ -190,8 +190,8 @@ public class FirestoreGameStore implements GameStore {
                     .get().get().getDocuments()) {
                 Timestamp expireAt = doc.getTimestamp(FIELD_EXPIRE_AT);
                 if (expireAt != null && !toInstant(expireAt).isAfter(now)) {
-                    doc.getReference().delete();
-                    log.info("firestore_expired_lobby_cleanup code={}", doc.getId());
+                    // Hide only: the TTL policy on expireAt deletes it. Deleting from this read could
+                    // remove a room that a concurrent heartbeat has just renewed.
                     continue;
                 }
                 summaries.add(toProjection(doc));
