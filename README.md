@@ -73,9 +73,13 @@ Both channels reconnect with bounded exponential backoff and jitter. If a socket
 
 ## Game state storage
 
-By default (local development), game state is stored in-memory.
+`APP_STORE` selects where game state lives:
 
-When running on Cloud Run, the app automatically switches to Firestore-backed storage (detected via the `K_SERVICE` environment variable), so rooms survive instance restarts.
+- `auto` (default): Firestore on Cloud Run (detected via the `K_SERVICE` environment variable), so rooms survive instance restarts; in-memory everywhere else, including local development.
+- `firestore`: always Firestore. For example, against a local emulator (see [Testing](#testing)): `APP_STORE=firestore FIRESTORE_EMULATOR_HOST=localhost:8085 ./mvnw spring-boot:run`.
+- `memory`: always in-memory, even on Cloud Run (rooms are then lost on every restart).
+
+Once Firestore is selected, the app never falls back to in-memory storage: if the Firestore store can't be created, startup fails. The choice is logged at startup as `game_store_selected store=… reason=…`.
 
 If your Firestore database id is not `(default)`, set:
 
