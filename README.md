@@ -66,6 +66,13 @@ The Firestore emulator tests run automatically in CI (against the emulator Docke
 
 On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every log event is one JSON object with a Cloud Logging `severity`, `message` and `time` (stack traces stay in their entry and reach Error Reporting). Messages are `key=value` style, so they work well in Logs Explorer queries and log-based metrics, for example `jsonPayload.message:"autoplay_decision"` (every engine decision, with `source=llm|plan_cache|forced|heuristic` and the fallback `reason` — the LLM vs heuristic ratio), `jsonPayload.message:"autoplay_applied"` (each bot move actually played, with `source=forced|engine|fallback|last_resort`) or `jsonPayload.message:"auth_rejected"`. Local runs keep Spring's readable console format.
 
+Deals are counted from three lifecycle lines, each written once the change is saved, whichever path caused it (players, bots, quick play, rematches, leaving):
+- `game_started` (with `trigger=host|table_full|quick_play|rematch`)
+- `game_ended` (with `endedBy=player|bot`, `bouts`, and `loser=human|bot|team|none`)
+- `game_interrupted` (with `reason=player_left|room_closed`)
+
+Lines of the same deal share a `deal` id: the room code plus the time the room last (re)opened. A deal with a `game_started` line but neither of the others was abandoned until its room expired.
+
 ## Realtime updates and fallback reads
 
 Game changes arrive over `/ws/games/{code}` and public-table invalidations arrive over `/ws/lobbies`. Lobby events carry only a monotonic revision; clients then read the authoritative `/api/lobbies` projection. A healthy connection reduces game health reads to once every 30 seconds and lobby health reads to once every 60 seconds, instead of fixed three-/four-second polling.
