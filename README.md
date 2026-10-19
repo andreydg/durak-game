@@ -193,12 +193,12 @@ PROJECT_ID="andreyg-main" REGION="us-west1" FIRESTORE_DATABASE_ID="durak-store" 
 
 After the one-time setup below, every commit on `main` that passes CI is released by [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
 
-- It runs after the CI workflow succeeds for a push to `main`, one release at a time (concurrency group `production`).
-- It deploys only if the commit is still the head of `main`, checked before the build and again before deploying. When merges land close together, only the newest commit is released, and an older build can never replace a newer one.
+- It runs after the CI workflow succeeds for a push to `main`, one release at a time (concurrency group `production`). Waiting releases keep their turn (`queue: max`). With GitHub's default queue, a later arrival cancels the one waiting, so a re-run of an older commit's CI could evict the head's release.
+- [`scripts/release-gate.sh`](scripts/release-gate.sh) lets it deploy only a commit that is still the head of `main` and whose latest CI run on a push to `main` passed. The gate runs before anything touches Google Cloud and again after the build, before deploying. When merges land close together, only the newest commit is released, and an older build can never replace a newer one.
 - It builds the image on the runner, pushes it to the `durak-game` Artifact Registry repository tagged with the commit SHA, and runs the deploy script with `DEPLOY_ONLY=true`, so every setting comes from this repository.
 - It then checks that the latest revision runs that image with all traffic, and runs [`scripts/smoke-test.sh`](scripts/smoke-test.sh): health must be `UP` and the home page must load this commit's `main.js` hash.
 
-Run it by hand from the Actions tab (`workflow_dispatch`) to redeploy the head of `main`.
+Run it by hand from the Actions tab (`workflow_dispatch`, on `main`) to redeploy the head of `main`. The same gate applies: the run fails without deploying while that commit's CI is still running or has failed.
 
 One-time setup, with an account that can change IAM in the project. First give the service its own runtime identity (`scripts/setup-runtime-identity.sh`). The deployer may act as that identity, and the script refuses while the service still runs as the default compute account, whose project roles would then reach anything merged to `main`. The script creates a deployer service account with only what a release needs and lets GitHub's OIDC tokens for this repository's deploy workflow on `main` act as it (Workload Identity Federation, no keys). It then stores the identifiers as repository variables. It is safe to re-run, and should be re-run after changing the service's runtime identity:
 
