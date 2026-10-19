@@ -2,13 +2,16 @@ package com.example.durakgame.websocket;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -17,35 +20,79 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
-    /** Bounds connection resources per room (well above any legitimate player/spectator count). */
-    private static final int MAX_SESSIONS_PER_GAME = 50;
+    private static final Logger log = LoggerFactory.getLogger(GameWebSocketHandler.class);
 
     private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
+    /* Every write goes through the session's sender, so broadcasting never waits for a client. */
+    private final Map<String, SessionSender> senders = new ConcurrentHashMap<>();
     private final Map<String, Map<String, String>> botThinking = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper;
+    private final WebSocketAdmission admission;
 
     public GameWebSocketHandler(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
+        this(objectMapper, WebSocketAdmission.unlimited());
     }
 
+    @Autowired
+    public GameWebSocketHandler(ObjectMapper objectMapper, WebSocketAdmission admission) {
+        this.objectMapper = objectMapper;
+        this.admission = admission;
+    }
+
+    /** The handshake already reserved this socket's place in every cap (WebSocketAdmission). */
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws IOException {
-        String gameCode = gameCodeFromSession(session);
-        Set<WebSocketSession> sessions = gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet());
-        if (sessions.size() >= MAX_SESSIONS_PER_GAME) {
-            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections for this game"));
+    public void afterConnectionEstablished(WebSocketSession session) {
+        if (!admission.opened(session)) {
+            SessionSender.closeNow(session, CloseStatus.SERVICE_OVERLOAD);
             return;
         }
-        sessions.add(session);
-        replayBotThinking(gameCode, session);
+        String gameCode = gameCodeFromSession(session);
+        try {
+            senders.put(session.getId(), new SessionSender(session));
+            gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet()).add(session);
+            replayBotThinking(gameCode, session);
+        } catch (RuntimeException ex) {
+            // Thrown on, it would make Spring close the session the ordinary way (see handleBinaryMessage).
+            log.warn("websocket_open_failed sessionId={}", session.getId(), ex);
+            closeConnection(session, CloseStatus.SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Clients only listen, so a binary message ends the session. The inherited handling closes it
+     * the ordinary way, which leaves the connection open until the client answers, while
+     * afterConnectionClosed has already given back its place; this drops it after the close frame.
+     */
+    @Override
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+        closeConnection(session, CloseStatus.NOT_ACCEPTABLE.withReason("Binary messages not supported"));
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        removeSession(gameCodeFromSession(session), session);
+        unregister(gameCodeFromSession(session), session);
+        SessionSender sender = senders.remove(session.getId());
+        if (sender != null) {
+            sender.stop();
+        }
+        admission.release(session);
     }
 
-    private void removeSession(String gameCode, WebSocketSession session) {
+    /** From the session's sender thread, or from this one (the connection's own) if it has no sender. */
+    private void closeConnection(WebSocketSession session, CloseStatus status) {
+        SessionSender sender = senders.get(session.getId());
+        if (sender != null) {
+            sender.close(status);
+        } else {
+            SessionSender.closeNow(session, status);
+        }
+    }
+
+    /**
+     * Stops broadcasting to a session that is closed or too far behind. Its sender closes it, and
+     * afterConnectionClosed releases the rest once the connection is really gone.
+     */
+    private void unregister(String gameCode, WebSocketSession session) {
         String normalizedCode = normalizeCode(gameCode);
         Set<WebSocketSession> sessions = gameSessions.get(normalizedCode);
         if (sessions == null) {
@@ -109,8 +156,8 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         for (Map.Entry<String, String> entry : gameThinking.entrySet()) {
             TextMessage message = new TextMessage(
                     botThinkingJson(entry.getKey(), true, entry.getValue(), System.currentTimeMillis()));
-            if (!sendSafely(session, message)) {
-                removeSession(gameCode, session);
+            if (!send(session, message)) {
+                unregister(gameCode, session);
                 return;
             }
         }
@@ -140,31 +187,17 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         TextMessage message = new TextMessage(payload);
-        sessions.removeIf(session -> !session.isOpen());
         for (WebSocketSession session : sessions) {
-            if (!sendSafely(session, message)) {
-                removeSession(gameCode, session);
+            if (!send(session, message)) {
+                unregister(gameCode, session);
             }
         }
     }
 
-    /**
-     * Spring websocket sessions do not permit overlapping sends. Bot work and HTTP
-     * actions can broadcast concurrently, so serialize per connection and quarantine
-     * a failed connection instead of allowing its exception to abort game logic.
-     */
-    private boolean sendSafely(WebSocketSession session, TextMessage message) {
-        try {
-            synchronized (session) {
-                if (!session.isOpen()) {
-                    return false;
-                }
-                session.sendMessage(message);
-            }
-            return true;
-        } catch (IOException | RuntimeException ignored) {
-            return false;
-        }
+    /** Queues without blocking; false when the session is gone or too far behind (its sender closes it). */
+    private boolean send(WebSocketSession session, TextMessage message) {
+        SessionSender sender = senders.get(session.getId());
+        return sender != null && sender.send(message);
     }
 
     private static String gameCodeFromSession(WebSocketSession session) {

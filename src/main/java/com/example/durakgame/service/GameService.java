@@ -846,28 +846,33 @@ public class GameService {
      * fresh state before applying, so a stale LLM decision can't revert human moves.
      */
     private boolean applyAutoPlayAction(String code, Player player, AutoPlayAction action) {
-        return withGameLockRetryingStale(code, () -> {
+        Game applied = withGameLockRetryingStale(code, () -> {
             Game fresh = getGame(code);
             if (fresh.getStatus() != GameStatus.IN_PROGRESS) {
-                return false;
+                return null;
             }
             ViewerLegalMoves freshMoves = fresh.computeViewerLegalMoves(player.getId());
             if (!isLegal(action, freshMoves)) {
                 log.info("autoplay_skip code={} playerId={} playerName={} reason=illegal_or_stale_action action={}",
                         fresh.getCode(), player.getId(), player.getName(), action);
-                return false;
+                return null;
             }
             try {
                 applyAction(fresh, player.getId(), action);
             } catch (RuntimeException ex) {
                 log.info("autoplay_skip code={} playerId={} playerName={} reason=apply_failed action={} message={}",
                         fresh.getCode(), player.getId(), player.getName(), action, ex.getMessage());
-                return false;
+                return null;
             }
             gameStore.save(fresh);
-            webSocketHandler.broadcastGameUpdated(fresh.getCode(), fresh.getVersion());
-            return true;
+            return fresh;
         });
+        if (applied == null) {
+            return false;
+        }
+        // Outside the lock, like the HTTP actions: other players' moves never wait on this broadcast.
+        webSocketHandler.broadcastGameUpdated(applied.getCode(), applied.getVersion());
+        return true;
     }
 
     /** An engine failure yields no decision (so the heuristic takes over) instead of aborting the turn. */
