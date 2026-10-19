@@ -9,7 +9,6 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -18,9 +17,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class GameWebSocketHandler extends TextWebSocketHandler {
-    /** Bounds connection resources per room (well above any legitimate player/spectator count). */
-    private static final int MAX_SESSIONS_PER_GAME = 50;
-
     private final Map<String, Set<WebSocketSession>> gameSessions = new ConcurrentHashMap<>();
     /* Every write goes through the session's sender, so broadcasting never waits for a client. */
     private final Map<String, SessionSender> senders = new ConcurrentHashMap<>();
@@ -38,35 +34,34 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         this.admission = admission;
     }
 
+    /** The handshake already reserved this socket's place in every cap (WebSocketAdmission). */
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws IOException {
-        if (!admission.admit(session)) {
-            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections"));
+    public void afterConnectionEstablished(WebSocketSession session) {
+        if (!admission.opened(session)) {
+            SessionSender.closeNow(session, CloseStatus.SERVICE_OVERLOAD);
             return;
         }
         String gameCode = gameCodeFromSession(session);
-        Set<WebSocketSession> sessions = gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet());
-        if (sessions.size() >= MAX_SESSIONS_PER_GAME) {
-            admission.release(session);
-            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections for this game"));
-            return;
-        }
         senders.put(session.getId(), new SessionSender(session));
-        sessions.add(session);
+        gameSessions.computeIfAbsent(gameCode, ignored -> ConcurrentHashMap.newKeySet()).add(session);
         replayBotThinking(gameCode, session);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        removeSession(gameCodeFromSession(session), session);
-    }
-
-    private void removeSession(String gameCode, WebSocketSession session) {
+        unregister(gameCodeFromSession(session), session);
         SessionSender sender = senders.remove(session.getId());
         if (sender != null) {
             sender.stop();
         }
         admission.release(session);
+    }
+
+    /**
+     * Stops broadcasting to a session that is closed or too far behind. Its sender closes it, and
+     * afterConnectionClosed releases the rest once the connection is really gone.
+     */
+    private void unregister(String gameCode, WebSocketSession session) {
         String normalizedCode = normalizeCode(gameCode);
         Set<WebSocketSession> sessions = gameSessions.get(normalizedCode);
         if (sessions == null) {
@@ -131,7 +126,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
             TextMessage message = new TextMessage(
                     botThinkingJson(entry.getKey(), true, entry.getValue(), System.currentTimeMillis()));
             if (!send(session, message)) {
-                removeSession(gameCode, session);
+                unregister(gameCode, session);
                 return;
             }
         }
@@ -163,7 +158,7 @@ public class GameWebSocketHandler extends TextWebSocketHandler {
         TextMessage message = new TextMessage(payload);
         for (WebSocketSession session : sessions) {
             if (!send(session, message)) {
-                removeSession(gameCode, session);
+                unregister(gameCode, session);
             }
         }
     }

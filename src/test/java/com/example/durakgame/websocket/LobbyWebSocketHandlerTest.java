@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.springframework.web.socket.CloseStatus;
 
 import java.time.Duration;
 import java.util.Map;
@@ -12,8 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Timeout(10)
 class LobbyWebSocketHandlerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final LobbyWebSocketHandler handler = new LobbyWebSocketHandler(objectMapper);
@@ -110,19 +114,23 @@ class LobbyWebSocketHandlerTest {
     }
 
     @Test
-    void connectionsBeyondTheTotalCapAreClosed() throws Exception {
-        LobbyWebSocketHandler capped = new LobbyWebSocketHandler(objectMapper, new WebSocketAdmission(3, 3, 1));
+    void aSocketKeepsItsPlaceUntilItsConnectionCloses() throws Exception {
+        WebSocketAdmission admission = new WebSocketAdmission(1, 1, 50, 1);
+        LobbyWebSocketHandler capped = new LobbyWebSocketHandler(objectMapper, admission);
         try {
-            for (int i = 0; i < 3; i++) {
-                capped.afterConnectionEstablished(new TestWebSocketSession("/ws/lobbies", "198.51.100." + i));
-            }
-            TestWebSocketSession overflow = new TestWebSocketSession("/ws/lobbies", "198.51.100.99");
+            TestWebSocketSession first = TestWebSocketSession.admitted(admission, "/ws/lobbies", "198.51.100.1");
+            capped.afterConnectionEstablished(first);
+            assertTrue(first.awaitMessageCount(1, Duration.ofSeconds(1)));
+            assertThrows(IllegalStateException.class,
+                    () -> TestWebSocketSession.admitted(admission, "/ws/lobbies", "198.51.100.2"), "total cap");
 
-            capped.afterConnectionEstablished(overflow);
+            capped.afterConnectionClosed(first, CloseStatus.NORMAL);
+            capped.afterConnectionClosed(first, CloseStatus.NORMAL);
 
-            assertFalse(overflow.isOpen());
-            assertEquals(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION.getCode(),
-                    overflow.closeStatus.getCode());
+            TestWebSocketSession next = TestWebSocketSession.admitted(admission, "/ws/lobbies", "198.51.100.2");
+            capped.afterConnectionEstablished(next);
+            assertTrue(next.awaitMessageCount(1, Duration.ofSeconds(1)));
+            assertEquals(1, admission.openSessions());
         } finally {
             capped.close();
         }

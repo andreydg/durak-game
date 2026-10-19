@@ -11,7 +11,6 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -54,26 +53,23 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
         this.admission = admission;
     }
 
+    /** The handshake already reserved this socket's place in every cap (WebSocketAdmission). */
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws IOException {
-        if (!admission.admit(session)) {
-            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many connections"));
+    public void afterConnectionEstablished(WebSocketSession session) {
+        if (!admission.opened(session)) {
+            SessionSender.closeNow(session, CloseStatus.SERVICE_OVERLOAD);
             return;
         }
         SessionSender sender = new SessionSender(session);
         senders.put(session.getId(), sender);
         sessions.add(session);
         if (!sender.send(message("LOBBIES_READY", revision.get()))) {
-            remove(session);
+            sessions.remove(session);
         }
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        remove(session);
-    }
-
-    private void remove(WebSocketSession session) {
         sessions.remove(session);
         SessionSender sender = senders.remove(session.getId());
         if (sender != null) {
@@ -123,11 +119,15 @@ public class LobbyWebSocketHandler extends TextWebSocketHandler implements Lobby
         }
     }
 
+    /**
+     * A session that is closed or too far behind stops receiving broadcasts here. Its sender closes
+     * it, and afterConnectionClosed releases the rest once the connection is really gone.
+     */
     private void broadcast(TextMessage message) {
         for (WebSocketSession session : sessions) {
             SessionSender sender = senders.get(session.getId());
             if (sender == null || !sender.send(message)) {
-                remove(session);
+                sessions.remove(session);
             }
         }
     }

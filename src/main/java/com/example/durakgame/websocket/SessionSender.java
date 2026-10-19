@@ -1,5 +1,7 @@
 package com.example.durakgame.websocket;
 
+import jakarta.websocket.CloseReason;
+import org.apache.tomcat.websocket.WsSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.CloseStatus;
@@ -8,14 +10,17 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.adapter.NativeWebSocketSession;
 
 import java.io.IOException;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
+import java.util.ArrayDeque;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Writes one session's outgoing messages, in order, from the session's own virtual thread.
  * Broadcasters (HTTP requests, bot turns, the lobby publisher) only enqueue, so a slow or dead
  * client can never hold them up. The queue is bounded and every write has a deadline: a client
  * that falls that far behind, or stops reading, is closed and reconnects like any dropped client.
+ * That close also happens on this thread. It writes a close frame, which can wait as long as any
+ * other write, so a broadcaster that finds the queue full only marks the session for closing.
  */
 final class SessionSender {
     static final int QUEUE_CAPACITY = 32;
@@ -25,70 +30,153 @@ final class SessionSender {
     private static final Logger log = LoggerFactory.getLogger(SessionSender.class);
 
     private final WebSocketSession session;
-    private final BlockingQueue<TextMessage> queue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
     private final Thread thread;
-    private volatile boolean stopped;
+    /* Guards the fields below. Nothing that can wait on the client runs while holding it. */
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition changed = lock.newCondition();
+    private final ArrayDeque<TextMessage> queue = new ArrayDeque<>(QUEUE_CAPACITY);
+    /** Set once: this thread writes nothing more and closes the session with it. */
+    private CloseStatus closing;
+    /** The connection is gone: this thread just ends. */
+    private boolean stopped;
 
     SessionSender(WebSocketSession session) {
         this.session = session;
         limitWriteTime(session);
-        this.thread = Thread.ofVirtual().name("websocket-send-" + session.getId()).unstarted(this::drain);
+        this.thread = Thread.ofVirtual().name("websocket-send-" + session.getId()).unstarted(this::run);
         thread.start();
     }
 
-    /** Queues a message without blocking; false once the session is closed or too far behind. */
+    /**
+     * Queues a message without blocking. False once the session is closed, being closed, or too
+     * far behind; the caller should stop sending to it, and this sender closes it.
+     */
     boolean send(TextMessage message) {
-        if (stopped || !session.isOpen()) {
+        if (!session.isOpen()) {
             return false;
         }
-        if (queue.offer(message)) {
-            return true;
+        lock.lock();
+        try {
+            if (closing != null || stopped) {
+                return false;
+            }
+            if (queue.size() < QUEUE_CAPACITY) {
+                queue.addLast(message);
+                changed.signal();
+                return true;
+            }
+            // The backlog would arrive too late to matter; the client re-reads the game when it reconnects.
+            queue.clear();
+            closing = CloseStatus.SESSION_NOT_RELIABLE;
+            changed.signal();
+        } finally {
+            lock.unlock();
         }
         log.info("websocket_session_dropped reason=send_queue_full sessionId={}", session.getId());
-        close();
         return false;
     }
 
+    /** The connection closed: drops queued messages and ends the thread. Safe to call more than once. */
     void stop() {
-        stopped = true;
-        if (Thread.currentThread() != thread) {
-            thread.interrupt();
+        lock.lock();
+        try {
+            stopped = true;
+            queue.clear();
+            changed.signal();
+        } finally {
+            lock.unlock();
         }
     }
 
-    private void drain() {
+    /** True once the thread has ended, after closing the session if it had to. */
+    boolean isDone() {
+        return !thread.isAlive();
+    }
+
+    private void run() {
         try {
-            while (!stopped) {
-                TextMessage message = queue.take();
-                if (!session.isOpen()) {
-                    return;
-                }
-                session.sendMessage(message);
+            TextMessage next;
+            while ((next = nextMessage()) != null && session.isOpen()) {
+                session.sendMessage(next);
             }
-        } catch (InterruptedException stop) {
-            // stop() was called: the session is gone.
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         } catch (IOException | RuntimeException ex) {
             log.info("websocket_session_dropped reason=send_failed sessionId={} error={}",
                     session.getId(), ex.getClass().getSimpleName());
-            close();
+            markClosing();
+        }
+        CloseStatus status = closeStatus();
+        if (status != null) {
+            closeNow(session, status);
         }
     }
 
-    private void close() {
-        stop();
+    /** The next message to write, or null once the session is being closed or is gone. */
+    private TextMessage nextMessage() throws InterruptedException {
+        lock.lock();
         try {
-            session.close(CloseStatus.SESSION_NOT_RELIABLE);
+            while (queue.isEmpty() && closing == null && !stopped) {
+                changed.await();
+            }
+            return closing != null || stopped ? null : queue.pollFirst();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void markClosing() {
+        lock.lock();
+        try {
+            queue.clear();
+            if (closing == null) {
+                closing = CloseStatus.SESSION_NOT_RELIABLE;
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** The status to close with, or null when there is nothing to close. */
+    private CloseStatus closeStatus() {
+        lock.lock();
+        try {
+            return stopped ? null : closing;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Closes a session the server gave up on. Writes the close frame, which the write deadline
+     * bounds, and on Tomcat drops the connection right after it: a plain close keeps the connection
+     * open for up to 30 seconds waiting for the client's reply, and such a client may never send one.
+     * Blocks for as long as that write, so call it from the session's own thread, not a broadcaster.
+     */
+    static void closeNow(WebSocketSession session, CloseStatus status) {
+        try {
+            if (tomcatSession(session) instanceof WsSession tomcat) {
+                CloseReason reason = new CloseReason(
+                        CloseReason.CloseCodes.getCloseCode(status.getCode()), status.getReason());
+                tomcat.doClose(reason, reason, true);
+            } else {
+                session.close(status);
+            }
         } catch (IOException | RuntimeException ignored) {
             // Already closing; the handler's afterConnectionClosed cleans up either way.
         }
     }
 
+    private static jakarta.websocket.Session tomcatSession(WebSocketSession session) {
+        return session instanceof NativeWebSocketSession nativeSession
+                ? nativeSession.getNativeSession(jakarta.websocket.Session.class)
+                : null;
+    }
+
     private static void limitWriteTime(WebSocketSession session) {
-        if (session instanceof NativeWebSocketSession nativeSession) {
-            jakarta.websocket.Session jakartaSession = nativeSession.getNativeSession(jakarta.websocket.Session.class);
-            if (jakartaSession != null) {
-                jakartaSession.getUserProperties().put(TOMCAT_BLOCKING_SEND_TIMEOUT, SEND_TIMEOUT_MS);
-            }
+        jakarta.websocket.Session tomcat = tomcatSession(session);
+        if (tomcat != null) {
+            tomcat.getUserProperties().put(TOMCAT_BLOCKING_SEND_TIMEOUT, SEND_TIMEOUT_MS);
         }
     }
 }
