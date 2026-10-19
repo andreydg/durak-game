@@ -189,6 +189,11 @@ if [[ -n "${PUBLIC_URL}" ]]; then
 fi
 
 echo
-echo "Done. The next CI run on main deploys through ${WORKFLOW_FILE}."
-echo "After its first successful deploy, disable any other automatic deploy (such as a Cloud Build"
-echo "trigger on main) so releases go through one ordered path."
+echo "Done. ${WORKFLOW_FILE} can now release main. Switch over from any other deployer (such as a"
+echo "Cloud Build trigger on main) with merges to main frozen:"
+echo "  1. Disable the other deployer. That stops only new builds: cancel or wait out the ones still"
+echo "     queued or running, since each one ends by deploying its own image."
+echo "  2. Release through ${WORKFLOW_FILE}: merge it, or run it from the Actions tab."
+echo "  3. Confirm that release was the last write: scripts/check-release-handover.sh."
+echo "  4. Resume merges."
+echo "Details: README, \"Switching from the Cloud Build trigger\"."

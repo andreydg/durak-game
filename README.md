@@ -206,7 +206,39 @@ One-time setup, with an account that can change IAM in the project. First give t
 PROJECT_ID="andreyg-main" REGION="us-west1" GITHUB_REPOSITORY="andreydg/durak-game" PUBLIC_URL="https://durak.andreyg.com" ./scripts/setup-github-deploy.sh
 ```
 
-After the first release from the workflow succeeds, disable any other automatic deploy of the service, such as a Cloud Build trigger on `main`. Two independent deployers can finish out of order and leave an older commit live. A GitHub-type trigger has no `--disabled` flag. Export it with `gcloud beta builds triggers export TRIGGER --destination trigger.yaml`, set `disabled: true`, then run `gcloud builds triggers import --source trigger.yaml` (add `--project` to both commands).
+**Switching from the Cloud Build trigger (one time).** Until then, the Cloud Build trigger `rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo` also deploys every push to `main`, in no particular order. Its last step points the service at its own image, with no check of what is newer. Disabling the trigger stops only new builds: one already queued or running can still finish after a release and put its image back. So switch with merges to `main` frozen, and resume them only after checking that the workflow wrote last:
+
+1. Give the service its own runtime identity, then run the setup script above.
+2. Freeze merges to `main`. From now on any push starts both deployers.
+3. Disable the trigger. A GitHub-type trigger has no `--disabled` flag, so export it, set `disabled: true` in the file, and import it:
+
+   ```bash
+   gcloud beta builds triggers export rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo --region global --project andreyg-main --destination trigger.yaml
+   gcloud builds triggers import --source trigger.yaml --region global --project andreyg-main
+   ```
+
+4. Drain it: cancel, or wait out, every build the trigger still has queued or running.
+
+   ```bash
+   TRIGGER_ID="$(gcloud builds triggers describe rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo --region global --project andreyg-main --format='value(id)')"
+   gcloud builds list --ongoing --filter="buildTriggerId=${TRIGGER_ID}" --region global --project andreyg-main
+   gcloud builds cancel BUILD_ID --region global --project andreyg-main
+   ```
+
+5. Release through the workflow: merge this workflow (the only merge during the freeze), or, if it is already on `main`, run Deploy from the Actions tab. Wait for it to pass.
+6. Check that the workflow's release was the last write and that nothing else can still write. The check is read-only:
+
+   ```bash
+   PROJECT_ID="andreyg-main" REGION="us-west1" GITHUB_REPOSITORY="andreydg/durak-game" LEGACY_TRIGGER="rmgpgab-durak-game-us-west1-andreydg-durak-game--maubo" ./scripts/check-release-handover.sh
+   ```
+
+   It requires three things:
+   - the trigger is disabled;
+   - none of its builds is queued or running;
+   - the service runs the workflow's image for the head of `main` (`…/durak-game/durak-game:SHA`), its latest revision is ready, and that revision has all traffic.
+
+   The trigger tags its images with the commit too, but under `cloud-run-source-deploy`. If one of its builds finished after the release, run Deploy again, then repeat the check.
+7. Resume merges.
 
 **Rolling back.** Traffic can move back to an earlier revision without a rebuild:
 

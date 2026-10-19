@@ -123,6 +123,12 @@ assert_contains "${NEW_CALLS}" $'variable\tset\tGCP_WORKLOAD_IDENTITY_PROVIDER\t
 assert_contains "${NEW_CALLS}" $'variable\tset\tGCP_DEPLOY_SERVICE_ACCOUNT\t--body\tdurak-deployer@andreyg-main.iam.gserviceaccount.com'
 assert_contains "${NEW_CALLS}" $'variable\tset\tPUBLIC_URL\t--body\thttps://durak.andreyg.com\t'
 
+# Disabling the old deployer is not the whole handover: builds it already started still deploy.
+assert_contains "${TMP_DIR}/new.out" "with merges to main frozen"
+assert_contains "${TMP_DIR}/new.out" "cancel or wait out the ones still"
+assert_contains "${TMP_DIR}/new.out" "scripts/check-release-handover.sh"
+assert_contains "${TMP_DIR}/new.out" "Resume merges"
+
 # Re-running updates the provider's condition instead of failing on existing resources.
 EXISTING_CALLS="${TMP_DIR}/existing.calls"
 run_setup "${EXISTING_CALLS}" EXISTING="true" >"${TMP_DIR}/existing.out"
