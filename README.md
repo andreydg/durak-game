@@ -37,7 +37,7 @@ Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) a
 | Layer | Tool | Command | Covers |
 | --- | --- | --- | --- |
 | Backend | JUnit / Maven | `./mvnw test` | Game rules (including a seeded rules fuzzer), `GameService` orchestration & autoplay, auth/tokens, concurrency, controllers + exception mapping, rate limiting, security headers, stores |
-| Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transaction stale-check, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
+| Firestore | JUnit + emulator | `./mvnw test -Dtest=FirestoreGameStoreEmulatorTest` | Real store: transactional compare-and-swap, codec round-trip, denormalized lobby projection (auto-skips unless `FIRESTORE_EMULATOR_HOST` is set) |
 | Frontend unit | Vitest (jsdom) | `npm run test:unit` | Pure UI helpers in [`logic.js`](src/main/resources/static/js/logic.js), plus static-page contracts: search metadata, versioned assets and the import map, CSP-safe markup, card images |
 | End-to-end | Playwright | `npm run test:e2e` | Real-browser flows against the booted app (lobby discovery, quick play, private invites, gameplay, finished results/rematches, hand privacy / anti-cheat), plus UI behaviour with synthetic games: phone/desktop layout (no horizontal overflow, hand above the sticky action strip), double-submit guards, keyboard focus, screen-reader names and announcements, leave confirmation, reconnecting after reload, API error handling, saved-seat validity, running under a strict CSP, and card URLs from the previous (PNG) frontend still drawing after a deploy |
 
@@ -57,7 +57,8 @@ The Firestore emulator tests run automatically in CI (against the emulator Docke
 ## Security & limits
 
 - **Per-player tokens.** Create/join returns a secret token (sent back via the `X-Durak-Token` header). The server reveals a player's hand and accepts their moves only with a matching token, so the room code alone can't read hands or spoof opponents. The (public) player id is never accepted as a token. Rejected tokens are logged as `auth_rejected` (seat and reason, never the token), at most once a minute per seat.
-- **Rate limiting.** Per-client token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; game and lobby WebSocket handlers cap their connection sets. Defaults are generous enough for players behind a shared NAT. The client is the `X-Forwarded-For` entry appended by the trusted proxy, counted from the right (`app.ratelimit.forwarded-for-hops`: `1` for Cloud Run, `2` behind an external load balancer); entries further left are client-supplied and ignored. IPv6 clients are bucketed per /64. This limit also caps Gemini spend, since a Quick Play game can make the bot's first model call without further input.
+- **Rate limiting.** Per-client token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; WebSocket handshakes count against the general limit. Defaults are generous enough for players behind a shared NAT. The client is the `X-Forwarded-For` entry appended by the trusted proxy, counted from the right (`app.ratelimit.forwarded-for-hops`: `1` for Cloud Run, `2` behind an external load balancer); entries further left are client-supplied and ignored. IPv6 clients are bucketed per /64. This limit also caps Gemini spend, since a Quick Play game can make the bot's first model call without further input.
+- **Websockets.** Handshakes are accepted only from the site's own origin; `app.websocket.allowed-origins` adds more. Game sockets are accepted only for strings that can be a room code. Open sockets are capped per client address (`app.websocket.max-sessions-per-client`, default 20), per room (`app.websocket.max-sessions-per-game`, default 50) and in total (`app.websocket.max-sessions`, default 150). Every open socket holds one of Cloud Run's request slots (`--concurrency` 200), so the total stays below it. The handshake reserves the socket's place in all three caps before upgrading; a handshake over a cap gets HTTP 429 (address or room) or 503 (total) and its connection is closed, so no client can pile up sockets that were opened only to be closed. The place is released when the connection closes, or at once when the handshake doesn't upgrade. Each socket has a small outgoing queue drained by its own virtual thread, so a slow or dead client never delays a move or other players. A client that falls 32 messages behind, or blocks a single write for 5 seconds, is closed by that thread (never by a broadcaster), and the connection is dropped right after the close frame; the client reconnects. Sockets only listen: a binary message is refused with 1003 and its connection dropped the same way, so a server-side close never leaves an open connection whose place was already given back.
 - **Browser hardening.** Every response carries a Content-Security-Policy (scripts only from this origin; an inline import map would be allowed by its hash), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a referrer policy, a permissions policy, and HSTS over HTTPS. Deals are shuffled with `SecureRandom`.
 - **Health.** `/actuator/health` reports `DOWN` when the game store is unreachable; it's the platform health-check path.
 
@@ -80,9 +81,13 @@ Both channels reconnect with bounded exponential backoff and jitter. If a socket
 
 ## Game state storage
 
-By default (local development), game state is stored in-memory.
+`APP_STORE` selects where game state lives:
 
-When running on Cloud Run, the app automatically switches to Firestore-backed storage (detected via the `K_SERVICE` environment variable), so rooms survive instance restarts.
+- `auto` (default): Firestore on Cloud Run (detected via the `K_SERVICE` environment variable), so rooms survive instance restarts; in-memory everywhere else, including local development.
+- `firestore`: always Firestore. For example, against a local emulator (see [Testing](#testing)): `APP_STORE=firestore FIRESTORE_EMULATOR_HOST=localhost:8085 ./mvnw spring-boot:run`.
+- `memory`: always in-memory, even on Cloud Run (rooms are then lost on every restart).
+
+Once Firestore is selected, the app never falls back to in-memory storage: if the Firestore store can't be created, startup fails. The choice is logged at startup as `game_store_selected store=… reason=…`.
 
 If your Firestore database id is not `(default)`, set:
 
@@ -90,7 +95,7 @@ If your Firestore database id is not `(default)`, set:
 
 Rooms use activity-based expiration: waiting lobbies expire after 30 minutes of inactivity (and always within 2 hours of entering the current lobby phase), active games after 24 hours, and finished games after 60 minutes. Returning to the lobby after a played round starts a fresh lobby phase. These values can be changed with `LOBBY_IDLE_MINUTES`, `LOBBY_MAX_AGE_MINUTES`, `ACTIVE_GAME_IDLE_HOURS`, and `FINISHED_GAME_RETENTION_MINUTES`.
 
-The API and lobby list enforce expiration immediately. Firestore documents also carry `lastActivityAt`, `lobbyStartedAt`, and `expireAt`; configure a TTL policy on `games.expireAt` for eventual storage cleanup. The deploy script enables that policy by default because Firestore TTL deletion is asynchronous and is not used for live lobby correctness.
+The API and lobby list enforce expiration immediately but never delete: an expired room answers 410 and is hidden from the lobby list, because a read may hold a stale copy and deleting could remove a room that a concurrent heartbeat just renewed. Storage cleanup is separate. Firestore documents carry `lastActivityAt`, `lobbyStartedAt`, and `expireAt`, and a TTL policy on `games.expireAt` (which the deploy script configures by default) deletes expired rooms asynchronously. With the in-memory store, a reaper evicts them every minute (`GAME_REAPER_INTERVAL_MS`).
 
 ## Auto-play (Gemini)
 
@@ -199,8 +204,40 @@ PROJECT_ID="andreyg-main" GEMINI_SECRET_PROJECT="527294552477" REGION="us-west1"
 The deploy script pins the service to one instance (`--max-instances 1`). Keep it that way for now:
 
 - Websocket sessions, lobby invalidation revisions, and the bot "thinking..." status live in instance memory; a second instance would split rooms across instances.
-- Concurrent-write protection uses in-process per-game locks (plus a stale-version check on every Firestore save as a safety net). Multiple instances would rely on the version check alone and reject racing writes instead of serializing them.
+- Concurrent-write protection uses in-process per-game locks, plus a compare-and-swap on every save as a safety net: a save succeeds only if the store still holds the version the game was loaded from. Multiple instances would rely on that check alone and reject racing writes instead of serializing them.
 
 Because a websocket occupies a request slot for as long as the tab is open, the single instance's `--concurrency` (200 by default, Cloud Run's maximum is 1000) is effectively the number of simultaneously open tabs it can serve. The script also sets `--timeout 3600` so Cloud Run doesn't cut every websocket after its default five minutes, and `--cpu-boost` for faster cold starts. The container defaults `JAVA_OPTS` to `-XX:MaxRAMPercentage=75.0`; without it the JVM would cap the heap at a quarter of the 512 MiB instance.
 
 Game state itself persists in Firestore on Cloud Run, so a restart does not lose active rooms. To scale beyond one instance later, move websocket fan-out and bot status to a shared channel (for example Firestore listeners or Pub/Sub).
+
+### Runtime identity
+
+Unless told otherwise, Cloud Run runs the service as the project's default compute service account, which has broad project roles (Editor, Cloud Run Admin and more) and is often shared with other services and with Cloud Build triggers. Give the game its own identity with only the access it uses: Firestore, limited by an IAM condition to the game's database, and the Gemini key secret. The script is safe to re-run and does not change the running service:
+
+```bash
+PROJECT_ID="andreyg-main" FIRESTORE_DATABASE_ID="durak-store" ./scripts/setup-runtime-identity.sh
+```
+
+Then check the new identity on a tagged revision that receives no traffic. Its health check reads Firestore, and the revision only starts if it can read the Gemini secret:
+
+```bash
+IMAGE="$(gcloud run services describe durak-game --region us-west1 --project andreyg-main --format='value(spec.template.spec.containers[0].image)')"
+gcloud run deploy durak-game --image "${IMAGE}" --service-account "durak-runtime@andreyg-main.iam.gserviceaccount.com" --no-traffic --tag runtime-check --region us-west1 --project andreyg-main
+curl -s "https://runtime-check---durak-game-629903314059.us-west1.run.app/actuator/health"   # expect "status":"UP"
+```
+
+The health check only reads a document. Before switching, also check that the identity can write: create a Quick Play game on the tag URL and read it back. That covers Firestore transactions, and the bot's first move exercises the Gemini key:
+
+```bash
+CODE="$(curl -s -X POST -H 'Content-Type: application/json' -d '{"hostName":"Identity check"}' https://runtime-check---durak-game-629903314059.us-west1.run.app/api/games/quick-play | python3 -c 'import json,sys; print(json.load(sys.stdin)["game"]["code"])')"
+curl -s -o /dev/null -w '%{http_code}\n' "https://runtime-check---durak-game-629903314059.us-west1.run.app/api/games/${CODE}"   # expect 200
+```
+
+If both checks pass, send traffic to it and drop the tag. `--to-latest` also restores "latest revision gets all traffic", which later deploys rely on:
+
+```bash
+gcloud run services update-traffic durak-game --to-latest --region us-west1 --project andreyg-main
+gcloud run services update-traffic durak-game --remove-tags runtime-check --region us-west1 --project andreyg-main
+```
+
+Later deploys keep the identity: the deploy script reads it from the service, and image-only updates leave it unchanged. Leave the default compute account's roles alone; Cloud Build and other services may depend on them.

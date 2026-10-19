@@ -19,10 +19,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises the real Firestore store (transaction stale-check, codec round-trip, denormalized
- * lobby projection) against the Firestore emulator. Skipped unless FIRESTORE_EMULATOR_HOST is
- * set, so it only runs where the emulator is available (the dedicated CI job, or locally via
- * {@code gcloud beta emulators firestore start}).
+ * Exercises the real Firestore store (transactional compare-and-swap, codec round-trip,
+ * denormalized lobby projection) against the Firestore emulator. Skipped unless
+ * FIRESTORE_EMULATOR_HOST is set, so it only runs where the emulator is available (the dedicated
+ * CI job, or locally via {@code gcloud beta emulators firestore start}).
  */
 @EnabledIfEnvironmentVariable(named = "FIRESTORE_EMULATOR_HOST", matches = ".+")
 class FirestoreGameStoreEmulatorTest {
@@ -52,16 +52,41 @@ class FirestoreGameStoreEmulatorTest {
     }
 
     @Test
-    void rejectsStaleWriteAtOrBelowStoredVersion() {
+    void staleCopyCannotOverwriteANewerSaveEvenWithAHigherVersion() {
         String code = uniqueCode();
         Game game = new Game(code, new Player("Host"));
-        game.addPlayer("Guest", 4); // advance the version
+        Player guest = game.addPlayer("Guest", 4);
         try {
-            store.save(game);
+            store.save(game); // v1
 
-            // A second, distinct copy at the same version must not overwrite.
-            Game stale = Game.fromSnapshot(game.toSnapshot());
-            assertThrows(StaleGameWriteException.class, () -> store.save(stale));
+            Game copyA = store.findByCode(code).orElseThrow();
+            Game copyB = store.findByCode(code).orElseThrow();
+            copyB.removePlayerFromLobby(guest.getId()); // one change: the guest leaves (v2)
+            store.save(copyB);
+
+            copyA.addPlayer("Late", 4); // two changes on the stale copy (v3), past the stored v2
+            copyA.markActive();
+            assertThrows(StaleGameWriteException.class, () -> store.save(copyA));
+
+            // B's change survives: the guest who left does not come back.
+            assertEquals(List.of("Host"),
+                    store.findByCode(code).orElseThrow().getPlayers().stream().map(Player::getName).toList());
+        } finally {
+            store.deleteByCode(code);
+        }
+    }
+
+    @Test
+    void staleSaveCannotResurrectADeletedGame() {
+        String code = uniqueCode();
+        try {
+            store.save(new Game(code, new Player("Host")));
+            Game read = store.findByCode(code).orElseThrow();
+            store.deleteByCode(code); // e.g. another writer removed the room
+
+            read.addPlayer("Guest", 4);
+            assertThrows(StaleGameWriteException.class, () -> store.save(read));
+            assertFalse(store.existsByCode(code));
         } finally {
             store.deleteByCode(code);
         }
@@ -91,7 +116,7 @@ class FirestoreGameStoreEmulatorTest {
     }
 
     @Test
-    void expiredLobbyIsHiddenAndScheduledForCleanup() {
+    void expiredLobbyIsHiddenButNotDeleted() {
         String code = uniqueCode();
         Instant activity = Instant.now().minus(31, ChronoUnit.MINUTES);
         long timestamp = activity.toEpochMilli();
@@ -102,10 +127,13 @@ class FirestoreGameStoreEmulatorTest {
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()
         ));
+        game.markNotPersisted(); // seeded as a new room, not a copy of a stored one
         try {
             store.save(game);
 
             assertFalse(store.listOpenLobbySummaries().stream().anyMatch(p -> p.code().equals(code)));
+            // The read only hides it; the TTL policy on expireAt does the storage cleanup.
+            assertTrue(store.existsByCode(code));
         } finally {
             store.deleteByCode(code);
         }

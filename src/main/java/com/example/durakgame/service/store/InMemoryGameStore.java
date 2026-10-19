@@ -20,13 +20,19 @@ public class InMemoryGameStore implements GameStore {
 
     @Override
     public void save(Game game) {
+        // Taken from the caller's object: the copy below reports the version being written instead.
+        long expectedVersion = game.getLoadedVersion();
         Game stored = copyOf(game);
-        games.merge(stored.getCode(), stored, (existing, incoming) -> {
-            if (existing.getVersion() >= incoming.getVersion()) {
-                throw new StaleGameWriteException(incoming.getCode(), incoming.getVersion(), existing.getVersion());
+        games.compute(stored.getCode(), (code, existing) -> {
+            boolean matches = expectedVersion == Game.NOT_PERSISTED
+                    ? existing == null
+                    : existing != null && existing.getVersion() == expectedVersion;
+            if (!matches) {
+                throw new StaleGameWriteException(code, expectedVersion, existing == null ? null : existing.getVersion());
             }
-            return incoming;
+            return stored;
         });
+        game.markPersisted();
     }
 
     @Override
@@ -37,6 +43,23 @@ public class InMemoryGameStore implements GameStore {
     @Override
     public void deleteByCode(String code) {
         games.remove(code);
+    }
+
+    /**
+     * Removes the game only while the stored copy is still at {@code version}, atomically with
+     * {@link #save}. A cleanup decision made on an older copy then cannot remove a game that was
+     * saved (e.g. renewed by a heartbeat) in the meantime. Returns true when the game was removed.
+     */
+    public boolean deleteIfVersion(String code, long version) {
+        boolean[] removed = {false};
+        games.computeIfPresent(code, (key, stored) -> {
+            if (stored.getVersion() != version) {
+                return stored;
+            }
+            removed[0] = true;
+            return null;
+        });
+        return removed[0];
     }
 
     @Override

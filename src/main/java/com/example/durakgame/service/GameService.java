@@ -38,7 +38,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -71,6 +70,7 @@ public class GameService {
     private static final int MUTATE_RETRY_ATTEMPTS = 2;
     private static final long AUTH_REJECTION_LOG_INTERVAL_MS = 60_000;
     private static final int AUTH_REJECTION_LOG_KEYS = 10_000;
+    private static final int EXPIRED_ROOM_LOG_KEYS = 10_000;
 
     private final SecureRandom random = new SecureRandom();
     private final GameStore gameStore;
@@ -88,6 +88,7 @@ public class GameService {
     private final ConcurrentHashMap<String, Boolean> autoPlayRuns = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Integer> autoPlayFailures = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> authRejectionsLoggedAt = new ConcurrentHashMap<>();
+    private final Set<String> expiredRoomsLogged = ConcurrentHashMap.newKeySet();
     /*
      * Serializes load->mutate->save per game code so concurrent actions (human + bot,
      * two humans) cannot clobber each other through separate decoded copies of the game.
@@ -199,15 +200,25 @@ public class GameService {
         Game game = gameStore.findByCode(normalizedCode)
                 .orElseThrow(() -> new NoSuchElementException("Game not found"));
         if (expiryPolicy.isExpired(game, Instant.now())) {
-            gameStore.deleteByCode(normalizedCode);
-            if (game.isPublicRoom() && game.getStatus() == GameStatus.LOBBY) {
-                publishLobbyChange();
-            }
-            log.info("game_expired code={} status={} lastActivityAt={}",
-                    game.getCode(), game.getStatus(), game.getLastActivityAt());
+            // Enforce expiry without deleting: this copy may be stale, and a delete could remove a room
+            // that a concurrent heartbeat just renewed. Firestore TTL (or the in-memory reaper) cleans up.
+            logRoomExpired(game.getCode(), game.getStatus(), game.getLastActivityAt());
             throw new RoomExpiredException();
         }
         return game;
+    }
+
+    /* An expired room stays readable until storage cleanup removes it, so log each code once per instance. */
+    private void logRoomExpired(String code, GameStatus status, Instant lastActivityAt) {
+        if (expiredRoomsLogged.contains(code)) {
+            return;
+        }
+        if (expiredRoomsLogged.size() >= EXPIRED_ROOM_LOG_KEYS) {
+            expiredRoomsLogged.clear();
+        }
+        if (expiredRoomsLogged.add(code)) {
+            log.info("game_expired code={} status={} lastActivityAt={}", code, status, lastActivityAt);
+        }
     }
 
     public Game heartbeat(String gameCode, String playerId) {
@@ -523,7 +534,6 @@ public class GameService {
             }
 
             Instant instantNow = Instant.now();
-            AtomicBoolean deletedExpiredLobby = new AtomicBoolean();
             summaries = gameStore.listOpenLobbySummaries().stream()
                     .filter(LobbyProjection::publicRoom)
                     .filter(p -> p.playerCount() < MAX_PLAYERS)
@@ -532,9 +542,9 @@ public class GameService {
                                 GameStatus.LOBBY, p.lastActivityAt(), p.lobbyStartedAt(), instantNow)) {
                             return true;
                         }
-                        gameStore.deleteByCode(p.code());
-                        deletedExpiredLobby.set(true);
-                        log.info("game_expired code={} status=LOBBY lastActivityAt={}", p.code(), p.lastActivityAt());
+                        // Hide without deleting or publishing: storage cleanup removes the room, and a
+                        // publish would make every client refresh, filter it again and publish again.
+                        logRoomExpired(p.code(), GameStatus.LOBBY, p.lastActivityAt());
                         return false;
                     })
                     .map(p -> new LobbyGameSummary(
@@ -549,9 +559,6 @@ public class GameService {
                     .sorted(Comparator.comparingInt(LobbyGameSummary::playerCount).reversed()
                             .thenComparing(LobbyGameSummary::code))
                     .toList();
-            if (deletedExpiredLobby.get()) {
-                publishLobbyChange();
-            }
 
             long revisionAfterRead = lobbyProjectionRevision.get();
             if (revisionAfterRead == revisionAtStart) {
@@ -850,30 +857,35 @@ public class GameService {
      * fresh state before applying, so a stale LLM decision can't revert human moves.
      */
     private boolean applyAutoPlayAction(String code, Player player, AutoPlayAction action) {
-        return withGameLockRetryingStale(code, () -> {
+        Game applied = withGameLockRetryingStale(code, () -> {
             Game fresh = getGame(code);
             if (fresh.getStatus() != GameStatus.IN_PROGRESS) {
-                return false;
+                return null;
             }
             GameLifecycleLog.Before before = GameLifecycleLog.Before.of(fresh);
             ViewerLegalMoves freshMoves = fresh.computeViewerLegalMoves(player.getId());
             if (!isLegal(action, freshMoves)) {
                 log.info("autoplay_skip code={} playerId={} playerName={} reason=illegal_or_stale_action action={}",
                         fresh.getCode(), player.getId(), player.getName(), action);
-                return false;
+                return null;
             }
             try {
                 applyAction(fresh, player.getId(), action);
             } catch (RuntimeException ex) {
                 log.info("autoplay_skip code={} playerId={} playerName={} reason=apply_failed action={} message={}",
                         fresh.getCode(), player.getId(), player.getName(), action, ex.getMessage());
-                return false;
+                return null;
             }
             gameStore.save(fresh);
             GameLifecycleLog.afterSave(before, fresh, "bot");
-            webSocketHandler.broadcastGameUpdated(fresh.getCode(), fresh.getVersion());
-            return true;
+            return fresh;
         });
+        if (applied == null) {
+            return false;
+        }
+        // Outside the lock, like the HTTP actions: other players' moves never wait on this broadcast.
+        webSocketHandler.broadcastGameUpdated(applied.getCode(), applied.getVersion());
+        return true;
     }
 
     /** An engine failure yields no decision (so the heuristic takes over) instead of aborting the turn. */

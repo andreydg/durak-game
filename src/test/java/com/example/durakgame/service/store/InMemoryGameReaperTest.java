@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
@@ -65,13 +66,38 @@ class InMemoryGameReaperTest {
         assertFalse(store.existsByCode("DEAD01"));
     }
 
+    @Test
+    void reapSparesGameRenewedAfterTheSweepReadIt() {
+        InMemoryGameStore racingStore = new InMemoryGameStore() {
+            @Override
+            public Collection<Game> listAll() {
+                Collection<Game> seen = super.listAll();
+                // A heartbeat that loaded the room before its deadline saves after the sweep read it.
+                Game renewed = findByCode("IDLE01").orElseThrow();
+                renewed.markActive();
+                save(renewed);
+                return seen;
+            }
+        };
+        InMemoryGameReaper racingReaper = new InMemoryGameReaper(racingStore, GameExpiryPolicy.defaults());
+        racingStore.save(agedLobby("IDLE01", 45));                 // idle past 30 min, renewed mid-sweep
+        racingStore.save(agedLobby("DEAD01", 45));                 // equally idle and untouched, reaped
+
+        racingReaper.reap();
+
+        assertTrue(racingStore.existsByCode("IDLE01"));
+        assertFalse(racingStore.existsByCode("DEAD01"));
+    }
+
     /** A LOBBY game whose createdAt is {@code minutesAgo} in the past, via snapshot reconstruction. */
     private static Game agedLobby(String code, long minutesAgo) {
         long createdAtMs = Instant.now().minus(minutesAgo, ChronoUnit.MINUTES).toEpochMilli();
         Game.PlayerSnapshot host = new Game.PlayerSnapshot("host", "Host", createdAtMs, false, null, List.of(), "");
-        return Game.fromSnapshot(new Game.Snapshot(
+        Game game = Game.fromSnapshot(new Game.Snapshot(
                 code, createdAtMs, createdAtMs, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()));
+        game.markNotPersisted(); // seeded as a new room, not a copy of a stored one
+        return game;
     }
 }

@@ -13,7 +13,8 @@ import java.time.Instant;
  * Periodically evicts stale games from the in-memory store so abandoned lobbies (closed tabs
  * whose leave-beacon never fired) don't leak memory. Operates directly on {@link InMemoryGameStore}:
  * on Cloud Run that store stays empty (Firestore is active and has its own TTL), so this is a no-op
- * there. The same activity-based policy is enforced synchronously by the API and lobby list.
+ * there. The API and lobby list enforce the same activity-based policy on read but never delete,
+ * so this sweep is the in-memory equivalent of the Firestore TTL.
  */
 @Component
 public class InMemoryGameReaper {
@@ -38,8 +39,8 @@ public class InMemoryGameReaper {
         Instant now = Instant.now();
         int removed = 0;
         for (Game game : store.listAll()) {
-            if (shouldReap(game, now)) {
-                store.deleteByCode(game.getCode());
+            // Delete only the version judged expired: a game renewed since this sweep read it survives.
+            if (shouldReap(game, now) && store.deleteIfVersion(game.getCode(), game.getVersion())) {
                 removed++;
             }
         }

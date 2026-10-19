@@ -1,9 +1,13 @@
 package com.example.durakgame.websocket;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.springframework.web.socket.BinaryMessage;
+import org.springframework.web.socket.CloseStatus;
 
 import java.time.Duration;
 import java.util.Map;
@@ -12,8 +16,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+@Timeout(10)
 class LobbyWebSocketHandlerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final LobbyWebSocketHandler handler = new LobbyWebSocketHandler(objectMapper);
@@ -32,7 +41,8 @@ class LobbyWebSocketHandlerTest {
 
         // The already-scheduled revision broadcast may race with this connection and deliver an
         // equivalent LOBBIES_CHANGED before or after READY. Ordering and message count are not
-        // protocol guarantees; the synchronous READY snapshot is.
+        // protocol guarantees; the READY snapshot taken at connection time is.
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
         Map<String, Object> ready = payloadOfType(session, "LOBBIES_READY");
         assertFalse(String.valueOf(ready.get("streamId")).isBlank());
         assertEquals(1, ((Number) ready.get("revision")).intValue());
@@ -47,6 +57,8 @@ class LobbyWebSocketHandlerTest {
         try {
             restarted.afterConnectionEstablished(second);
 
+            assertTrue(first.awaitMessageCount(1, Duration.ofSeconds(1)));
+            assertTrue(second.awaitMessageCount(1, Duration.ofSeconds(1)));
             assertNotEquals(
                     payload(first.messages.getFirst().getPayload()).get("streamId"),
                     payload(second.messages.getFirst().getPayload()).get("streamId")
@@ -74,6 +86,7 @@ class LobbyWebSocketHandlerTest {
     void failedSessionCannotAbortPublishingAndIsQuarantined() throws Exception {
         TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
         handler.afterConnectionEstablished(session);
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
         session.sendFailure = new IllegalStateException("TEXT_FULL_WRITING");
 
         assertDoesNotThrow(handler::lobbiesChanged);
@@ -88,6 +101,7 @@ class LobbyWebSocketHandlerTest {
     void burstInvalidationsAreCoalescedWithoutLosingLatestRevision() throws Exception {
         TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
         handler.afterConnectionEstablished(session);
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
         session.sendDelayMs = 75;
 
         for (int i = 0; i < 20; i++) {
@@ -105,17 +119,73 @@ class LobbyWebSocketHandlerTest {
     }
 
     @Test
-    void globalConnectionSetIsBounded() throws Exception {
-        for (int i = 0; i < 500; i++) {
-            handler.afterConnectionEstablished(new TestWebSocketSession("/ws/lobbies"));
+    void aSocketKeepsItsPlaceUntilItsConnectionCloses() throws Exception {
+        WebSocketAdmission admission = new WebSocketAdmission(1, 1, 50, 1);
+        LobbyWebSocketHandler capped = new LobbyWebSocketHandler(objectMapper, admission);
+        try {
+            TestWebSocketSession first = TestWebSocketSession.admitted(admission, "/ws/lobbies", "198.51.100.1");
+            capped.afterConnectionEstablished(first);
+            assertTrue(first.awaitMessageCount(1, Duration.ofSeconds(1)));
+            assertThrows(IllegalStateException.class,
+                    () -> TestWebSocketSession.admitted(admission, "/ws/lobbies", "198.51.100.2"), "total cap");
+
+            capped.afterConnectionClosed(first, CloseStatus.NORMAL);
+            capped.afterConnectionClosed(first, CloseStatus.NORMAL);
+
+            TestWebSocketSession next = TestWebSocketSession.admitted(admission, "/ws/lobbies", "198.51.100.2");
+            capped.afterConnectionEstablished(next);
+            assertTrue(next.awaitMessageCount(1, Duration.ofSeconds(1)));
+            assertEquals(1, admission.openSessions());
+        } finally {
+            capped.close();
         }
-        TestWebSocketSession overflow = new TestWebSocketSession("/ws/lobbies");
+    }
 
-        handler.afterConnectionEstablished(overflow);
+    @Test
+    void aBinaryMessageClosesTheSessionFromItsSender() throws Exception {
+        TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
+        handler.afterConnectionEstablished(session);
+        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
 
-        assertFalse(overflow.isOpen());
-        assertEquals(org.springframework.web.socket.CloseStatus.POLICY_VIOLATION.getCode(),
-                overflow.closeStatus.getCode());
+        handler.handleMessage(session, new BinaryMessage(new byte[] {1}));
+
+        assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+        assertEquals(CloseStatus.NOT_ACCEPTABLE.getCode(), session.closeStatus.getCode());
+        assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
+        assertEquals(1, session.closeCalls.get());
+    }
+
+    @Test
+    void aFailureWhileOpeningClosesTheSessionInsteadOfThrowing() throws Exception {
+        ObjectMapper failing = mock(ObjectMapper.class);
+        when(failing.writeValueAsString(any())).thenThrow(new JsonProcessingException("cannot serialize") { });
+        LobbyWebSocketHandler broken = new LobbyWebSocketHandler(failing);
+        TestWebSocketSession session = new TestWebSocketSession("/ws/lobbies");
+        try {
+            // Thrown on, Spring would close the session the ordinary way.
+            assertDoesNotThrow(() -> broken.afterConnectionEstablished(session));
+
+            assertTrue(session.awaitClosed(Duration.ofSeconds(2)));
+            assertEquals(CloseStatus.SERVER_ERROR.getCode(), session.closeStatus.getCode());
+            assertTrue(session.closedBy.startsWith("websocket-send-"), "closed by " + session.closedBy);
+        } finally {
+            broken.close();
+        }
+    }
+
+    @Test
+    void aSlowClientDoesNotDelayOtherClients() throws Exception {
+        TestWebSocketSession slow = new TestWebSocketSession("/ws/lobbies");
+        TestWebSocketSession fast = new TestWebSocketSession("/ws/lobbies");
+        handler.afterConnectionEstablished(slow);
+        handler.afterConnectionEstablished(fast);
+        assertTrue(slow.awaitMessageCount(1, Duration.ofSeconds(1)));
+        assertTrue(fast.awaitMessageCount(1, Duration.ofSeconds(1)));
+        slow.sendDelayMs = 2_000;
+
+        handler.lobbiesChanged();
+
+        assertTrue(fast.awaitMessageCount(2, Duration.ofMillis(500)), "the fast client waited for the slow one");
     }
 
     private Map<String, Object> payload(String json) throws Exception {
