@@ -69,6 +69,7 @@ public class FirestoreGameStore implements GameStore {
     public void save(Game game) {
         byte[] encoded = encode(game);
         long attemptedVersion = game.getVersion();
+        long expectedVersion = game.getLoadedVersion();
         try {
             Instant expireAt = expiryPolicy.expiresAt(game);
             Timestamp expireTs = Timestamp.ofTimeSecondsAndNanos(expireAt.getEpochSecond(), expireAt.getNano());
@@ -78,13 +79,17 @@ public class FirestoreGameStore implements GameStore {
             Instant lobbyStartedAt = game.getLobbyStartedAt();
             Timestamp lobbyStartedTs = Timestamp.ofTimeSecondsAndNanos(
                     lobbyStartedAt.getEpochSecond(), lobbyStartedAt.getNano());
-            log.debug("firestore_write code={} op=save version={}", game.getCode(), attemptedVersion);
+            log.debug("firestore_write code={} op=save version={} expectedVersion={}",
+                    game.getCode(), attemptedVersion, expectedVersion);
             DocumentReference ref = collection().document(game.getCode());
             firestore.runTransaction(tx -> {
                 DocumentSnapshot existing = tx.get(ref).get();
                 Long storedVersion = existing.exists() ? existing.getLong(FIELD_VERSION) : null;
-                if (storedVersion != null && storedVersion >= attemptedVersion) {
-                    throw new StaleGameWriteException(game.getCode(), attemptedVersion, storedVersion);
+                boolean matches = expectedVersion == Game.NOT_PERSISTED
+                        ? !existing.exists()
+                        : storedVersion != null && storedVersion == expectedVersion;
+                if (!matches) {
+                    throw new StaleGameWriteException(game.getCode(), expectedVersion, storedVersion);
                 }
                 LobbyProjection summary = GameStore.toProjection(game);
                 tx.set(ref, Map.ofEntries(
@@ -102,6 +107,8 @@ public class FirestoreGameStore implements GameStore {
                 ));
                 return null;
             }).get();
+            // Only once the transaction committed: Firestore may run the body more than once.
+            game.markPersisted();
         } catch (ExecutionException ex) {
             if (ex.getCause() instanceof StaleGameWriteException stale) {
                 throw stale;

@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -668,6 +669,46 @@ class GameServiceTest {
                 () -> service.attack("TEST01", "h", Card.fromCode("9H")));
     }
 
+    @Test
+    void staleSaveIsRetriedOnFreshStateInsteadOfUndoingAnotherWritersChange() {
+        AtomicReference<Runnable> beforeNextSave = new AtomicReference<>();
+        AtomicInteger staleRejections = new AtomicInteger();
+        InMemoryGameStore store = new InMemoryGameStore() {
+            @Override
+            public void save(Game game) {
+                Runnable competingWrite = beforeNextSave.getAndSet(null);
+                if (competingWrite != null) {
+                    competingWrite.run();
+                }
+                try {
+                    super.save(game);
+                } catch (StaleGameWriteException stale) {
+                    staleRejections.incrementAndGet();
+                    throw stale;
+                }
+            }
+        };
+        GameService service = newService(store);
+        String code = service.createGame("Host").getCode();
+        Player bob = service.joinGame(code, "Bob");
+        service.joinGame(code, "Cara");
+        // Another writer (e.g. the previous revision during a deploy) saves Bob's departure between
+        // the next join's load and its save. That join's copy ends two versions ahead (join plus
+        // auto-start), past the departure's one, so only the compare-and-swap notices the conflict.
+        beforeNextSave.set(() -> {
+            Game other = store.findByCode(code).orElseThrow();
+            other.removePlayerFromLobby(bob.getId());
+            store.save(other);
+        });
+
+        service.joinGame(code, "Dave");
+
+        Game after = service.getGame(code);
+        assertEquals(1, staleRejections.get(), "the join loaded before the departure must be rejected");
+        assertEquals(List.of("Host", "Cara", "Dave"), after.getPlayers().stream().map(Player::getName).toList());
+        assertEquals(GameStatus.LOBBY, after.getStatus(), "the stale four-player start must not land");
+    }
+
     // --- autoplay loop integration ---------------------------------------
 
     @Test
@@ -1037,16 +1078,18 @@ class GameServiceTest {
         long activityTimestamp = lastActivityAt.toEpochMilli();
         Game.PlayerSnapshot host = new Game.PlayerSnapshot(
                 "host", "Host", createdTimestamp, false, null, List.of(), "secret");
-        return Game.fromSnapshot(new Game.Snapshot(
+        Game game = Game.fromSnapshot(new Game.Snapshot(
                 code, createdTimestamp, activityTimestamp, "host", GameStatus.LOBBY,
                 null, null, -1, -1, null, false, 0, 0L,
                 List.of(host), List.of(), List.of(), Set.of(), List.of(), List.of()
         ));
+        game.markNotPersisted(); // tests seed it into an empty store
+        return game;
     }
 
     private static Game finishedGame(String code) {
         long now = Instant.now().toEpochMilli();
-        return Game.fromSnapshot(new Game.Snapshot(
+        Game game = Game.fromSnapshot(new Game.Snapshot(
                 code, now, now, "host", GameStatus.FINISHED,
                 Suit.SPADES, Card.fromCode("6S"), -1, -1, "guest", false, 0, 4L,
                 List.of(
@@ -1055,6 +1098,8 @@ class GameServiceTest {
                 ),
                 List.of(), List.of(), Set.of(), List.of(), List.of()
         ));
+        game.markNotPersisted(); // tests seed it into an empty store
+        return game;
     }
 
     private static Game.PlayerSnapshot playerSnapshot(String id, boolean bot, String... cardCodes) {

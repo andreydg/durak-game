@@ -37,16 +37,34 @@ class InMemoryGameStoreTest {
     }
 
     @Test
-    void savePublishesChangesAndRejectsResavingTheSameVersion() {
+    void savePublishesChangesAndRejectsAnotherCopyReadBeforeThem() {
         InMemoryGameStore store = new InMemoryGameStore();
         store.save(new Game("CODE01", new Player("Host")));
 
         Game read = store.findByCode("CODE01").orElseThrow();
+        Game concurrent = store.findByCode("CODE01").orElseThrow();
         read.addPlayer("Guest", 4);
         store.save(read);
 
         assertEquals(2, store.findByCode("CODE01").orElseThrow().getPlayers().size());
-        assertThrows(StaleGameWriteException.class, () -> store.save(read));
+        concurrent.addPlayer("Other", 4); // the same version as the saved change, built on the state before it
+        assertThrows(StaleGameWriteException.class, () -> store.save(concurrent));
+        assertEquals(2, store.findByCode("CODE01").orElseThrow().getPlayers().size());
+    }
+
+    @Test
+    void sameObjectCanBeSavedAgainAfterAnotherChange() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        Game game = new Game("CODE01", new Player("Host"));
+        store.save(game); // creates it
+
+        // Each save moves the expected version to the one just written.
+        game.addPlayer("Guest", 4);
+        store.save(game);
+        game.addPlayer("Third", 4);
+        store.save(game);
+
+        assertEquals(3, store.findByCode("CODE01").orElseThrow().getPlayers().size());
     }
 
     @Test
@@ -66,22 +84,70 @@ class InMemoryGameStoreTest {
         game.addPlayer("Guest", 4); // version bump -> v1
         store.save(game);
 
-        // A distinct copy decoded at the same version must not overwrite.
+        // A distinct copy decoded at v1 must not overwrite a save that landed after it was decoded.
         Game stale = Game.fromSnapshot(game.toSnapshot());
+        game.markActive(); // v2
+        store.save(game);
+
+        stale.markActive(); // also v2, but built on v1
         assertThrows(StaleGameWriteException.class, () -> store.save(stale));
     }
 
     @Test
-    void acceptsNewerVersionForDistinctCopy() {
+    void acceptsDistinctCopyDecodedAtTheStoredVersion() {
         InMemoryGameStore store = new InMemoryGameStore();
         Game game = new Game("CODE01", new Player("Host"));
         store.save(game);
 
-        Game newer = Game.fromSnapshot(game.toSnapshot());
-        newer.addPlayer("Guest", 4); // advances version beyond stored
-        store.save(newer);
+        Game copy = Game.fromSnapshot(game.toSnapshot()); // expects the version it was decoded at
+        copy.addPlayer("Guest", 4);
+        store.save(copy);
 
         assertEquals(2, store.findByCode("CODE01").orElseThrow().getPlayers().size());
+    }
+
+    @Test
+    void staleCopyCannotOverwriteANewerSaveEvenWithAHigherVersion() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        Game game = new Game("CODE01", new Player("Host"));
+        Player guest = game.addPlayer("Guest", 4);
+        store.save(game); // v1
+
+        Game copyA = store.findByCode("CODE01").orElseThrow();
+        Game copyB = store.findByCode("CODE01").orElseThrow();
+        copyB.removePlayerFromLobby(guest.getId()); // one change: the guest leaves (v2)
+        store.save(copyB);
+
+        copyA.addPlayer("Late", 4); // two changes on the stale copy (v3), past the stored v2
+        copyA.markActive();
+        assertThrows(StaleGameWriteException.class, () -> store.save(copyA));
+
+        // B's change survives: the guest who left does not come back.
+        assertEquals(List.of("Host"),
+                store.findByCode("CODE01").orElseThrow().getPlayers().stream().map(Player::getName).toList());
+    }
+
+    @Test
+    void staleSaveCannotResurrectADeletedGame() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        store.save(new Game("CODE01", new Player("Host")));
+        Game read = store.findByCode("CODE01").orElseThrow();
+        store.deleteByCode("CODE01"); // e.g. another writer removed the room
+
+        read.addPlayer("Guest", 4);
+        assertThrows(StaleGameWriteException.class, () -> store.save(read));
+        assertFalse(store.existsByCode("CODE01"));
+    }
+
+    @Test
+    void creatingAGameWhoseCodeIsTakenIsRejected() {
+        InMemoryGameStore store = new InMemoryGameStore();
+        store.save(new Game("CODE01", new Player("Host")));
+
+        Game other = new Game("CODE01", new Player("Other"));
+        other.addPlayer("Guest", 4); // ahead of the stored version, so only the existence check stops it
+        assertThrows(StaleGameWriteException.class, () -> store.save(other));
+        assertEquals("Host", store.findByCode("CODE01").orElseThrow().getPlayers().getFirst().getName());
     }
 
     @Test
