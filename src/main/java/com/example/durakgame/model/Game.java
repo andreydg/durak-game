@@ -406,6 +406,12 @@ public class Game implements Serializable {
         forgetKnownCard(playerId, defenseCard);
         entry.defendWith(defenseCard);
         tableRanks.add(defenseCard.rank());
+        // No decision remains once the table is covered and nobody can legally throw in.
+        // Check every seat, not only the opening attacker (including team restrictions).
+        if (table.stream().allMatch(AttackEntry::isDefended)
+                && players.stream().noneMatch(p -> computeViewerLegalMoves(p.getId()).canAttack())) {
+            finishRound();
+        }
         touch();
     }
 
@@ -495,6 +501,12 @@ public class Game implements Serializable {
             return;
         }
 
+        finishRound();
+        touch();
+    }
+
+    /** Settles a bout once, whether explicitly approved or forced by the last defence. */
+    private void finishRound() {
         if (takingCardsInProgress) {
             finalizeTakeCardsRound();
         } else {
@@ -510,7 +522,6 @@ public class Game implements Serializable {
         }
         /* Both branches above close the bout (taken or discarded), so it counts exactly once. */
         boutsCompleted++;
-        touch();
     }
 
     public String getCode() {
@@ -858,7 +869,7 @@ public class Game implements Serializable {
         boolean canTransfer = !transferable.isEmpty();
 
         boolean allDefended = !table.isEmpty() && table.stream().allMatch(AttackEntry::isDefended);
-        /* Take pile only while something is still undefended; once all are beaten, round ends via End round. */
+        /* Take only while something is undefended; a covered table ends automatically if no throw-in is legal. */
         boolean canTake = !takingCardsInProgress && isDefenderSeat && !table.isEmpty() && !allDefended;
         boolean isAttackingSideSeat = isAttackingSideSeat(viewerSeat);
         boolean canEndRound = (takingCardsInProgress || allDefended)

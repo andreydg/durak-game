@@ -189,7 +189,7 @@ class GameTest {
     void higherSameSuitBeats() {
         Game game = inProgress(
                 List.of(
-                        player("a", null, "8H", "6C"),
+                        player("a", null, "8H", "9C"),
                         player("b", null, "9H", "6D")
                 ),
                 Suit.SPADES, cards("8C"), 0, 1);
@@ -286,7 +286,7 @@ class GameTest {
         Game game = inProgress(
                 List.of(
                         player("a", null, "6H", "8C"),
-                        player("b", null, "9C", "QD"),
+                        player("b", null, "7C", "QD"),
                         player("c", null, "7H", "9D")
                 ),
                 Suit.SPADES, cards("8D", "10C"), 0, 2);
@@ -309,7 +309,7 @@ class GameTest {
     void defenderCannotEndRound() {
         Game game = inProgress(
                 List.of(
-                        player("a", null, "6H", "8C"),
+                        player("a", null, "6H", "6C"),
                         player("b", null, "7H", "9D")
                 ),
                 Suit.SPADES, cards("8D"), 0, 1);
@@ -330,7 +330,6 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
-        game.endRound("a");
 
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertEquals("b", game.getLoserPlayerId());
@@ -349,8 +348,6 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("QH"));
-        game.endRound("a");
-        game.endRound("c");
 
         // Only team 0 (a and c) still holds cards: play cannot continue between teammates.
         assertEquals(GameStatus.FINISHED, game.getStatus());
@@ -407,7 +404,6 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
-        game.endRound("a");
 
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertEquals(1, game.getBoutsCompleted());
@@ -435,7 +431,6 @@ class GameTest {
                 Suit.SPADES, cards("10C"), 0, 1);
         started.attack("a", Card.fromCode("6H"));
         started.defend("b", Card.fromCode("6H"), Card.fromCode("8H"));
-        started.endRound("a");
         assertEquals(1, started.getBoutsCompleted());
 
         started.removePlayerAndResetToLobby("b");
@@ -455,7 +450,6 @@ class GameTest {
                 Suit.SPADES, cards("10C", "JC"), 0, 1);
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("8H"));
-        game.endRound("a");
 
         Game.Snapshot snapshot = game.toSnapshot();
         assertEquals(1, snapshot.boutsCompleted());

@@ -35,6 +35,61 @@ function json(route, status, body) {
 }
 
 test.describe("Action responses and API errors", () => {
+    for (const finishesGame of [false, true]) {
+        test(`the final defence automatically shows ${finishesGame ? "the result" : "the next bout"} without End round`, async ({ page }) => {
+            await seedSession(page);
+            let current = syntheticGame({
+                version: 12,
+                hand: ["7H"],
+                table: [{attackCard: "6H", attackerId: "p2"}],
+                legalMoves: {canDefend: true, canTake: true, defensesByAttackCard: {"6H": ["7H"]}}
+            });
+            let endRoundRequests = 0;
+            let defendRequest;
+            page.on("request", request => {
+                if (request.method() === "POST" && new URL(request.url()).pathname.endsWith("/end-round")) {
+                    endRoundRequests++;
+                }
+            });
+            await routeGame(page, {
+                "GET /": route => json(route, 200, current),
+                "POST /defend": route => {
+                    defendRequest = route.request().postDataJSON();
+                    current = syntheticGame({
+                        version: 13,
+                        status: finishesGame ? "FINISHED" : "IN_PROGRESS",
+                        hand: finishesGame ? [] : ["6C", "7C", "8C", "9C", "JC", "KC"],
+                        table: [],
+                        attackerPlayerId: finishesGame ? null : "me",
+                        defenderPlayerId: finishesGame ? null : "p2",
+                        talonSize: finishesGame ? 0 : 4,
+                        loserPlayerId: finishesGame ? "p2" : null,
+                        legalMoves: finishesGame ? {} : {canAttack: true, attackableCardCodes: ["6C", "7C", "8C", "9C", "JC", "KC"]}
+                    });
+                    return json(route, 200, current);
+                }
+            });
+
+            await page.goto("/");
+            await page.locator('#myHand [data-card-code="7H"]').click();
+            await page.click("#defendBtn");
+
+            if (finishesGame) {
+                await expect(page.locator("#resultPanel")).toBeVisible();
+                await expect(page.locator("#resultTitle")).toHaveText("You won!");
+            } else {
+                await expect(page.locator("#battleCards .battle-pair")).toHaveCount(0);
+                await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
+                await expect(page.locator("#endRoundBtn")).toBeDisabled();
+                await page.locator('#myHand [data-card-code="6C"]').click();
+                await expect(page.locator("#attackBtn")).toBeEnabled();
+            }
+            expect(defendRequest).toEqual({playerId: "me", attackCard: "6H", defenseCard: "7H"});
+            expect(endRoundRequests).toBe(0);
+            await expect(page.locator("#appAlert")).toBeHidden();
+        });
+    }
+
     test("a delayed action response cannot roll back newer state", async ({ page }) => {
         await seedSession(page);
         let current = attackerGame();

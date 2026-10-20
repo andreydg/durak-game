@@ -112,13 +112,29 @@ class GameLifecycleLogTest {
         GameService service = service();
 
         service.attack("TEST01", "h", Card.fromCode("7H"));
-        service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        service.takeCards("TEST01", "g");
         service.endRound("TEST01", "h");
 
         String line = onlyLine();
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
         assertTrue(line.contains("endedBy=player bouts=1 loser=human loserPlayerId=g"), line);
         assertTrue(line.contains("humans=2 bots=0"), line);
+    }
+
+    @Test
+    void aPlayersFinalDefenceLogsTheAutomaticEndOnce() {
+        Game game = lastBout();
+        store.save(game);
+        GameService service = service();
+        service.attack("TEST01", "h", Card.fromCode("7H"));
+
+        Game finished = service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+
+        assertEquals(GameStatus.FINISHED, finished.getStatus());
+        assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
+        String line = onlyLine();
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.contains("endedBy=player bouts=1 loser=human loserPlayerId=g"), line);
     }
 
     @Test
@@ -139,6 +155,21 @@ class GameLifecycleLogTest {
         String line = onlyLine();
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
         assertTrue(line.contains("endedBy=bot bouts=1 loser=human loserPlayerId=h"), line);
+    }
+
+    @Test
+    void aBotsFinalDefenceLogsTheAutomaticEndOnce() throws InterruptedException {
+        Game game = inProgress(List.of(player("h", false, "7H"), player("b", true, "9H", "6C")),
+                Instant.now().toEpochMilli());
+        store.save(game);
+        GameService service = service((g, playerId, legalMoves) -> AutoPlayAction.defend("7H", "9H"));
+
+        service.attack("TEST01", "h", Card.fromCode("7H"));
+
+        assertTrue(waitUntil(() -> service.getGame("TEST01").getStatus() == GameStatus.FINISHED, 10_000));
+        String line = onlyLine();
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.contains("endedBy=bot bouts=1 loser=bot loserPlayerId=b"), line);
     }
 
     @Test

@@ -792,14 +792,14 @@ class GameServiceTest {
         boolean defended = false;
         long deadline = System.currentTimeMillis() + 10_000;
         while (System.currentTimeMillis() < deadline) {
-            List<com.example.durakgame.model.AttackEntry> table = service.getGame("TEST01").getTable();
-            if (!table.isEmpty() && table.getFirst().isDefended()) {
+            // The human cannot throw in, so the bot's defence also clears the table immediately.
+            if (service.getGame("TEST01").getDiscardedCards().containsAll(cards("9H", "10H"))) {
                 defended = true;
                 break;
             }
             Thread.sleep(100);
         }
-        assertTrue(defended, "bot defender should apply the engine-chosen defense");
+        assertTrue(defended, "bot defender should apply the engine-chosen defense and end the forced bout");
     }
 
     @Test
