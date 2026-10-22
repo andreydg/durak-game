@@ -141,7 +141,6 @@ public class GameController {
                 Card.fromCode(request.attackCard()),
                 Card.fromCode(request.defenseCard())
         );
-        webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 

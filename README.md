@@ -68,12 +68,16 @@ On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every
 
 Deals are counted from three lifecycle lines, each written once the change is saved, whichever path caused it (players, bots, quick play, rematches, leaving):
 - `game_started` (with `trigger=host|table_full|quick_play|rematch`)
-- `game_ended` (with `endedBy=player|bot`, `bouts`, and `loser=human|bot|team|none`)
+- `game_ended` (with `endedBy=player|bot|automatic`, `bouts`, and `loser=human|bot|team|none`)
 - `game_interrupted` (with `reason=player_left|room_closed`)
 
 Lines of the same deal share a `deal` id: the room code plus the time the room last (re)opened. A deal with a `game_started` line but neither of the others was abandoned until its room expired.
 
 ## Realtime updates and fallback reads
+
+When every attack is covered and the defender's hand is empty, the server saves and broadcasts the final defence, then ends the bout after 2.5 seconds. This trigger uses public hand size, never attackers' private ranks. An attacker can press End round during the pause to settle immediately, without waiting for co-attackers' approvals. Other covered bouts still require the usual passes, even if nobody holds a matching rank; taking cards is unchanged.
+
+The delayed task re-reads under the game lock and checks the scheduled deal, bout and version before settling. A manual end or intervening change makes that task a no-op. Reads and heartbeats re-arm a lost timer after an instance restart, with a fresh 2.5-second pause; manual End round also remains available. No extra snapshot fields are needed. In-flight bot decisions are rejected if their deal or bout has changed, even if the selected card would be legal as the next lead.
 
 Game changes arrive over `/ws/games/{code}` and public-table invalidations arrive over `/ws/lobbies`. Lobby events carry only a monotonic revision; clients then read the authoritative `/api/lobbies` projection. A healthy connection reduces game health reads to once every 30 seconds and lobby health reads to once every 60 seconds, instead of fixed three-/four-second polling.
 

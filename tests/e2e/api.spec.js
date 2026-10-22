@@ -17,7 +17,8 @@ function attackerGame(overrides = {}) {
 }
 
 async function routeGame(page, handlers) {
-    await page.routeWebSocket("**/ws/games/**", () => {});
+    let socket;
+    await page.routeWebSocket("**/ws/games/**", ws => { socket = ws; });
     await page.route(`**/api/games/${CODE}**`, async route => {
         const request = route.request();
         const path = new URL(request.url()).pathname;
@@ -28,6 +29,7 @@ async function routeGame(page, handlers) {
         }
         await route.fulfill({status: 404, contentType: "application/json", body: JSON.stringify({message: "unexpected"})});
     });
+    return () => socket;
 }
 
 function json(route, status, body) {
@@ -36,55 +38,58 @@ function json(route, status, body) {
 
 test.describe("Action responses and API errors", () => {
     for (const finishesGame of [false, true]) {
-        test(`the final defence automatically shows ${finishesGame ? "the result" : "the next bout"} without End round`, async ({ page }) => {
+        test(`the attacker sees the final defence before ${finishesGame ? "the result" : "the next bout"} without End round`, async ({ page }) => {
             await seedSession(page);
-            let current = syntheticGame({
-                version: 12,
-                hand: ["7H"],
-                table: [{attackCard: "6H", attackerId: "p2"}],
-                legalMoves: {canDefend: true, canTake: true, defensesByAttackCard: {"6H": ["7H"]}}
+            let current = attackerGame({
+                hand: ["6D"],
+                opponentHandSizes: [1],
+                table: [{attackCard: "6H", attackerId: "me"}],
+                legalMoves: {}
             });
             let endRoundRequests = 0;
-            let defendRequest;
             page.on("request", request => {
                 if (request.method() === "POST" && new URL(request.url()).pathname.endsWith("/end-round")) {
                     endRoundRequests++;
                 }
             });
-            await routeGame(page, {
-                "GET /": route => json(route, 200, current),
-                "POST /defend": route => {
-                    defendRequest = route.request().postDataJSON();
-                    current = syntheticGame({
-                        version: 13,
-                        status: finishesGame ? "FINISHED" : "IN_PROGRESS",
-                        hand: finishesGame ? [] : ["6C", "7C", "8C", "9C", "JC", "KC"],
-                        table: [],
-                        attackerPlayerId: finishesGame ? null : "me",
-                        defenderPlayerId: finishesGame ? null : "p2",
-                        talonSize: finishesGame ? 0 : 4,
-                        loserPlayerId: finishesGame ? "p2" : null,
-                        legalMoves: finishesGame ? {} : {canAttack: true, attackableCardCodes: ["6C", "7C", "8C", "9C", "JC", "KC"]}
-                    });
-                    return json(route, 200, current);
-                }
-            });
-
+            const socket = await routeGame(page, {"GET /": route => json(route, 200, current)});
             await page.goto("/");
-            await page.locator('#myHand [data-card-code="7H"]').click();
-            await page.click("#defendBtn");
+            await expect(page.locator("#battleCards .battle-pair")).toHaveCount(1);
+            await expect.poll(() => Boolean(socket())).toBe(true);
 
+            current = attackerGame({
+                version: 13, hand: ["6D"], opponentHandSizes: [0],
+                table: [{attackCard: "6H", defenseCard: "7H", attackerId: "me"}],
+                legalMoves: {canEndRound: true}
+            });
+            socket().send(JSON.stringify({type: "GAME_UPDATED", version: 13}));
+            await expect(page.locator("#battleCards .battle-card.defense")).toHaveCount(1);
+            await expect(page.locator("#endRoundBtn")).toBeEnabled();
+            await expect(page.locator("#actionHint")).toContainText("This bout ends automatically after a short pause.");
+            await expect(page.locator("#liveAnnouncer")).toContainText("beats 6 of hearts with 7 of hearts.");
+            await expect(page.locator("#liveAnnouncer")).toContainText("the bout will end automatically");
+
+            // The server timer is controlled by this fixture. Merely refreshing during its pause
+            // must not hide the final defence or submit an End round action.
+            await page.evaluate(() => window.refreshGame(false));
+            await expect(page.locator("#battleCards .battle-card.defense")).toHaveCount(1);
+            expect(endRoundRequests).toBe(0);
+            if (finishesGame) {
+                current = syntheticGame({version: 14, status: "FINISHED", loserPlayerId: "me",
+                    hand: ["6D"], opponentHandSizes: [0]});
+            } else {
+                current = syntheticGame({version: 14, hand: ["6D", "8C", "9C", "10C", "JC", "QC"],
+                    opponentHandSizes: [6], table: [], legalMoves: {}});
+            }
+            socket().send(JSON.stringify({type: "GAME_UPDATED", version: 14}));
             if (finishesGame) {
                 await expect(page.locator("#resultPanel")).toBeVisible();
-                await expect(page.locator("#resultTitle")).toHaveText("You won!");
+                await expect(page.locator("#resultTitle")).toHaveText("You’re the durak");
             } else {
                 await expect(page.locator("#battleCards .battle-pair")).toHaveCount(0);
                 await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
                 await expect(page.locator("#endRoundBtn")).toBeDisabled();
-                await page.locator('#myHand [data-card-code="6C"]').click();
-                await expect(page.locator("#attackBtn")).toBeEnabled();
             }
-            expect(defendRequest).toEqual({playerId: "me", attackCard: "6H", defenseCard: "7H"});
             expect(endRoundRequests).toBe(0);
             await expect(page.locator("#appAlert")).toBeHidden();
         });

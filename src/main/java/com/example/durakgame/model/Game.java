@@ -406,12 +406,6 @@ public class Game implements Serializable {
         forgetKnownCard(playerId, defenseCard);
         entry.defendWith(defenseCard);
         tableRanks.add(defenseCard.rank());
-        // No decision remains once the table is covered and nobody can legally throw in.
-        // Check every seat, not only the opening attacker (including team restrictions).
-        if (table.stream().allMatch(AttackEntry::isDefended)
-                && players.stream().noneMatch(p -> computeViewerLegalMoves(p.getId()).canAttack())) {
-            finishRound();
-        }
         touch();
     }
 
@@ -496,7 +490,7 @@ public class Game implements Serializable {
             }
         }
         endRoundApprovals.add(playerId);
-        if (!allRequiredEndRoundApprovalsPresent()) {
+        if (!canAutoEndRound() && !allRequiredEndRoundApprovalsPresent()) {
             touch();
             return;
         }
@@ -505,7 +499,24 @@ public class Game implements Serializable {
         touch();
     }
 
-    /** Settles a bout once, whether explicitly approved or forced by the last defence. */
+    /** Public information only: do not infer automatic settlement from attackers' private hands. */
+    public synchronized boolean canAutoEndRound() {
+        return status == GameStatus.IN_PROGRESS && !takingCardsInProgress && !table.isEmpty()
+                && players.get(defenderIndex).handSize() == 0
+                && table.stream().allMatch(AttackEntry::isDefended);
+    }
+
+    /** Called by the service after the final defence has been visible for a short pause. */
+    public synchronized boolean endRoundAutomatically() {
+        if (!canAutoEndRound()) {
+            return false;
+        }
+        finishRound();
+        touch();
+        return true;
+    }
+
+    /** Settles a bout once, whether explicitly approved or after the final-defence pause. */
     private void finishRound() {
         if (takingCardsInProgress) {
             finalizeTakeCardsRound();
@@ -869,7 +880,7 @@ public class Game implements Serializable {
         boolean canTransfer = !transferable.isEmpty();
 
         boolean allDefended = !table.isEmpty() && table.stream().allMatch(AttackEntry::isDefended);
-        /* Take only while something is undefended; a covered table ends automatically if no throw-in is legal. */
+        /* Take only while something is undefended; an empty defender's covered table ends after a pause. */
         boolean canTake = !takingCardsInProgress && isDefenderSeat && !table.isEmpty() && !allDefended;
         boolean isAttackingSideSeat = isAttackingSideSeat(viewerSeat);
         boolean canEndRound = (takingCardsInProgress || allDefended)

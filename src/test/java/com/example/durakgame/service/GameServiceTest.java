@@ -784,22 +784,16 @@ class GameServiceTest {
         // Engine instructs the bot defender to beat 9H with 10H (a non-forced, engine-driven move).
         AutoPlayDecisionEngine engine = (game, playerId, legalMoves) -> AutoPlayAction.defend("9H", "10H");
         GameService service = newService(store, engine);
-        store.put(twoPlayerBotDefenderCanBeat());
+        // Empty talon: after the bot plays its last card, the delayed settle ends the deal.
+        store.put(inProgress(List.of(playerSnapshot("h", false, "9H", "8C"),
+                playerSnapshot("b", true, "10H")), Suit.SPADES, List.of(), 0, 1));
 
         // The human's opening attack schedules the bot's defending turn.
         service.attack("TEST01", "h", Card.fromCode("9H"));
 
-        boolean defended = false;
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (System.currentTimeMillis() < deadline) {
-            // The human cannot throw in, so the bot's defence also clears the table immediately.
-            if (service.getGame("TEST01").getDiscardedCards().containsAll(cards("9H", "10H"))) {
-                defended = true;
-                break;
-            }
-            Thread.sleep(100);
-        }
-        assertTrue(defended, "bot defender should apply the engine-chosen defense and end the forced bout");
+        assertTrue(waitUntil(() -> service.getGame("TEST01").getStatus() == GameStatus.FINISHED, 10_000));
+        assertTrue(service.getGame("TEST01").getDiscardedCards().containsAll(cards("9H", "10H")),
+                "bot defender should apply the engine-chosen defense before the delayed settlement");
     }
 
     @Test

@@ -456,6 +456,10 @@ export function describeTransition(prev, next, viewerId) {
         out.push(next.attackerPlayerId === viewerId
             ? "Your turn to attack."
             : `${nameOf(next.attackerPlayerId)} attacks next.`);
+    } else if (automaticRoundPending(next)) {
+        if (!automaticRoundPending(prev)) {
+            out.push("All attacks are beaten. The defender has no cards left; the bout will end automatically.");
+        }
     } else if (moves.canEndRound && !(prev.legalMoves || {}).canEndRound && !next.takingCardsInProgress) {
         out.push("All attacks are beaten. Press End round or add a matching card.");
     }
@@ -554,6 +558,13 @@ export function actionAvailability(legalMoves, selected, canDefendSelected) {
     };
 }
 
+/** Same public-only condition as the server; no timer or automatic action runs in the browser. */
+function automaticRoundPending(game) {
+    return game.status === "IN_PROGRESS" && !game.takingCardsInProgress && game.table?.length > 0
+        && game.table.every(pair => pair.defenseCard)
+        && game.players?.find(player => player.id === game.defenderPlayerId)?.handSize === 0;
+}
+
 /** The hint line under the action buttons. `beatable` = attacks the selected card can beat. */
 export function actionHint(game, viewerId, selected, beatable = []) {
     const moves = game.legalMoves || {};
@@ -567,6 +578,10 @@ export function actionHint(game, viewerId, selected, beatable = []) {
 
     if (game.takingCardsInProgress) {
         return "See the message on the table. Use buttons or drag cards.";
+    }
+    if (automaticRoundPending(game)) {
+        return "Defender has no cards left. This bout ends automatically after a short pause."
+            + (moves.canEndRound ? " Press End round to skip the pause." : "");
     }
     if (moves.canEndRound) {
         return moves.canAttack

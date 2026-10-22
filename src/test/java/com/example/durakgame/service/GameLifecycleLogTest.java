@@ -9,6 +9,7 @@ import com.example.durakgame.model.GameStatus;
 import com.example.durakgame.model.Suit;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
+import com.example.durakgame.service.autoplay.HeuristicAutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -38,6 +40,7 @@ class GameLifecycleLogTest {
     private final GameWebSocketHandler webSocket = new GameWebSocketHandler(new ObjectMapper());
     private ListAppender<ILoggingEvent> logs;
     private Logger lifecycleLogger;
+    private final List<Runnable> timers = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void captureLogs() {
@@ -53,7 +56,8 @@ class GameLifecycleLogTest {
     }
 
     private GameService service(AutoPlayDecisionEngine engine) {
-        return new GameService(store, engine, webSocket);
+        return new GameService(store, engine, new HeuristicAutoPlayDecisionEngine(), webSocket,
+                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop(), timers::add);
     }
 
     private GameService service() {
@@ -61,7 +65,9 @@ class GameLifecycleLogTest {
     }
 
     private List<String> lines() {
-        return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+        synchronized (logs) {
+            return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+        }
     }
 
     private String onlyLine() {
@@ -123,22 +129,24 @@ class GameLifecycleLogTest {
 
     @Test
     void aPlayersFinalDefenceLogsTheAutomaticEndOnce() {
-        Game game = lastBout();
+        Game game = finalDefence(false);
         store.save(game);
         GameService service = service();
-        service.attack("TEST01", "h", Card.fromCode("7H"));
 
-        Game finished = service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        Game covered = service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
 
-        assertEquals(GameStatus.FINISHED, finished.getStatus());
+        assertEquals(GameStatus.IN_PROGRESS, covered.getStatus());
+        assertTrue(lines().isEmpty());
+        timers.getFirst().run();
+        timers.getFirst().run();
         assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
         String line = onlyLine();
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
-        assertTrue(line.contains("endedBy=player bouts=1 loser=human loserPlayerId=g"), line);
+        assertTrue(line.contains("endedBy=automatic bouts=1 loser=human loserPlayerId=h"), line);
     }
 
     @Test
-    void aBotsFinalEndRoundLogsTheEndToo() throws InterruptedException {
+    void aBotsFinalEndRoundLogsTheEndToo() {
         // b (bot, attacker) has played its last card and h beat it; ending the bout ends the game.
         long now = Instant.now().toEpochMilli();
         Game game = Game.fromSnapshot(new Game.Snapshot(
@@ -149,27 +157,58 @@ class GameLifecycleLogTest {
         store.save(game);
         GameService service = service((g, playerId, legalMoves) -> AutoPlayAction.endRound());
 
-        service.resumeAutoPlayIfStalled(service.getGame("TEST01"));
+        assertTrue(service.applyAutoPlayAction(game, game.getPlayers().get(1), AutoPlayAction.endRound()));
 
-        assertTrue(waitUntil(() -> service.getGame("TEST01").getStatus() == GameStatus.FINISHED, 10_000));
+        assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
         String line = onlyLine();
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
         assertTrue(line.contains("endedBy=bot bouts=1 loser=human loserPlayerId=h"), line);
     }
 
     @Test
-    void aBotsFinalDefenceLogsTheAutomaticEndOnce() throws InterruptedException {
-        Game game = inProgress(List.of(player("h", false, "7H"), player("b", true, "9H", "6C")),
-                Instant.now().toEpochMilli());
+    void aBotsFinalDefenceLogsTheAutomaticEndOnce() {
+        Game game = finalDefence(true);
         store.save(game);
         GameService service = service((g, playerId, legalMoves) -> AutoPlayAction.defend("7H", "9H"));
 
-        service.attack("TEST01", "h", Card.fromCode("7H"));
+        assertTrue(service.applyAutoPlayAction(game, game.getPlayers().get(1), AutoPlayAction.defend("7H", "9H")));
 
-        assertTrue(waitUntil(() -> service.getGame("TEST01").getStatus() == GameStatus.FINISHED, 10_000));
+        assertTrue(lines().isEmpty(), "the final defence is saved without ending the game yet");
+        timers.getFirst().run();
+        timers.getFirst().run();
+        assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
         String line = onlyLine();
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
-        assertTrue(line.contains("endedBy=bot bouts=1 loser=bot loserPlayerId=b"), line);
+        assertTrue(line.contains("endedBy=automatic bouts=1 loser=human loserPlayerId=h"), line);
+    }
+
+    @Test
+    void manualEndRacingTimerLogsExactlyOnce() {
+        Game game = finalDefence(false);
+        store.save(game);
+        GameService service = service();
+        service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        service.endRound("TEST01", "h");
+        timers.getFirst().run();
+        assertTrue(onlyLine().contains("endedBy=player bouts=1"));
+    }
+
+    @Test
+    void staleTimerAfterDepartureWritesNoEndLog() {
+        store.save(finalDefence(false));
+        GameService service = service();
+        service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        service.leaveGame("TEST01", "g");
+        timers.getFirst().run();
+        assertTrue(onlyLine().startsWith("game_interrupted"));
+    }
+
+    private static Game finalDefence(boolean bot) {
+        long now = Instant.now().toEpochMilli();
+        return Game.fromSnapshot(new Game.Snapshot("TEST01", now, now, "h", GameStatus.IN_PROGRESS,
+                Suit.SPADES, null, 0, 1, null, false, 0, 0L,
+                List.of(player("h", false, "6C"), player("g", bot, "9H")), List.of(),
+                List.of(new Game.AttackSnapshot(Card.fromCode("7H"), null, "h")), Set.of(), List.of(), List.of()));
     }
 
     @Test
@@ -273,15 +312,4 @@ class GameLifecycleLogTest {
         }
     }
 
-    private static boolean waitUntil(java.util.function.BooleanSupplier condition, long timeoutMs)
-            throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (condition.getAsBoolean()) {
-                return true;
-            }
-            Thread.sleep(50);
-        }
-        return condition.getAsBoolean();
-    }
 }

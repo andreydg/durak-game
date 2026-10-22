@@ -10,8 +10,9 @@ import java.util.Objects;
 
 /**
  * One log line per deal transition, written once the change is saved, whichever path caused it:
- * a host start, a full table, quick play, a rematch, a player's or a bot's final end round, or a
- * player leaving. Counting the lines counts deals: {@code game_started} when one begins,
+ * a host start, a full table, quick play, a rematch, a player's or a bot's final end round,
+ * delayed automatic settlement, or a player leaving. Counting the lines counts deals:
+ * {@code game_started} when one begins,
  * {@code game_ended} when it finishes, {@code game_interrupted} when a player leaves mid-deal.
  * Deals that start but neither end nor get interrupted were abandoned until the room expired.
  *

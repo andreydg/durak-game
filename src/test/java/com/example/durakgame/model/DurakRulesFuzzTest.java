@@ -169,6 +169,13 @@ class DurakRulesFuzzTest {
                 break;
             }
             Game.Snapshot before = run.game.toSnapshot();
+            // Model the service timer as a separate mutation, sometimes racing a manual End round.
+            if (automaticEndEligible(before) && run.rnd.nextBoolean()) {
+                assertTrue(run.game.endRoundAutomatically());
+                run.log.add("automaticEndRound()");
+                afterSuccess(st, run, new Act(-1, null, Type.END_ROUND, null, null), before, run.game.toSnapshot());
+                continue;
+            }
             List<Act> moves = advertisedMoves(st, run, run.game, before);
             if (moves.isEmpty()) {
                 st.violation(run, "STALL_NO_PLAYER_HAS_A_LEGAL_MOVE", compact(before));
@@ -343,23 +350,8 @@ class DurakRulesFuzzTest {
                 run.h0 = hand(before, after.defenderIndex()).size();
             }
             case DEFEND -> {
-                boolean covered = before.table().stream().allMatch(t -> t.defenseCard() != null
-                        || t.attackCard().equals(act.attackCard()));
-                Set<Rank> ranks = new HashSet<>(tableRanks(before));
-                ranks.add(act.card().rank());
-                boolean canThrowIn = false;
-                if (hand(before, d).size() > 1) {
-                    for (int i = 0; i < before.players().size(); i++) {
-                        if (attackingSide(before, i) && hand(before, i).stream().anyMatch(c -> ranks.contains(c.rank()))) {
-                            canThrowIn = true;
-                        }
-                    }
-                }
-                if (after.table().isEmpty() != (covered && !canThrowIn)) {
-                    st.violation(run, "AUTOMATIC_BOUT_END_MISMATCH", act + " | " + compact(before));
-                }
                 if (after.table().isEmpty()) {
-                    boutEnded(st, run, act, before, after);
+                    st.violation(run, "FINAL_DEFENCE_NOT_VISIBLE", act + " | " + compact(before));
                 }
             }
             case END_ROUND -> {
@@ -378,24 +370,20 @@ class DurakRulesFuzzTest {
         int a = before.attackerIndex();
         int d = before.defenderIndex();
         boolean took = before.takingCardsInProgress();
-        boolean automatic = act.type() == Type.DEFEND;
+        boolean forced = automaticEndEligible(before);
 
         Set<String> approvals = new HashSet<>(before.endRoundApprovals());
         approvals.add(act.playerId());
         for (int i = 0; i < n; i++) {
             boolean out = before.talon().isEmpty() && hand(before, i).isEmpty();
-            if (!automatic && !out && attackingSide(before, i) && !approvals.contains(before.players().get(i).id())) {
+            if (!forced && !out && attackingSide(before, i) && !approvals.contains(before.players().get(i).id())) {
                 st.violation(run, "BOUT_ENDED_WITHOUT_ALL_APPROVALS", "missing p" + i + " | " + compact(before));
             }
         }
-        if (!took && before.table().stream().anyMatch(t -> t.defenseCard() == null
-                && !(automatic && t.attackCard().equals(act.attackCard())))) {
+        if (!took && before.table().stream().anyMatch(t -> t.defenseCard() == null)) {
             st.violation(run, "DISCARDED_BOUT_WITH_UNDEFENDED_CARD", compact(before));
         }
         List<Card> tableCards = tableCards(before);
-        if (automatic) {
-            tableCards.add(act.card());
-        }
         if (took) {
             if (!new HashSet<>(hand(after, d)).containsAll(tableCards)) {
                 st.violation(run, "TAKER_DID_NOT_RECEIVE_TABLE", compact(before) + " -> " + compact(after));
@@ -409,9 +397,6 @@ class DurakRulesFuzzTest {
         List<List<Card>> pre = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             pre.add(new ArrayList<>(hand(before, i)));
-        }
-        if (automatic) {
-            pre.get(d).remove(act.card());
         }
         if (took) {
             pre.get(d).addAll(tableCards);
@@ -470,6 +455,9 @@ class DurakRulesFuzzTest {
     }
 
     private void checkState(Stats st, Run run, Game game, Game.Snapshot s) {
+        if (game.canAutoEndRound() != automaticEndEligible(s)) {
+            st.violation(run, "AUTOMATIC_END_ELIGIBILITY_MISMATCH", compact(s));
+        }
         List<Card> all = new ArrayList<>();
         for (Game.PlayerSnapshot p : s.players()) {
             all.addAll(p.hand());
@@ -745,6 +733,12 @@ class DurakRulesFuzzTest {
         return Game.fromSnapshot(new Game.Snapshot("FUZZ01", 0L, 0L, 0L, "p0", GameStatus.IN_PROGRESS,
                 trump.suit(), trump, attacker, defender, null, false, 0, 0L, players, deck, List.of(), Set.of(),
                 List.of(), List.of(), false, null, null));
+    }
+
+    private static boolean automaticEndEligible(Game.Snapshot s) {
+        return s.status() == GameStatus.IN_PROGRESS && !s.takingCardsInProgress() && !s.table().isEmpty()
+                && hand(s, s.defenderIndex()).isEmpty()
+                && s.table().stream().allMatch(t -> t.defenseCard() != null);
     }
 
     static void apply(Game game, Act act) {

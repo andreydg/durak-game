@@ -189,7 +189,7 @@ class GameTest {
     void higherSameSuitBeats() {
         Game game = inProgress(
                 List.of(
-                        player("a", null, "8H", "9C"),
+                        player("a", null, "8H", "6C"),
                         player("b", null, "9H", "6D")
                 ),
                 Suit.SPADES, cards("8C"), 0, 1);
@@ -286,7 +286,7 @@ class GameTest {
         Game game = inProgress(
                 List.of(
                         player("a", null, "6H", "8C"),
-                        player("b", null, "7C", "QD"),
+                        player("b", null, "9C", "QD"),
                         player("c", null, "7H", "9D")
                 ),
                 Suit.SPADES, cards("8D", "10C"), 0, 2);
@@ -309,7 +309,7 @@ class GameTest {
     void defenderCannotEndRound() {
         Game game = inProgress(
                 List.of(
-                        player("a", null, "6H", "6C"),
+                        player("a", null, "6H", "8C"),
                         player("b", null, "7H", "9D")
                 ),
                 Suit.SPADES, cards("8D"), 0, 1);
@@ -330,6 +330,7 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        game.endRound("a");
 
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertEquals("b", game.getLoserPlayerId());
@@ -348,6 +349,7 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("QH"));
+        assertTrue(game.endRoundAutomatically());
 
         // Only team 0 (a and c) still holds cards: play cannot continue between teammates.
         assertEquals(GameStatus.FINISHED, game.getStatus());
@@ -404,6 +406,7 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        game.endRound("a");
 
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertEquals(1, game.getBoutsCompleted());
@@ -431,6 +434,7 @@ class GameTest {
                 Suit.SPADES, cards("10C"), 0, 1);
         started.attack("a", Card.fromCode("6H"));
         started.defend("b", Card.fromCode("6H"), Card.fromCode("8H"));
+        started.endRound("a");
         assertEquals(1, started.getBoutsCompleted());
 
         started.removePlayerAndResetToLobby("b");
@@ -450,6 +454,7 @@ class GameTest {
                 Suit.SPADES, cards("10C", "JC"), 0, 1);
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("8H"));
+        game.endRound("a");
 
         Game.Snapshot snapshot = game.toSnapshot();
         assertEquals(1, snapshot.boutsCompleted());
@@ -487,6 +492,96 @@ class GameTest {
                 }
             }
             assertEquals(GameStatus.FINISHED, game.getStatus(), "game should finish (run " + run + ")");
+        }
+    }
+
+    @Test
+    void emptyDefenderKeepsFinalDefenceVisibleUntilSeparateSettlement() {
+        Game game = inProgress(List.of(player("a", null, "6H", "6D"), player("b", null, "7H")),
+                Suit.SPADES, cards("8C", "9C", "10C", "JC", "QC", "KC", "AC", "8D", "9D", "10D", "JD"), 0, 1);
+        game.attack("a", Card.fromCode("6H"));
+        long before = game.getVersion();
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+
+        assertEquals(Card.fromCode("7H"), game.getTable().getFirst().getDefenseCard());
+        assertEquals(before + 1, game.getVersion());
+        assertEquals(0, game.getBoutsCompleted());
+        assertTrue(game.canAutoEndRound());
+        assertTrue(Game.fromSnapshot(game.toSnapshot()).canAutoEndRound(), "old snapshot shape suffices after restart");
+        assertTrue(game.computeViewerLegalMoves("a").canEndRound());
+        assertTrue(game.endRoundAutomatically());
+        assertFalse(game.endRoundAutomatically(), "settlement is idempotent");
+        assertEquals(before + 2, game.getVersion());
+        assertEquals(cards("6H", "7H"), game.getDiscardedCards());
+        assertEquals(cards("6D", "8C", "9C", "10C", "JC", "QC"), game.getPlayers().get(0).getHand());
+        assertEquals(cards("KC", "AC", "8D", "9D", "10D", "JD"), game.getPlayers().get(1).getHand());
+        assertEquals("b", game.getAttackerPlayerId());
+        assertEquals(1, game.getBoutsCompleted());
+    }
+
+    @Test
+    void coveredBoutWithCardsInDefenderHandStillNeedsApprovalRegardlessOfPrivateRanks() {
+        for (String attackerCard : List.of("7D", "KD")) {
+            Game game = inProgress(List.of(player("a", null, "6H", attackerCard), player("b", null, "7H", "8C")),
+                    Suit.SPADES, List.of(), 0, 1);
+            game.attack("a", Card.fromCode("6H"));
+            game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+            Game.Snapshot before = game.toSnapshot();
+            assertFalse(game.canAutoEndRound());
+            assertFalse(game.endRoundAutomatically());
+            assertEquals(before, game.toSnapshot());
+            assertTrue(game.computeViewerLegalMoves("a").canEndRound());
+            game.endRound("a");
+            assertEquals(1, game.getBoutsCompleted());
+        }
+    }
+
+    @Test
+    void automaticEndRequiresCoveredNonemptyTableAndNeverEndsTakePhase() {
+        Game game = inProgress(List.of(player("a", null, "6H", "6D", "KD"), player("b", null, "7H", "7D")),
+                Suit.SPADES, List.of(), 0, 1);
+        assertFalse(game.endRoundAutomatically());
+        game.attack("a", Card.fromCode("6H"));
+        game.attack("a", Card.fromCode("6D"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        assertFalse(game.endRoundAutomatically());
+        Game taking = Game.fromSnapshot(game.toSnapshot());
+        taking.takeCards("b");
+        assertEquals(taking.getTakeLimit(), taking.getTable().size());
+        assertFalse(taking.endRoundAutomatically(), "reaching the take limit is not this feature");
+        game.defend("b", Card.fromCode("6D"), Card.fromCode("7D"));
+        assertTrue(game.endRoundAutomatically());
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertEquals("a", game.getLoserPlayerId());
+    }
+
+    @Test
+    void automaticEndCanFinishWithNoLoser() {
+        Game game = inProgress(List.of(player("a", null, "6H"), player("b", null, "7H")),
+                Suit.SPADES, List.of(), 0, 1);
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
+        assertTrue(game.endRoundAutomatically());
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertNull(game.getLoserPlayerId());
+    }
+
+    @Test
+    void emptyDefenderDoesNotNeedCoAttackerApprovalsEvenForManualEarlyEnd() {
+        for (boolean manual : List.of(false, true)) {
+            Game game = inProgress(List.of(player("a", null, "6H", "KD"), player("b", null, "7D"),
+                    player("c", null, "7H")), Suit.SPADES, List.of(), 0, 2);
+            game.attack("a", Card.fromCode("6H"));
+            game.defend("c", Card.fromCode("6H"), Card.fromCode("7H"));
+            if (manual) {
+                game.endRound("a");
+            } else {
+                assertTrue(game.endRoundAutomatically());
+            }
+            assertTrue(game.getTable().isEmpty());
+            assertEquals("b", game.getAttackerPlayerId(), "empty defender is skipped with an empty talon");
+            assertEquals(1, game.getBoutsCompleted());
         }
     }
 

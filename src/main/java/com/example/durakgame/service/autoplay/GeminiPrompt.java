@@ -65,7 +65,9 @@ final class GeminiPrompt {
             of the bout, and the defender picks up every card on the table, including their own defence cards.
 
             3. Ending a bout
-            - When all attacks are beaten, or the defender is taking, the bout ends once every active player on the \
+            - When all attacks are beaten and the defender has no cards left, the bout ends automatically after \
+            a 2.5-second pause. An attacker may use END_ROUND to end that pause immediately without other passes.
+            - Otherwise, when all attacks are beaten, or the defender is taking, the bout ends once every active player on the \
             attacking side has passed (END_ROUND). Any new card on the table cancels the earlier passes.
             - Successful defence: the table is discarded and leaves the game; the defender leads the next bout.
             - Take: the defender keeps the cards and is skipped; the next active player after them leads.
