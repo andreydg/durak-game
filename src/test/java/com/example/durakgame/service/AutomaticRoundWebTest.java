@@ -37,14 +37,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** A manual scheduler exposes both persisted states without sleeping through the display pause. */
 class AutomaticRoundWebTest {
-    private final InMemoryGameStore store = new InMemoryGameStore();
+    private final InMemoryGameStore store = spy(new InMemoryGameStore());
     private final GameWebSocketHandler sockets = mock(GameWebSocketHandler.class);
     private final List<Runnable> timers = new CopyOnWriteArrayList<>();
     private final GameService service = service(timers);
 
     private GameService service(List<Runnable> tasks) {
         return new GameService(store, (g, id, moves) -> null, new HeuristicAutoPlayDecisionEngine(), sockets,
-                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop(), tasks::add);
+                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop(), (task, delay) -> tasks.add(task));
     }
 
     private MockMvc mvc() {
@@ -65,6 +65,8 @@ class AutomaticRoundWebTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.table[0].defenseCard").value("7H"))
                 .andExpect(jsonPath("$.version").value(41))
+                .andExpect(jsonPath("$.boutId").value(saved().getBoutId()))
+                .andExpect(jsonPath("$.canAutoEndRound").value(true))
                 .andExpect(jsonPath("$.players[1].handSize").value(0));
 
         assertEquals(0, saved().getBoutsCompleted());
@@ -82,6 +84,7 @@ class AutomaticRoundWebTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.table").isEmpty())
                 .andExpect(jsonPath("$.version").value(42))
+                .andExpect(jsonPath("$.canAutoEndRound").value(false))
                 .andExpect(jsonPath("$.players[0].hand[5]").value("QC"))
                 .andExpect(jsonPath("$.attackerPlayerId").value("b"))
                 .andExpect(jsonPath("$.legalMoves.canEndRound").value(false));
@@ -100,7 +103,7 @@ class AutomaticRoundWebTest {
     @ValueSource(booleans = {false, true})
     void emptyTalonFinishesWithCorrectLoserOrDrawAfterThePause(boolean draw) {
         seed(List.of(player("a", draw ? List.of() : cards("6D")), player("b", cards("7H"))), List.of(), 1);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         assertEquals(GameStatus.IN_PROGRESS, saved().getStatus());
         timers.getFirst().run();
         assertEquals(GameStatus.FINISHED, saved().getStatus());
@@ -109,9 +112,22 @@ class AutomaticRoundWebTest {
     }
 
     @Test
+    void defenceBroadcastFailureCannotPreventAutomaticSettlement() {
+        seed(true);
+        doThrow(new IllegalStateException("broadcast failed")).when(sockets).broadcastGameUpdated("AUTO23", 41L);
+        GameController controller = new GameController(service, sockets);
+        assertThrows(IllegalStateException.class, () -> controller.defend("AUTO23",
+                new com.example.durakgame.controller.dto.DefendRequest("b", "6H", "7H"), "b-secret"));
+        assertTrue(saved().canAutoEndRound());
+        assertEquals(1, timers.size());
+        timers.getFirst().run();
+        assertEquals(GameStatus.FINISHED, saved().getStatus());
+    }
+
+    @Test
     void noTimerIfDefenderStillHoldsCardsEvenWithoutMatchingAttackRanks() {
         seed(List.of(player("a", cards("KD")), player("b", cards("7H", "8D"))), List.of(), 1);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         service.resumeAutoPlayIfStalled(saved());
         assertTrue(timers.isEmpty());
         assertFalse(saved().computeViewerLegalMoves("a").canAttack());
@@ -123,7 +139,7 @@ class AutomaticRoundWebTest {
     @Test
     void manualEndDuringPauseWinsAndTimerDoesNothing() {
         seed(true);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         service.endRound("AUTO23", "a");
         Game.Snapshot finished = saved().toSnapshot();
         timers.getFirst().run();
@@ -133,34 +149,118 @@ class AutomaticRoundWebTest {
         verify(sockets, never()).broadcastGameUpdated("AUTO23", 43L);
     }
 
-    @Test
-    void interveningVersionChangeInvalidatesOldTimerAndHeartbeatRearmsIt() {
-        seed(true);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
-        service.heartbeat("AUTO23", "a");
-        assertEquals(2, timers.size());
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void lateEndRoundAfterTimerIsSuccessfulAndDoesNotSave(boolean finalBout) throws Exception {
+        seed(finalBout);
+        defend("b", card("6H"), card("7H"));
+        String oldBout = saved().getBoutId();
         timers.getFirst().run();
+        Game.Snapshot afterTimer = saved().toSnapshot();
+        clearInvocations(store);
+
+        endRoundRequest(mvc(), "a", oldBout);
+
+        assertEquals(afterTimer, saved().toSnapshot());
+        verify(store, never()).save(any());
+    }
+
+    @Test
+    void oldPassCannotApproveNextCoveredBoutOrTargetItWithoutAnIdentity() throws Exception {
+        seed(List.of(player("a", cards("KD")), player("b", cards("7H"))),
+                cards("9C", "10C", "JC", "QC", "KC", "8C", "AC", "8D", "9D", "10D", "JD"), 1);
+        defend("b", card("6H"), card("7H"));
+        String oldBout = saved().getBoutId();
+        service.endRound("AUTO23", "a", oldBout);
+        service.attack("AUTO23", "b", card("8C"));
+        defend("a", card("8C"), card("9C"));
+        Game current = saved();
+        assertNotEquals(oldBout, current.getBoutId());
+        assertTrue(current.computeViewerLegalMoves("b").canEndRound());
+        clearInvocations(store);
+        MockMvc mvc = mvc();
+
+        endRoundRequest(mvc, "b", oldBout);
+        mvc.perform(post("/api/games/AUTO23/end-round").header("X-Durak-Token", "b-secret")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"playerId\":\"b\"}"))
+                .andExpect(status().isOk());
+        assertEquals(current.toSnapshot(), saved().toSnapshot());
+        verify(store, never()).save(any());
+
+        endRoundRequest(mvc, "b", current.getBoutId());
+        assertEquals(2, saved().getBoutsCompleted());
+    }
+
+    @Test
+    void repeatedCoAttackerApprovalIsANoOpBeforeAndAfterSettlement() throws Exception {
+        seed(List.of(player("a", cards("KD")), player("b", cards("8D")),
+                player("c", cards("7H", "9D"))), List.of(), 2);
+        defend("c", card("6H"), card("7H"));
+        String bout = saved().getBoutId();
+        MockMvc mvc = mvc();
+        endRoundRequest(mvc, "a", bout);
+        Game.Snapshot approved = saved().toSnapshot();
+        clearInvocations(store);
+        endRoundRequest(mvc, "a", bout);
+        assertEquals(approved, saved().toSnapshot());
+        verify(store, never()).save(any());
+
+        endRoundRequest(mvc, "b", bout);
+        Game.Snapshot settled = saved().toSnapshot();
+        assertEquals(1, settled.boutsCompleted());
+        clearInvocations(store);
+        endRoundRequest(mvc, "a", bout);
+        assertEquals(settled, saved().toSnapshot());
+        verify(store, never()).save(any());
+    }
+
+    private void endRoundRequest(MockMvc mvc, String playerId, String boutId) throws Exception {
+        mvc.perform(post("/api/games/AUTO23/end-round").header("X-Durak-Token", playerId + "-secret")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"playerId\":\"" + playerId + "\",\"boutId\":\"" + boutId + "\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void heartbeatsAndReadsDoNotRestartThePause() {
+        seed(true);
+        defend("b", card("6H"), card("7H"));
+        service.heartbeat("AUTO23", "a");
+        service.heartbeat("AUTO23", "b");
+        service.resumeAutoPlayIfStalled(saved());
+        assertEquals(1, timers.size());
         assertEquals(0, saved().getBoutsCompleted());
-        assertEquals(42L, saved().getVersion());
-        timers.get(1).run();
+        assertEquals(43L, saved().getVersion());
+        timers.getFirst().run();
         assertEquals(1, saved().getBoutsCompleted());
     }
 
     @Test
     void oldTimerCannotSettleANewBout() {
-        seed(false);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
-        service.endRound("AUTO23", "a");
-        service.attack("AUTO23", "b", card("8D"));
+        // Only one talon card remains: a draws 8C, c stays empty. After b leads next,
+        // a covers 7C with its last card, so BOTH bout N and bout N+1 qualify for auto-end.
+        seed(List.of(player("a", List.of()), player("b", cards("7C", "KD")), player("c", cards("7H"))),
+                cards("8C"), 2);
+        defend("c", card("6H"), card("7H"));
+        service.endRound("AUTO23", "b");
+        assertEquals("b", saved().getAttackerPlayerId());
+        assertEquals("a", saved().getDefenderPlayerId());
+        service.attack("AUTO23", "b", card("7C"));
+        defend("a", card("7C"), card("8C"));
+        assertTrue(saved().canAutoEndRound());
+        assertEquals(2, timers.size());
         Game.Snapshot nextBout = saved().toSnapshot();
         timers.getFirst().run();
         assertEquals(nextBout, saved().toSnapshot());
+        timers.get(1).run();
+        assertEquals(2, saved().getBoutsCompleted());
+        assertEquals(GameStatus.FINISHED, saved().getStatus());
     }
 
     @Test
     void departureAndDeletionDuringPauseMakeTheTimerHarmless() {
         seed(true);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         service.leaveGame("AUTO23", "b");
         Game.Snapshot lobby = saved().toSnapshot();
         timers.getFirst().run();
@@ -173,7 +273,7 @@ class AutomaticRoundWebTest {
     @Test
     void restartRearmsPauseFromPersistedPublicStateWithoutASnapshotChange() {
         seed(true);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         List<Runnable> afterRestart = new CopyOnWriteArrayList<>();
         GameService restarted = service(afterRestart);
         restarted.resumeAutoPlayIfStalled(restarted.getGame("AUTO23"));
@@ -187,7 +287,7 @@ class AutomaticRoundWebTest {
     @Test
     void coAttackersNeedNotApproveAnEmptyDefendersAutomaticEnd() {
         seed(List.of(player("a", cards("KD")), player("b", cards("7D")), player("c", cards("7H"))), List.of(), 2);
-        service.defend("AUTO23", "c", card("6H"), card("7H"));
+        defend("c", card("6H"), card("7H"));
         timers.getFirst().run();
         assertEquals(1, saved().getBoutsCompleted());
         assertEquals("b", saved().getAttackerPlayerId());
@@ -222,7 +322,7 @@ class AutomaticRoundWebTest {
     @Test
     void botEndRoundCannotCutShortTheFinalDefencePause() {
         seed(true);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         Game planned = saved();
         assertTrue(planned.computeViewerLegalMoves("a").canEndRound());
         assertFalse(service.applyAutoPlayAction(planned, planned.getPlayers().getFirst(), AutoPlayAction.endRound()));
@@ -234,7 +334,7 @@ class AutomaticRoundWebTest {
     @Test
     void settlementBroadcastRunsAfterReleasingTheGameLock() {
         seed(true);
-        service.defend("AUTO23", "b", card("6H"), card("7H"));
+        defend("b", card("6H"), card("7H"));
         AtomicBoolean heartbeatCompleted = new AtomicBoolean();
         doAnswer(invocation -> {
             // A different thread must be able to acquire the same game's lock during fan-out.
@@ -244,6 +344,13 @@ class AutomaticRoundWebTest {
         }).when(sockets).broadcastGameUpdated("AUTO23", 42L);
         timers.getFirst().run();
         assertTrue(heartbeatCompleted.get());
+    }
+
+    private Game defend(String playerId, Card attack, Card defense) {
+        Game game = service.defend("AUTO23", playerId, attack, defense);
+        sockets.broadcastGameUpdated(game.getCode(), game.getVersion());
+        service.resumeAutoPlayIfStalled(game);
+        return game;
     }
 
     private Game saved() { return store.findByCode("AUTO23").orElseThrow(); }

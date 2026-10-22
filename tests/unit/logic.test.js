@@ -385,6 +385,8 @@ describe("describeTransition", () => {
         code: "ABC234",
         status: "IN_PROGRESS",
         version: 1,
+        boutId: null, // Legacy/minimal fixtures exercise the first-attack fallback.
+        canAutoEndRound: false,
         attackerPlayerId: "bot",
         defenderPlayerId: "me",
         takingCardsInProgress: false,
@@ -428,9 +430,9 @@ describe("describeTransition", () => {
     });
 
     it("announces the last defence and automatic pause to both seats once", () => {
-        const prev = game({ attackerPlayerId: "me", defenderPlayerId: "bot", players: players(["6C"], 1),
+        const prev = game({ boutId: "deal:1", attackerPlayerId: "me", defenderPlayerId: "bot", players: players(["6C"], 1),
             table: [{ attackCard: "7H", attackerId: "me" }] });
-        const next = { ...prev, players: players(["6C"], 0), legalMoves: { canEndRound: true },
+        const next = { ...prev, canAutoEndRound: true, players: players(["6C"], 0), legalMoves: { canEndRound: true },
             table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "me" }] };
         expect(L.describeTransition(prev, next, "me")).toEqual([
             "Elektronik beats 7 of hearts with 9 of hearts.",
@@ -441,6 +443,50 @@ describe("describeTransition", () => {
             "All attacks are beaten. The defender has no cards left; the bout will end automatically."
         ]);
         expect(L.describeTransition(next, next, "me")).toEqual([]);
+    });
+
+    it.each(["deal:2", "new-deal:1"])("announces consecutive automatic bouts with identity %s even when the opening card repeats", boutId => {
+        const prev = game({ boutId: "deal:1", canAutoEndRound: true,
+            attackerPlayerId: "me", defenderPlayerId: "bot", players: players(["6C"], 0),
+            table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "me" }] });
+        const next = { ...prev, boutId, version: 2 };
+        for (const viewerId of ["me", "bot"]) {
+            const announcements = L.describeTransition(prev, next, viewerId);
+            expect(announcements).toContain("Bout over.");
+            expect(announcements).toContain("All attacks are beaten. The defender has no cards left; the bout will end automatically.");
+            expect(L.describeTransition(next, { ...next, version: 3 }, viewerId)).toEqual([]);
+        }
+    });
+
+    it.each([[null, null], ["deal:1", null], [null, "deal:2"]])(
+        "falls back to the opening card when bout identities are %s and %s", (previousId, nextId) => {
+            const prev = game({ boutId: previousId, canAutoEndRound: true, players: players([], 1),
+                table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "bot" }] });
+            const same = { ...prev, boutId: nextId, version: 2 };
+            expect(L.describeTransition(prev, same, "me")).toEqual([]);
+            const next = { ...same, table: [{ attackCard: "8H", defenseCard: "10H", attackerId: "bot" }] };
+            expect(L.describeTransition(prev, next, "me")).toEqual([
+                "Bout over.",
+                "Elektronik attacks with 8 of hearts.",
+                "You beat 8 of hearts with 10 of hearts.",
+                "All attacks are beaten. The defender has no cards left; the bout will end automatically."
+            ]);
+        }
+    );
+
+    it("uses the server flag for automatic announcements, not the defender's visible hand size", () => {
+        const prev = game({ boutId: "deal:1", attackerPlayerId: "me", defenderPlayerId: "bot",
+            players: players(["6C"], 0), table: [{ attackCard: "7H", defenseCard: "9H", attackerId: "me" }] });
+        const manual = { ...prev, legalMoves: { canEndRound: true } };
+        expect(L.describeTransition(prev, manual, "me")).toEqual([
+            "All attacks are beaten. Press End round or add a matching card."
+        ]);
+        expect(L.describeTransition(prev, { ...manual, canAutoEndRound: undefined }, "me"))
+            .toEqual(L.describeTransition(prev, manual, "me"));
+        const automatic = { ...manual, canAutoEndRound: true, players: players(["6C"], 1) };
+        expect(L.describeTransition(manual, automatic, "me")).toEqual([
+            "All attacks are beaten. The defender has no cards left; the bout will end automatically."
+        ]);
     });
 
     it("announces a take and throw-ins", () => {
@@ -970,11 +1016,13 @@ describe("actionAvailability", () => {
 
 describe("actionHint", () => {
     const two = (overrides = {}) => ({
+        boutId: "deal:1", canAutoEndRound: false,
         players: [{ id: "me", name: "Alice" }, { id: "bot", name: "Bot" }],
         attackerPlayerId: "me", defenderPlayerId: "bot", table: [], takingCardsInProgress: false,
         legalMoves: { attackableCardCodes: ["6C"], transferableCardCodes: [] }, ...overrides
     });
     const four = (overrides = {}) => ({
+        boutId: "deal:1", canAutoEndRound: false,
         players: [{ id: "me", name: "Alice", team: 0 }, { id: "b", name: "Boris", team: 1 }, { id: "c", name: "Cara", team: 0 }, { id: "d", name: "Dan", team: 1 }],
         attackerPlayerId: "c", defenderPlayerId: "b", table: [], takingCardsInProgress: false, legalMoves: {}, ...overrides
     });
@@ -987,14 +1035,21 @@ describe("actionHint", () => {
             .toBe("All attacks are defended. Press End round to finish this bout.");
     });
 
-    it("describes the empty-defender pause without inferring private matching ranks", () => {
-        const covered = two({ status: "IN_PROGRESS", players: [{ id: "me", handSize: 1 }, { id: "bot", handSize: 0 }],
+    it("describes the server's automatic pause without reimplementing eligibility", () => {
+        const covered = two({ status: "IN_PROGRESS", canAutoEndRound: true,
+            players: [{ id: "me", handSize: 1 }, { id: "bot", handSize: 0 }],
             table: [{ attackCard: "6H", defenseCard: "7H" }], legalMoves: { canEndRound: true } });
         expect(L.actionHint(covered, "me", null)).toBe("Defender has no cards left. This bout ends automatically after a short pause. Press End round to skip the pause.");
         expect(L.actionHint({ ...covered, legalMoves: {} }, "bot", null)).toBe("Defender has no cards left. This bout ends automatically after a short pause.");
         expect(L.actionHint({ ...covered, players: [{ id: "bot", handSize: 1 }] }, "me", null))
-            .toBe("All attacks are defended. Press End round to finish this bout.");
-        expect(L.actionHint({ ...covered, takingCardsInProgress: true }, "me", null))
+            .toBe(L.actionHint(covered, "me", null));
+        for (const canAutoEndRound of [false, undefined]) {
+            expect(L.actionHint({ ...covered, canAutoEndRound }, "me", null))
+                .toBe("All attacks are defended. Press End round to finish this bout.");
+            expect(L.actionHint({ ...covered, canAutoEndRound, legalMoves: {} }, "bot", null))
+                .not.toContain("automatically");
+        }
+        expect(L.actionHint({ ...covered, canAutoEndRound: false, takingCardsInProgress: true }, "me", null))
             .toBe("See the message on the table. Use buttons or drag cards.");
     });
 

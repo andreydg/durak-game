@@ -169,14 +169,23 @@ class DurakRulesFuzzTest {
                 break;
             }
             Game.Snapshot before = run.game.toSnapshot();
+            List<Act> moves = advertisedMoves(st, run, run.game, before);
             // Model the service timer as a separate mutation, sometimes racing a manual End round.
-            if (automaticEndEligible(before) && run.rnd.nextBoolean()) {
-                assertTrue(run.game.endRoundAutomatically());
+            // If no seat can act (e.g. everyone is out), only that timer can settle the bout.
+            if (automaticEndEligible(before) && (moves.isEmpty() || run.rnd.nextBoolean())) {
                 run.log.add("automaticEndRound()");
+                try {
+                    if (!run.game.endRoundAutomatically()) {
+                        st.violation(run, "AUTOMATIC_END_REJECTED", compact(before));
+                        break;
+                    }
+                } catch (RuntimeException ex) {
+                    st.violation(run, "AUTOMATIC_END_REJECTED", ex + " | " + compact(before));
+                    break;
+                }
                 afterSuccess(st, run, new Act(-1, null, Type.END_ROUND, null, null), before, run.game.toSnapshot());
                 continue;
             }
-            List<Act> moves = advertisedMoves(st, run, run.game, before);
             if (moves.isEmpty()) {
                 st.violation(run, "STALL_NO_PLAYER_HAS_A_LEGAL_MOVE", compact(before));
                 break;
@@ -233,7 +242,8 @@ class DurakRulesFuzzTest {
             return;
         }
         if (!advertised) {
-            boolean repeatApproval = p.type() == Type.END_ROUND && before.endRoundApprovals().contains(p.playerId());
+            boolean repeatApproval = p.type() == Type.END_ROUND && eligibleEndRoundSeat(before, p.seat())
+                    && before.endRoundApprovals().contains(p.playerId());
             if (repeatApproval) {
                 st.info(run, "BENIGN: repeated endRound approval accepted (idempotent, bumps version)", p.toString());
             } else {
@@ -692,6 +702,9 @@ class DurakRulesFuzzTest {
                 moves.add(new Act(seat, id, Type.TAKE, null, null));
             }
             if (lm.canEndRound()) {
+                if (!eligibleEndRoundSeat(s, seat)) {
+                    st.violation(run, "END_ROUND_OFFERED_TO_INELIGIBLE_SEAT", id + " | " + compact(s));
+                }
                 moves.add(new Act(seat, id, Type.END_ROUND, null, null));
             }
         }
@@ -785,6 +798,12 @@ class DurakRulesFuzzTest {
 
     static boolean attackingSide(Game.Snapshot s, int seat) {
         return seat != s.defenderIndex() && !teammate(s, seat, s.defenderIndex());
+    }
+
+    private static boolean eligibleEndRoundSeat(Game.Snapshot s, int seat) {
+        String id = s.players().get(seat).id();
+        return attackingSide(s, seat) && (!isOut(s, seat)
+                || (!automaticEndEligible(s) && s.table().stream().anyMatch(t -> id.equals(t.attackerId()))));
     }
 
     static int nextEligible(Game.Snapshot s, int start) {

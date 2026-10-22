@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -57,7 +58,7 @@ class GameLifecycleLogTest {
 
     private GameService service(AutoPlayDecisionEngine engine) {
         return new GameService(store, engine, new HeuristicAutoPlayDecisionEngine(), webSocket,
-                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop(), timers::add);
+                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop(), (task, delay) -> timers.add(task));
     }
 
     private GameService service() {
@@ -137,6 +138,7 @@ class GameLifecycleLogTest {
 
         assertEquals(GameStatus.IN_PROGRESS, covered.getStatus());
         assertTrue(lines().isEmpty());
+        service.resumeAutoPlayIfStalled(covered); // The controller calls this after broadcasting the defence.
         timers.getFirst().run();
         timers.getFirst().run();
         assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
@@ -146,7 +148,7 @@ class GameLifecycleLogTest {
     }
 
     @Test
-    void aBotsFinalEndRoundLogsTheEndToo() {
+    void aBotsFinalEndRoundLogsTheEndToo() throws InterruptedException {
         // b (bot, attacker) has played its last card and h beat it; ending the bout ends the game.
         long now = Instant.now().toEpochMilli();
         Game game = Game.fromSnapshot(new Game.Snapshot(
@@ -155,12 +157,22 @@ class GameLifecycleLogTest {
                 List.of(), List.of(new Game.AttackSnapshot(Card.fromCode("7H"), Card.fromCode("9H"), "b")),
                 Set.of(), List.of(), List.of()));
         store.save(game);
-        GameService service = service((g, playerId, legalMoves) -> AutoPlayAction.endRound());
+        GameService service = new GameService(store, (g, playerId, legalMoves) -> AutoPlayAction.endRound(),
+                new HeuristicAutoPlayDecisionEngine(), webSocket,
+                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop());
 
-        assertTrue(service.applyAutoPlayAction(game, game.getPlayers().get(1), AutoPlayAction.endRound()));
+        assertFalse(game.canAutoEndRound(), "the defender retains a card, so the bot must end the bout");
+        service.resumeAutoPlayIfStalled(game);
 
-        assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
+        // A saved FINISHED snapshot can become visible before the background thread writes its log.
+        // lines() reads the appender under synchronized(logs), matching its writer's monitor.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (lines().stream().noneMatch(line -> line.startsWith("game_ended "))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
         String line = onlyLine();
+        assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
         assertTrue(line.contains("endedBy=bot bouts=1 loser=human loserPlayerId=h"), line);
     }
@@ -187,7 +199,8 @@ class GameLifecycleLogTest {
         Game game = finalDefence(false);
         store.save(game);
         GameService service = service();
-        service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        Game covered = service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        service.resumeAutoPlayIfStalled(covered);
         service.endRound("TEST01", "h");
         timers.getFirst().run();
         assertTrue(onlyLine().contains("endedBy=player bouts=1"));
@@ -197,7 +210,8 @@ class GameLifecycleLogTest {
     void staleTimerAfterDepartureWritesNoEndLog() {
         store.save(finalDefence(false));
         GameService service = service();
-        service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        Game covered = service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
+        service.resumeAutoPlayIfStalled(covered);
         service.leaveGame("TEST01", "g");
         timers.getFirst().run();
         assertTrue(onlyLine().startsWith("game_interrupted"));

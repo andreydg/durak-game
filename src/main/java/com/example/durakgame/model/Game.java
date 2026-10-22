@@ -472,15 +472,29 @@ public class Game implements Serializable {
         touch();
     }
 
+    /** Identifies the current deal/bout independently of heartbeats and ordinary move versions. */
+    public synchronized String getBoutId() {
+        return code + "-" + Long.toString(lobbyStartedAt.toEpochMilli(), 36) + "-" + boutsCompleted;
+    }
+
+    /** A delayed/repeated HTTP pass belongs only to the bout the player actually saw. */
+    public synchronized boolean endRound(String playerId, String expectedBoutId) {
+        if (!getBoutId().equals(expectedBoutId) || status != GameStatus.IN_PROGRESS || table.isEmpty()
+                || endRoundApprovals.contains(playerId)) {
+            return false;
+        }
+        endRound(playerId);
+        return true;
+    }
+
     public synchronized void endRound(String playerId) {
         ensureInProgress();
         if (table.isEmpty()) {
             throw new IllegalStateException("No active bout");
         }
         int callerSeat = indexOfPlayer(playerId);
-        boolean isAttackingSide = isAttackingSideSeat(callerSeat);
-        if (!isAttackingSide) {
-            throw new IllegalStateException("Only attacking-side players can end this bout");
+        if (!canApproveEndRound(callerSeat)) {
+            throw new IllegalStateException("Only attacking-side players still in this bout can end it");
         }
 
         if (!takingCardsInProgress) {
@@ -886,6 +900,7 @@ public class Game implements Serializable {
         boolean canEndRound = (takingCardsInProgress || allDefended)
                 && !isDefenderSeat
                 && isAttackingSideSeat
+                && canApproveEndRound(viewerSeat)
                 && !endRoundApprovals.contains(viewerPlayerId);
 
         Map<String, List<String>> defensesByAttack = new LinkedHashMap<>();
@@ -1164,6 +1179,16 @@ public class Game implements Serializable {
 
     private boolean isAttackingSideSeat(int seatIndex) {
         return seatIndex != defenderIndex && !isTeammate(seatIndex, defenderIndex);
+    }
+
+    private boolean canApproveEndRound(int seat) {
+        Player player = players.get(seat);
+        // A last-card contributor can finish an ordinary/taken bout, otherwise nobody could
+        // close a final deal against a defender who still holds cards. Already-out seats cannot
+        // pass, and no empty-hand seat may shorten the automatic final-defence pause.
+        return isAttackingSideSeat(seat) && (!isOutOfGame(player)
+                || (!canAutoEndRound() && table.stream()
+                    .anyMatch(entry -> Objects.equals(entry.getAttackerId(), player.getId()))));
     }
 
     private boolean allRequiredEndRoundApprovalsPresent() {

@@ -41,6 +41,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 
 @Service
@@ -55,6 +56,8 @@ public class GameService {
     /* Pace the next bot pass after manual END_ROUND; final-defence display uses its own timer. */
     private static final long AUTO_PLAY_RESCHEDULE_DELAY_MS = 250;
     private static final long AUTOMATIC_ROUND_DELAY_MS = 2500;
+    private static final int AUTOMATIC_ROUND_MAX_RETRIES = 3;
+    private static final long AUTOMATIC_ROUND_RETRY_DELAY_MS = 2000;
     /*
      * Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. The
      * wide jitter also blurs the gap between instant (forced) and deliberated moves, which would
@@ -81,12 +84,12 @@ public class GameService {
     private final GameWebSocketHandler webSocketHandler;
     private final GameExpiryPolicy expiryPolicy;
     private final LobbyUpdatePublisher lobbyUpdatePublisher;
-    private final Consumer<Runnable> automaticRoundScheduler;
+    private final BiConsumer<Runnable, Long> delayedScheduler;
     private final ConcurrentHashMap<String, PendingRound> pendingRounds = new ConcurrentHashMap<>();
 
-    private record PendingRound(String deal, int bout, long version) {
+    private record PendingRound(String deal, int bout) {
         static PendingRound of(Game game) {
-            return new PendingRound(GameLifecycleLog.dealId(game), game.getBoutsCompleted(), game.getVersion());
+            return new PendingRound(GameLifecycleLog.dealId(game), game.getBoutsCompleted());
         }
     }
     /*
@@ -144,7 +147,7 @@ public class GameService {
             GameWebSocketHandler webSocketHandler,
             GameExpiryPolicy expiryPolicy,
             LobbyUpdatePublisher lobbyUpdatePublisher,
-            Consumer<Runnable> automaticRoundScheduler
+            BiConsumer<Runnable, Long> delayedScheduler
     ) {
         this.gameStore = gameStore;
         this.autoPlayDecisionEngine = autoPlayDecisionEngine;
@@ -152,9 +155,7 @@ public class GameService {
         this.webSocketHandler = webSocketHandler;
         this.expiryPolicy = expiryPolicy;
         this.lobbyUpdatePublisher = lobbyUpdatePublisher;
-        this.automaticRoundScheduler = automaticRoundScheduler != null ? automaticRoundScheduler
-                : task -> CompletableFuture.delayedExecutor(AUTOMATIC_ROUND_DELAY_MS, TimeUnit.MILLISECONDS,
-                        autoPlayExecutor).execute(task);
+        this.delayedScheduler = delayedScheduler;
     }
 
     GameService(
@@ -458,10 +459,10 @@ public class GameService {
         Game game = mutateGame(gameCode, g -> g.defend(playerId, attackCard, defendCard));
         log.debug("game_action code={} action=defend playerId={} attackCard={} defenseCard={} tableSize={}",
                 game.getCode(), playerId, attackCard.code(), defendCard.code(), game.getTable().size());
-        // Publish the last defence before starting its display pause. The controller must not duplicate this.
-        webSocketHandler.broadcastGameUpdated(game.getCode(), game.getVersion());
-        scheduleAutomaticRound(game);
-        scheduleAutoPlay(game.getCode());
+        // The HTTP controller publishes the last defence before arming its display pause.
+        if (!game.canAutoEndRound()) {
+            scheduleAutoPlay(game.getCode());
+        }
         return game;
     }
 
@@ -481,19 +482,29 @@ public class GameService {
         return game;
     }
 
-    public Game endRound(String gameCode, String playerId) {
+    Game endRound(String gameCode, String playerId) {
+        return endRound(gameCode, playerId, getGame(gameCode).getBoutId());
+    }
+
+    public Game endRound(String gameCode, String playerId, String expectedBoutId) {
         String normalizedCode = normalizeCode(gameCode);
         Game game = withGameLockRetryingStale(normalizedCode, () -> {
             Game g = getGame(normalizedCode);
             GameLifecycleLog.Before before = GameLifecycleLog.Before.of(g);
-            g.endRound(playerId);
+            if (!g.endRound(playerId, expectedBoutId)) {
+                return g;
+            }
             gameStore.save(g);
             log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
                     g.getCode(), playerId, before.status(), g.getStatus(), g.getTable().size());
             GameLifecycleLog.afterSave(before, g, "player");
             return g;
         });
-        scheduleAutoPlay(normalizedCode);
+        if (game.canAutoEndRound()) {
+            scheduleAutomaticRound(game);
+        } else {
+            scheduleAutoPlay(normalizedCode);
+        }
         return game;
     }
 
@@ -694,28 +705,34 @@ public class GameService {
         boolean[] schedule = {false};
         pendingRounds.compute(code, (key, pending) -> {
             if (pending != null && pending.deal().equals(expected.deal())
-                    && pending.version() >= expected.version()) {
+                    && pending.bout() >= expected.bout()) {
                 return pending;
             }
             schedule[0] = true;
             return expected;
         });
         if (schedule[0]) {
-            try {
-                automaticRoundScheduler.accept(() -> settleAutomaticRound(code, expected));
-            } catch (RuntimeException ex) {
-                pendingRounds.remove(code, expected);
-                log.warn("automatic_round_schedule_failed code={} message={}", code, ex.getMessage());
-            }
+            scheduleAutomaticRoundLater(code, expected, 0, AUTOMATIC_ROUND_DELAY_MS);
         }
     }
 
-    private void settleAutomaticRound(String code, PendingRound expected) {
+    private void scheduleAutomaticRoundLater(String code, PendingRound expected, int failures, long delayMs) {
+        scheduleDelayed(() -> settleAutomaticRound(code, expected, failures), delayMs, () -> {
+            pendingRounds.remove(code, expected);
+            log.warn("automatic_round_schedule_rejected code={}", code);
+        });
+    }
+
+    private void settleAutomaticRound(String code, PendingRound expected, int failures) {
+        boolean retrying = false;
+        Game settled;
         try {
-            Game settled = withGameLockRetryingStale(code, () -> {
+            settled = withGameLockRetryingStale(code, () -> {
                 Game fresh = getGame(code);
                 if (!expected.equals(PendingRound.of(fresh))) {
-                    return null;
+                    // A save can commit and then report a transport failure. A retry must
+                    // publish/resume that advanced state, without settling or logging it twice.
+                    return failures > 0 ? fresh : null;
                 }
                 GameLifecycleLog.Before before = GameLifecycleLog.Before.of(fresh);
                 if (!fresh.endRoundAutomatically()) {
@@ -725,17 +742,31 @@ public class GameService {
                 GameLifecycleLog.afterSave(before, fresh, "automatic");
                 return fresh;
             });
-            if (settled != null) {
-                // Never hold the game lock while broadcasting, just like bot and HTTP actions.
-                webSocketHandler.broadcastGameUpdated(code, settled.getVersion());
-                scheduleAutoPlay(code);
-            }
         } catch (NoSuchElementException | RoomExpiredException ignored) {
             // A departure, expiry or removal can legitimately outlive the display pause.
+            return;
         } catch (RuntimeException ex) {
-            log.warn("automatic_round_failed code={} message={}", code, ex.getMessage(), ex);
+            log.warn("automatic_round_failed code={} failures={} message={}", code, failures + 1, ex.getMessage(), ex);
+            if (failures < AUTOMATIC_ROUND_MAX_RETRIES) {
+                retrying = true; // Keep ownership through backoff; reads/heartbeats cannot restart it.
+                scheduleAutomaticRoundLater(code, expected, failures + 1,
+                        AUTOMATIC_ROUND_RETRY_DELAY_MS * (failures + 1));
+            } else {
+                log.warn("automatic_round_gave_up code={}", code);
+            }
+            return;
         } finally {
-            pendingRounds.remove(code, expected);
+            if (!retrying) {
+                pendingRounds.remove(code, expected);
+            }
+        }
+        if (settled != null) {
+            // Never hold the game lock while broadcasting, just like bot and HTTP actions.
+            try {
+                webSocketHandler.broadcastGameUpdated(code, settled.getVersion());
+            } finally {
+                scheduleAutoPlay(code);
+            }
         }
     }
 
@@ -765,7 +796,10 @@ public class GameService {
      */
     public void resumeAutoPlayIfStalled(Game game) {
         // Also re-arm a lost final-defence timer after a restart, even at human-only tables.
-        scheduleAutomaticRound(game);
+        if (game.canAutoEndRound()) {
+            scheduleAutomaticRound(game);
+            return;
+        }
         if (game.getStatus() != GameStatus.IN_PROGRESS || autoPlayRuns.containsKey(game.getCode())) {
             return;
         }
@@ -789,8 +823,30 @@ public class GameService {
     }
 
     private void runAutoPlayLater(String code, long delayMs) {
-        CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS, autoPlayExecutor)
-                .execute(() -> runAutoPlay(code));
+        scheduleDelayed(() -> runAutoPlay(code), delayMs, () -> {
+            autoPlayRuns.remove(code);
+            autoPlayFailures.remove(code);
+            log.warn("autoplay_rejected code={}", code);
+        });
+    }
+
+    /** The worker can reject only when the delay expires, not at the call to delayedExecutor. */
+    private void scheduleDelayed(Runnable task, long delayMs, Runnable onRejected) {
+        try {
+            if (delayedScheduler != null) {
+                delayedScheduler.accept(task, delayMs);
+            } else {
+                CompletableFuture.delayedExecutor(delayMs, TimeUnit.MILLISECONDS, ready -> {
+                    try {
+                        autoPlayExecutor.execute(ready);
+                    } catch (RejectedExecutionException ex) {
+                        onRejected.run();
+                    }
+                }).execute(task);
+            }
+        } catch (RejectedExecutionException ex) {
+            onRejected.run();
+        }
     }
 
     /** Runs bot passes while this task owns the game's {@link #autoPlayRuns} entry, then releases it. */
@@ -950,11 +1006,16 @@ public class GameService {
         String code = planned.getCode();
         Game applied = withGameLockRetryingStale(code, () -> {
             Game fresh = getGame(code);
-            if (fresh.getStatus() != GameStatus.IN_PROGRESS || fresh.canAutoEndRound()
+            if (fresh.getStatus() != GameStatus.IN_PROGRESS
                     || fresh.getBoutsCompleted() != planned.getBoutsCompleted()
                     || !GameLifecycleLog.dealId(fresh).equals(GameLifecycleLog.dealId(planned))) {
                 // An old throw-in must never become a legal opening lead in a later bout/deal.
-                // Bots also leave the final covered table visible for the dedicated pause.
+                log.info("autoplay_skip code={} playerId={} reason=stale_bout action={}", code, player.getId(), action);
+                return null;
+            }
+            if (fresh.canAutoEndRound()) {
+                log.info("autoplay_skip code={} playerId={} reason=automatic_round_pending action={}",
+                        code, player.getId(), action);
                 return null;
             }
             GameLifecycleLog.Before before = GameLifecycleLog.Before.of(fresh);
@@ -979,8 +1040,11 @@ public class GameService {
             return false;
         }
         // Outside the lock, like the HTTP actions: other players' moves never wait on this broadcast.
-        webSocketHandler.broadcastGameUpdated(applied.getCode(), applied.getVersion());
-        scheduleAutomaticRound(applied);
+        try {
+            webSocketHandler.broadcastGameUpdated(applied.getCode(), applied.getVersion());
+        } finally {
+            scheduleAutomaticRound(applied);
+        }
         return true;
     }
 

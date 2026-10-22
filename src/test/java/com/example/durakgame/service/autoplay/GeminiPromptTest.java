@@ -135,7 +135,8 @@ class GeminiPromptTest {
         assertFalse(rules.contains("empty your hand first"));
         assertTrue(rules.contains("There is no fixed six-card limit."));
         assertTrue(rules.contains("When all attacks are beaten and the defender has no cards left, the bout ends automatically after "
-                + "a 2.5-second pause. An attacker may use END_ROUND to end that pause immediately without other passes."));
+                + "a 2.5-second pause. Only a human attacking player still in play may use END_ROUND to end that pause "
+                + "immediately without other passes; bots wait for the automatic settlement."));
         assertTrue(rules.contains("Otherwise, when all attacks are beaten, or the defender is taking"));
         assertTrue(rules.contains("at least as many cards as there will be attack cards after the transfer"));
         assertTrue(rules.contains("The last player still holding cards is the durak and loses."));

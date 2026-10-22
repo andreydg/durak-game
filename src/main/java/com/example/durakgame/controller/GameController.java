@@ -5,6 +5,7 @@ import com.example.durakgame.controller.dto.CreateGameResponse;
 import com.example.durakgame.controller.dto.AddBotRequest;
 import com.example.durakgame.controller.dto.AttackRequest;
 import com.example.durakgame.controller.dto.DefendRequest;
+import com.example.durakgame.controller.dto.EndRoundRequest;
 import com.example.durakgame.controller.dto.GameResponse;
 import com.example.durakgame.controller.dto.JoinGameRequest;
 import com.example.durakgame.controller.dto.JoinGameResponse;
@@ -141,6 +142,11 @@ public class GameController {
                 Card.fromCode(request.attackCard()),
                 Card.fromCode(request.defenseCard())
         );
+        try {
+            webSocketHandler.broadcastGameUpdated(code, game.getVersion());
+        } finally {
+            gameService.resumeAutoPlayIfStalled(game);
+        }
         return toResponse(game, request.playerId());
     }
 
@@ -169,10 +175,10 @@ public class GameController {
     @PostMapping("/{code}/end-round")
     public GameResponse endRound(
             @PathVariable String code,
-            @Valid @RequestBody PlayerActionRequest request,
+            @Valid @RequestBody EndRoundRequest request,
             @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
         gameService.requireAuthorized(code, request.playerId(), token);
-        Game game = gameService.endRound(code, request.playerId());
+        Game game = gameService.endRound(code, request.playerId(), request.boutId());
         webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }

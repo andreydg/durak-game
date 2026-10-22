@@ -287,7 +287,8 @@ export const startGame = () => runAction("Start", playerAction("/start", {}, {cl
 export const rematch = () => runAction("Play again", playerAction("/rematch"), el.rematchBtn);
 export const addBot = () => runAction("Add bot", playerAction("/bots", {}, {clearSelection: false}));
 export const takeCards = () => runAction("Take cards", playerAction("/take"));
-export const endRound = () => runAction("End round", playerAction("/end-round"));
+// Capture the displayed bout before the action starts; later snapshots must not retarget it.
+export const endRound = () => runAction("End round", playerAction("/end-round", {boutId: state.game?.boutId}));
 
 export const attack = () => runAction("Attack", async () => {
     return playerAction("/attack", {card: requireSelectedCard()})();

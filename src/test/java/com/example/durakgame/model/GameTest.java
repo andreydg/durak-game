@@ -330,6 +330,9 @@ class GameTest {
 
         game.attack("a", Card.fromCode("6H"));
         game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        assertTrue(game.getPlayers().getFirst().getHand().isEmpty());
+        assertFalse(game.canAutoEndRound(), "the defender retains a card");
+        assertTrue(game.computeViewerLegalMoves("a").canEndRound(), "the last-card contributor can still pass");
         game.endRound("a");
 
         assertEquals(GameStatus.FINISHED, game.getStatus());
@@ -337,7 +340,55 @@ class GameTest {
     }
 
     @Test
+    void ordinaryTeamBoutRequiresBothActiveAttackersApprovals() {
+        Game game = inProgress(List.of(player("a", 0, "6H", "KC"), player("b", 1, "7H", "9D"),
+                player("c", 0, "QC"), player("d", 1, "8D")), Suit.SPADES, List.of(), 0, 1);
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        assertFalse(game.canAutoEndRound());
+        assertTrue(game.computeViewerLegalMoves("a").canEndRound());
+        assertTrue(game.computeViewerLegalMoves("c").canEndRound());
+        assertFalse(game.computeViewerLegalMoves("d").canEndRound());
+
+        game.endRound("a");
+        assertEquals(0, game.getBoutsCompleted());
+        assertFalse(game.getTable().isEmpty(), "one teammate's pass is not sufficient");
+        assertFalse(game.computeViewerLegalMoves("a").canEndRound());
+        assertTrue(game.computeViewerLegalMoves("c").canEndRound());
+        game.endRound("c");
+        assertEquals(1, game.getBoutsCompleted());
+        assertTrue(game.getTable().isEmpty());
+        assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
+    }
+
+    @Test
     void teamGameFinishesWhenOnlyOneTeamHoldsCards() {
+        Game game = inProgress(
+                List.of(
+                        player("a", 0, "6H"),
+                        player("b", 1, "QH", "8C"),
+                        player("c", 0),
+                        player("d", 1, "7C")
+                ),
+                Suit.SPADES, List.of(), 0, 1);
+
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("QH"));
+        assertFalse(game.canAutoEndRound(), "the defender retains a card, so this needs a manual pass");
+        assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
+        assertTrue(game.computeViewerLegalMoves("a").canEndRound());
+        assertFalse(game.computeViewerLegalMoves("c").canEndRound(), "the already-out partner need not pass");
+        game.endRound("a");
+
+        // Only team 1 (b and d) still holds cards; a's last-card contribution can close the bout.
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertEquals(1, game.getLoserTeam());
+        assertEquals(1, game.getBoutsCompleted());
+        assertTrue(game.getDiscardedCards().containsAll(cards("6H", "QH")));
+    }
+
+    @Test
+    void automaticEndFinishesWhenOnlyOneTeamHoldsCards() {
         Game game = inProgress(
                 List.of(
                         player("a", 0, "6H", "6S"),
@@ -358,6 +409,48 @@ class GameTest {
                 .filter(p -> p.getId().equals(game.getLoserPlayerId()))
                 .findFirst().orElseThrow();
         assertEquals(0, loser.getTeam());
+    }
+
+    @Test
+    void lastCardContributorCanEndTakenBout() {
+        Game game = inProgress(List.of(player("a", null, "6H"), player("b", null, "7C")),
+                Suit.SPADES, List.of(), 0, 1);
+        game.attack("a", Card.fromCode("6H"));
+        game.takeCards("b");
+
+        assertTrue(game.getPlayers().getFirst().getHand().isEmpty());
+        assertFalse(game.canAutoEndRound());
+        assertTrue(game.computeViewerLegalMoves("a").canEndRound());
+        game.endRound("a");
+
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertEquals("b", game.getLoserPlayerId());
+        assertEquals(1, game.getBoutsCompleted());
+        assertTrue(game.getPlayers().get(1).getHand().containsAll(cards("6H", "7C")));
+    }
+
+    @Test
+    void outNoncontributorCannotEndOrdinaryOrTakenBout() {
+        for (boolean taking : List.of(false, true)) {
+            Game game = inProgress(List.of(player("a", null, "6H", "8C"), player("b", null),
+                    player("c", null, "7H", "9D")), Suit.SPADES, List.of(), 0, 2);
+            game.attack("a", Card.fromCode("6H"));
+            if (taking) {
+                game.takeCards("c");
+            } else {
+                game.defend("c", Card.fromCode("6H"), Card.fromCode("7H"));
+            }
+
+            Game.Snapshot before = game.toSnapshot();
+            assertFalse(game.canAutoEndRound());
+            assertFalse(game.computeViewerLegalMoves("b").canEndRound());
+            assertThrows(IllegalStateException.class, () -> game.endRound("b"));
+            assertEquals(before, game.toSnapshot(), "rejecting an already-out seat must not mutate the bout");
+
+            game.endRound("a");
+            assertTrue(game.getTable().isEmpty(), "the already-out seat is not part of the approval quorum");
+            assertEquals(1, game.getBoutsCompleted());
+        }
     }
 
     @Test
@@ -487,6 +580,9 @@ class GameTest {
                     advanced = true;
                     break;
                 }
+                if (!advanced && game.canAutoEndRound()) {
+                    advanced = game.endRoundAutomatically();
+                }
                 if (!advanced) {
                     fail("game stalled while in progress (run " + run + ", step " + steps + ")");
                 }
@@ -565,6 +661,24 @@ class GameTest {
         assertTrue(game.endRoundAutomatically());
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertNull(game.getLoserPlayerId());
+    }
+
+    @Test
+    void emptyContributorCannotSkipAutomaticPause() {
+        Game game = inProgress(List.of(player("a", null, "6H"), player("b", null, "7H")),
+                Suit.SPADES, List.of(), 0, 1);
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+
+        Game.Snapshot covered = game.toSnapshot();
+        assertTrue(game.canAutoEndRound());
+        assertFalse(game.computeViewerLegalMoves("a").canEndRound());
+        assertThrows(IllegalStateException.class, () -> game.endRound("a"));
+        assertEquals(covered, game.toSnapshot(), "an empty contributor cannot bypass the display pause");
+
+        assertTrue(game.endRoundAutomatically());
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        assertEquals(1, game.getBoutsCompleted());
     }
 
     @Test
