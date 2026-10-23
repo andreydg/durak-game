@@ -479,8 +479,16 @@ public class Game implements Serializable {
 
     /** A delayed/repeated HTTP pass belongs only to the bout the player actually saw. */
     public synchronized boolean endRound(String playerId, String expectedBoutId) {
+        if (expectedBoutId == null || expectedBoutId.isBlank()) {
+            throw new IllegalStateException("This page is out of date. Reload to continue.");
+        }
         if (!getBoutId().equals(expectedBoutId) || status != GameStatus.IN_PROGRESS || table.isEmpty()
                 || endRoundApprovals.contains(playerId)) {
+            return false;
+        }
+        int callerSeat = indexOfPlayer(playerId);
+        // An out attacker's valid ordinary pass may arrive after the final cover starts the pause.
+        if (canAutoEndRound() && isAttackingSideSeat(callerSeat) && isOutOfGame(players.get(callerSeat))) {
             return false;
         }
         endRound(playerId);
@@ -1183,12 +1191,10 @@ public class Game implements Serializable {
 
     private boolean canApproveEndRound(int seat) {
         Player player = players.get(seat);
-        // A last-card contributor can finish an ordinary/taken bout, otherwise nobody could
-        // close a final deal against a defender who still holds cards. Already-out seats cannot
-        // pass, and no empty-hand seat may shorten the automatic final-defence pause.
-        return isAttackingSideSeat(seat) && (!isOutOfGame(player)
-                || (!canAutoEndRound() && table.stream()
-                    .anyMatch(entry -> Objects.equals(entry.getAttackerId(), player.getId()))));
+        // Out seats may pass on ordinary/taken bouts, but never skip the automatic pause.
+        // They are not required approvers and cannot replace an active attacker's approval.
+        // A seat is out only with an empty hand AND an empty talon.
+        return isAttackingSideSeat(seat) && (!isOutOfGame(player) || !canAutoEndRound());
     }
 
     private boolean allRequiredEndRoundApprovalsPresent() {

@@ -55,6 +55,29 @@ afterEach(() => {
 });
 
 describe("End round", () => {
+    it("shows a legacy request's reload-required conflict and refetches without clearing the warning", async () => {
+        const displayed = coveredGame({canAutoEndRound: false, opponentHandSizes: [1]});
+        actions.applyGameSnapshot(displayed);
+        const message = "This page is out of date. Reload to continue.";
+        fetchMock.mockResolvedValue(new Response(JSON.stringify({message}), {
+            status: 409, headers: {"Content-Type": "application/json"}
+        }));
+        const {api, gamePath, seat} = await import("../../src/main/resources/static/js/api.js");
+        const {scheduleGameRefresh} = await import("../../src/main/resources/static/js/sync.js");
+
+        // Pre-deploy actions send only playerId; runAction's 409 path is unchanged from main.
+        expect(await actions.runAction("End round", () =>
+            api(gamePath(seat.gameCode, "/end-round"), "POST", {playerId: seat.playerId}))).toBe(false);
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({playerId: "me"});
+        expect(scheduleGameRefresh).toHaveBeenCalledWith(0, true);
+        expect(state.actionInFlight).toBeNull();
+        actions.applyGameSnapshot(displayed); // A successful refetch must not hide the reload instruction.
+        const alert = document.getElementById("appAlert");
+        expect(alert.textContent).toBe(`End round: ${message}`);
+        expect(alert.classList.contains("hidden")).toBe(false);
+        expect(state.game).toEqual(displayed);
+    });
+
     it.each([false, true])("sends the displayed identity when canAutoEndRound is %s", async canAutoEndRound => {
         const displayed = coveredGame({canAutoEndRound});
         actions.applyGameSnapshot(displayed);

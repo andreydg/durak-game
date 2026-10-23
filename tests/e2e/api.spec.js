@@ -37,6 +37,35 @@ function json(route, status, body) {
 }
 
 test.describe("Action responses and API errors", () => {
+    test("an End round without bout identity displays the reload instruction after refetch", async ({page}) => {
+        await seedSession(page);
+        // Omitting the displayed identity reproduces the body sent by pre-deploy tabs.
+        const current = attackerGame({
+            hand: ["KD"], opponentHandSizes: [1],
+            table: [{attackCard: "6H", defenseCard: "7H", attackerId: "me"}],
+            legalMoves: {canEndRound: true}
+        });
+        delete current.boutId; // Remove the synthetic builder's default too.
+        let reads = 0;
+        const requests = [];
+        await routeGame(page, {
+            "GET /": route => { reads++; return json(route, 200, current); },
+            "POST /end-round": route => {
+                requests.push(route.request().postDataJSON());
+                return json(route, 409, {message: "This page is out of date. Reload to continue."});
+            }
+        });
+        await page.goto("/");
+        await expect(page.locator("#endRoundBtn")).toBeEnabled();
+        const readsBeforePress = reads;
+        await page.click("#endRoundBtn");
+        await expect.poll(() => reads).toBeGreaterThan(readsBeforePress);
+        await expect(page.locator("#appAlert")).toBeVisible();
+        await expect(page.locator("#appAlert")).toHaveText("End round: This page is out of date. Reload to continue.");
+        await expect(page.locator("#battleCards .battle-pair")).toHaveCount(1);
+        expect(requests).toEqual([{playerId: "me"}]);
+    });
+
     for (const finishesGame of [false, true]) {
         test(`the attacker sees the final defence before ${finishesGame ? "the result" : "the next bout"} without End round`, async ({ page }) => {
             await seedSession(page);

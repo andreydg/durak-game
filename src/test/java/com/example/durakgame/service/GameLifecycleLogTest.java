@@ -16,6 +16,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
@@ -192,6 +194,56 @@ class GameLifecycleLogTest {
         String line = onlyLine();
         assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
         assertTrue(line.contains("endedBy=automatic bouts=1 loser=human loserPlayerId=h"), line);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void alreadyOutBotClosesDecidedBoutWithoutTheHumanAttacker(boolean taking, boolean teams) throws InterruptedException {
+        long now = Instant.now().toEpochMilli();
+        Game.PlayerSnapshot h1 = new Game.PlayerSnapshot("h1", "h1", now, false, teams ? 0 : null,
+                cards("6H"), "h1-secret");
+        Game.PlayerSnapshot h2 = new Game.PlayerSnapshot("h2", "h2", now, false, teams ? 1 : null,
+                cards("7H", "9D"), "h2-secret");
+        Game.PlayerSnapshot x = new Game.PlayerSnapshot("x", "x", now, true, teams ? 0 : null,
+                List.of(), "x-secret");
+        List<Game.PlayerSnapshot> players = teams
+                ? List.of(h1, h2, x, new Game.PlayerSnapshot("h3", "h3", now, false, 1, List.of(), "h3-secret"))
+                : List.of(h1, x, h2);
+        Game game = Game.fromSnapshot(new Game.Snapshot("TEST01", now, now, "h1", GameStatus.IN_PROGRESS,
+                Suit.SPADES, null, 0, teams ? 1 : 2, null, false, 0, 0L,
+                players, List.of(), List.of(), Set.of(), List.of(), List.of()));
+        game.attack("h1", Card.fromCode("6H"));
+        if (taking) {
+            game.takeCards("h2");
+        } else {
+            game.defend("h2", Card.fromCode("6H"), Card.fromCode("7H"));
+        }
+        store.save(game);
+        assertFalse(game.canAutoEndRound());
+        assertTrue(game.computeViewerLegalMoves("h1").canEndRound());
+        assertTrue(game.computeViewerLegalMoves("x").canEndRound(), "the bot was out before this bout but can close it");
+        assertTrue(game.toSnapshot().endRoundApprovals().isEmpty());
+        GameService service = service((g, playerId, moves) -> AutoPlayAction.endRound());
+
+        service.resumeAutoPlayIfStalled(game); // Only the real bot loop acts; no human presses End round.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (lines().stream().noneMatch(line -> line.startsWith("game_ended "))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+
+        Game finished = service.getGame("TEST01");
+        assertEquals(GameStatus.FINISHED, finished.getStatus());
+        assertEquals("h2", finished.getLoserPlayerId());
+        assertEquals(1, finished.getBoutsCompleted());
+        String line = onlyLine();
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.contains("endedBy=bot bouts=1"), line);
+        assertTrue(line.contains("loserPlayerId=h2"), line);
+        if (taking) {
+            assertTrue(finished.getPlayers().stream().filter(p -> p.getId().equals("h2")).findFirst().orElseThrow()
+                    .getHand().containsAll(cards("6H", "7H", "9D")));
+        }
     }
 
     @Test

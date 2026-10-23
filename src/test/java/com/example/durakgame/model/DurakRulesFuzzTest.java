@@ -801,9 +801,7 @@ class DurakRulesFuzzTest {
     }
 
     private static boolean eligibleEndRoundSeat(Game.Snapshot s, int seat) {
-        String id = s.players().get(seat).id();
-        return attackingSide(s, seat) && (!isOut(s, seat)
-                || (!automaticEndEligible(s) && s.table().stream().anyMatch(t -> id.equals(t.attackerId()))));
+        return attackingSide(s, seat) && (!isOut(s, seat) || !automaticEndEligible(s));
     }
 
     static int nextEligible(Game.Snapshot s, int start) {

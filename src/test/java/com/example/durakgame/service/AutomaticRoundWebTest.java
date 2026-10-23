@@ -12,8 +12,10 @@ import com.example.durakgame.service.store.InMemoryGameStore;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.MediaType;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -24,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -166,7 +169,7 @@ class AutomaticRoundWebTest {
     }
 
     @Test
-    void oldPassCannotApproveNextCoveredBoutOrTargetItWithoutAnIdentity() throws Exception {
+    void oldPassCannotApproveNextCoveredBout() throws Exception {
         seed(List.of(player("a", cards("KD")), player("b", cards("7H"))),
                 cards("9C", "10C", "JC", "QC", "KC", "8C", "AC", "8D", "9D", "10D", "JD"), 1);
         defend("b", card("6H"), card("7H"));
@@ -181,14 +184,63 @@ class AutomaticRoundWebTest {
         MockMvc mvc = mvc();
 
         endRoundRequest(mvc, "b", oldBout);
-        mvc.perform(post("/api/games/AUTO23/end-round").header("X-Durak-Token", "b-secret")
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"playerId\":\"b\"}"))
-                .andExpect(status().isOk());
         assertEquals(current.toSnapshot(), saved().toSnapshot());
         verify(store, never()).save(any());
 
         endRoundRequest(mvc, "b", current.getBoutId());
         assertEquals(2, saved().getBoutsCompleted());
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   "})
+    void missingOrBlankBoutIdentityRequiresReloadWithoutAnySideEffects(String boutId) throws Exception {
+        seed(List.of(player("a", cards("KD")),
+                new Game.PlayerSnapshot("b", "Bot", 0L, true, null, cards("7H", "9D"), "b-secret")), List.of(), 1);
+        Game covered = saved();
+        covered.defend("b", card("6H"), card("7H"));
+        store.save(covered);
+        assertTrue(covered.computeViewerLegalMoves("a").canEndRound());
+        assertFalse(covered.canAutoEndRound());
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
+        MockMvc mvc = mvc();
+        clearInvocations(store, sockets);
+
+        mvc.perform(post("/api/games/AUTO23/end-round").header("X-Durak-Token", "a-secret")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"playerId\":\"a\"" + (boutId == null ? "" : ",\"boutId\":\"" + boutId + "\"") + "}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This page is out of date. Reload to continue."));
+
+        assertEquals(covered.toSnapshot(), saved().toSnapshot());
+        assertEquals(covered.getVersion(), saved().getVersion());
+        verify(store, never()).save(any());
+        verifyNoInteractions(sockets, worker);
+        assertTrue(timers.isEmpty());
+    }
+
+    @Test
+    void outAttackerPassesDuringAutomaticPauseAreQuietNoOps() throws Exception {
+        seed(List.of(player("a", List.of()), player("b", List.of()), player("c", cards("7H"))), List.of(), 2);
+        defend("c", card("6H"), card("7H"));
+        Game covered = saved();
+        assertTrue(covered.canAutoEndRound());
+        assertFalse(covered.computeViewerLegalMoves("a").canEndRound());
+        assertFalse(covered.computeViewerLegalMoves("b").canEndRound());
+        MockMvc mvc = mvc();
+        clearInvocations(store);
+
+        endRoundRequest(mvc, "a", covered.getBoutId()); // Last-card contributor.
+        endRoundRequest(mvc, "b", covered.getBoutId()); // Already out before this bout.
+        assertEquals(covered.toSnapshot(), saved().toSnapshot());
+        verify(store, never()).save(any());
+        assertEquals(1, timers.size(), "passes neither settle nor reset the pause");
+
+        timers.getFirst().run();
+        assertEquals(1, saved().getBoutsCompleted());
+        assertEquals(GameStatus.FINISHED, saved().getStatus());
+        assertNull(saved().getLoserPlayerId());
     }
 
     @Test
