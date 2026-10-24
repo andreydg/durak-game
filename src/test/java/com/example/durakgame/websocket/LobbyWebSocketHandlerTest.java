@@ -41,9 +41,9 @@ class LobbyWebSocketHandlerTest {
 
         // The already-scheduled revision broadcast may race with this connection and deliver an
         // equivalent LOBBIES_CHANGED before or after READY. Ordering and message count are not
-        // protocol guarantees; the READY snapshot taken at connection time is.
-        assertTrue(session.awaitMessageCount(1, Duration.ofSeconds(1)));
-        Map<String, Object> ready = payloadOfType(session, "LOBBIES_READY");
+        // protocol guarantees; the READY snapshot taken at connection time is. So wait for READY
+        // itself: CHANGED can be the first message, with READY written a moment later.
+        Map<String, Object> ready = awaitPayloadOfType(session, "LOBBIES_READY", Duration.ofSeconds(1));
         assertFalse(String.valueOf(ready.get("streamId")).isBlank());
         assertEquals(1, ((Number) ready.get("revision")).intValue());
     }
@@ -192,14 +192,22 @@ class LobbyWebSocketHandlerTest {
         return objectMapper.readValue(json, new TypeReference<>() { });
     }
 
-    private Map<String, Object> payloadOfType(TestWebSocketSession session, String type) throws Exception {
-        for (org.springframework.web.socket.TextMessage message : session.messages) {
-            Map<String, Object> candidate = payload(message.getPayload());
-            if (type.equals(candidate.get("type"))) {
-                return candidate;
+    /** The first message of {@code type}, waiting until it arrives; fails with the messages that did. */
+    private Map<String, Object> awaitPayloadOfType(TestWebSocketSession session, String type, Duration timeout)
+            throws Exception {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            for (org.springframework.web.socket.TextMessage message : session.messages) {
+                Map<String, Object> candidate = payload(message.getPayload());
+                if (type.equals(candidate.get("type"))) {
+                    return candidate;
+                }
             }
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError("Expected websocket message type " + type + " but got " + session.messages);
+            }
+            Thread.sleep(5);
         }
-        throw new AssertionError("Expected websocket message type " + type + " but got " + session.messages);
     }
 
     private long revision(org.springframework.web.socket.TextMessage message) throws Exception {
