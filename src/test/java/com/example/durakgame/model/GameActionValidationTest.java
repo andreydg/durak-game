@@ -28,6 +28,10 @@ class GameActionValidationTest {
                 Suit.SPADES, cards("10S"), 0, 1);
         g.attack("a", c("6H"));
         g.defend("b", c("6H"), c("7H"));
+        assertEquals("b", g.getDefenderPlayerId());
+        assertEquals(c("7H"), g.getTable().getFirst().getDefenseCard());
+        assertEquals("Attack card to defend not found",
+                assertThrows(IllegalStateException.class, () -> g.defend("b", c("6H"), c("9H"))).getMessage());
 
         // A double-submitted drag: a second card onto the attack that was just beaten.
         assertRejectedWithoutChanges(g, () -> g.defend("b", c("6H"), c("9H")));

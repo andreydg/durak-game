@@ -68,12 +68,20 @@ On Cloud Run the deploy script sets `LOGGING_STRUCTURED_FORMAT_CONSOLE` so every
 
 Deals are counted from three lifecycle lines, each written once the change is saved, whichever path caused it (players, bots, quick play, rematches, leaving):
 - `game_started` (with `trigger=host|table_full|quick_play|rematch`)
-- `game_ended` (with `endedBy=player|bot`, `bouts`, and `loser=human|bot|team|none`)
+- `game_ended` (with `endedBy=player|bot|automatic`, `bouts`, and `loser=human|bot|team|none`)
 - `game_interrupted` (with `reason=player_left|room_closed`)
 
 Lines of the same deal share a `deal` id: the room code plus the time the room last (re)opened. A deal with a `game_started` line but neither of the others was abandoned until its room expired.
 
 ## Realtime updates and fallback reads
+
+When every attack is covered and the defender's hand is empty, the server saves and broadcasts the final defence, then ends the bout after 2.5 seconds. This trigger uses public hand size, never attackers' private ranks. Only a human attacking player still in play can press End round during the pause to settle immediately, without waiting for co-attackers' approvals; bots wait for the timer. Other covered bouts still require the usual passes, even if nobody holds a matching rank; taking cards is unchanged.
+
+Any attacking-side seat, including an already-out human or bot, may use End round for an ordinary covered bout or while the defender is taking. Out seats are not required approvers, and their passes cannot replace approvals from attacking players still in play. They cannot skip the automatic pause. A player is out only when both their hand and the talon are empty; with a non-empty talon, nobody is out.
+
+The delayed task re-reads under the game lock and checks the scheduled deal and bout, plus current automatic-settlement eligibility, before settling. Heartbeats may advance the version without resetting or invalidating that bout's timer. A manual end, new deal or changed bout makes the old task a no-op. Store failures trigger up to three retries with backoff. Reads and heartbeats re-arm a lost timer after an instance restart, with a fresh 2.5-second pause; manual End round also remains available to eligible humans. No extra snapshot fields are needed. In-flight bot decisions are rejected if their deal or bout has changed, even if the selected card would be legal as the next lead.
+
+Game responses expose a computed `boutId` and `canAutoEndRound`; the browser uses the server's flag for its hints and announcements. End round requests include the displayed `boutId`; a stale or already-ended identity is a successful no-op. A missing or blank identity returns 409 with "This page is out of date. Reload to continue." so older tabs tell the player to reload instead of reporting a successful pass. This rejection writes nothing, broadcasts nothing and schedules no bot pass. An out attacker's pass racing the start of the automatic pause is also a successful no-op.
 
 Game changes arrive over `/ws/games/{code}` and public-table invalidations arrive over `/ws/lobbies`. Lobby events carry only a monotonic revision; clients then read the authoritative `/api/lobbies` projection. A healthy connection reduces game health reads to once every 30 seconds and lobby health reads to once every 60 seconds, instead of fixed three-/four-second polling.
 

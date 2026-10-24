@@ -408,6 +408,12 @@ class HeuristicAutoPlayDecisionEngineTest {
                 if (++steps > 2_000) {
                     fail("game did not finish (seed " + seed + ")");
                 }
+                // The production bot loop waits for the server timer in this public state.
+                // In particular, an all-out draw has no eligible player who can press End round.
+                if (state.canAutoEndRound()) {
+                    assertTrue(state.endRoundAutomatically(), "timer must settle (seed " + seed + ")");
+                    continue;
+                }
                 boolean acted = false;
                 for (Player player : state.getPlayers()) {
                     ViewerLegalMoves moves = state.computeViewerLegalMoves(player.getId());

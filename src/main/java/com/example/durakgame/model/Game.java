@@ -472,15 +472,37 @@ public class Game implements Serializable {
         touch();
     }
 
+    /** Identifies the current deal/bout independently of heartbeats and ordinary move versions. */
+    public synchronized String getBoutId() {
+        return code + "-" + Long.toString(lobbyStartedAt.toEpochMilli(), 36) + "-" + boutsCompleted;
+    }
+
+    /** A delayed/repeated HTTP pass belongs only to the bout the player actually saw. */
+    public synchronized boolean endRound(String playerId, String expectedBoutId) {
+        if (expectedBoutId == null || expectedBoutId.isBlank()) {
+            throw new IllegalStateException("This page is out of date. Reload to continue.");
+        }
+        if (!getBoutId().equals(expectedBoutId) || status != GameStatus.IN_PROGRESS || table.isEmpty()
+                || endRoundApprovals.contains(playerId)) {
+            return false;
+        }
+        int callerSeat = indexOfPlayer(playerId);
+        // An out attacker's valid ordinary pass may arrive after the final cover starts the pause.
+        if (canAutoEndRound() && isAttackingSideSeat(callerSeat) && isOutOfGame(players.get(callerSeat))) {
+            return false;
+        }
+        endRound(playerId);
+        return true;
+    }
+
     public synchronized void endRound(String playerId) {
         ensureInProgress();
         if (table.isEmpty()) {
             throw new IllegalStateException("No active bout");
         }
         int callerSeat = indexOfPlayer(playerId);
-        boolean isAttackingSide = isAttackingSideSeat(callerSeat);
-        if (!isAttackingSide) {
-            throw new IllegalStateException("Only attacking-side players can end this bout");
+        if (!canApproveEndRound(callerSeat)) {
+            throw new IllegalStateException("Only attacking-side players still in this bout can end it");
         }
 
         if (!takingCardsInProgress) {
@@ -490,11 +512,34 @@ public class Game implements Serializable {
             }
         }
         endRoundApprovals.add(playerId);
-        if (!allRequiredEndRoundApprovalsPresent()) {
+        if (!canAutoEndRound() && !allRequiredEndRoundApprovalsPresent()) {
             touch();
             return;
         }
 
+        finishRound();
+        touch();
+    }
+
+    /** Public information only: do not infer automatic settlement from attackers' private hands. */
+    public synchronized boolean canAutoEndRound() {
+        return status == GameStatus.IN_PROGRESS && !takingCardsInProgress && !table.isEmpty()
+                && players.get(defenderIndex).handSize() == 0
+                && table.stream().allMatch(AttackEntry::isDefended);
+    }
+
+    /** Called by the service after the final defence has been visible for a short pause. */
+    public synchronized boolean endRoundAutomatically() {
+        if (!canAutoEndRound()) {
+            return false;
+        }
+        finishRound();
+        touch();
+        return true;
+    }
+
+    /** Settles a bout once, whether explicitly approved or after the final-defence pause. */
+    private void finishRound() {
         if (takingCardsInProgress) {
             finalizeTakeCardsRound();
         } else {
@@ -510,7 +555,6 @@ public class Game implements Serializable {
         }
         /* Both branches above close the bout (taken or discarded), so it counts exactly once. */
         boutsCompleted++;
-        touch();
     }
 
     public String getCode() {
@@ -858,12 +902,13 @@ public class Game implements Serializable {
         boolean canTransfer = !transferable.isEmpty();
 
         boolean allDefended = !table.isEmpty() && table.stream().allMatch(AttackEntry::isDefended);
-        /* Take pile only while something is still undefended; once all are beaten, round ends via End round. */
+        /* Take only while something is undefended; an empty defender's covered table ends after a pause. */
         boolean canTake = !takingCardsInProgress && isDefenderSeat && !table.isEmpty() && !allDefended;
         boolean isAttackingSideSeat = isAttackingSideSeat(viewerSeat);
         boolean canEndRound = (takingCardsInProgress || allDefended)
                 && !isDefenderSeat
                 && isAttackingSideSeat
+                && canApproveEndRound(viewerSeat)
                 && !endRoundApprovals.contains(viewerPlayerId);
 
         Map<String, List<String>> defensesByAttack = new LinkedHashMap<>();
@@ -1142,6 +1187,14 @@ public class Game implements Serializable {
 
     private boolean isAttackingSideSeat(int seatIndex) {
         return seatIndex != defenderIndex && !isTeammate(seatIndex, defenderIndex);
+    }
+
+    private boolean canApproveEndRound(int seat) {
+        Player player = players.get(seat);
+        // Out seats may pass on ordinary/taken bouts, but never skip the automatic pause.
+        // They are not required approvers and cannot replace an active attacker's approval.
+        // A seat is out only with an empty hand AND an empty talon.
+        return isAttackingSideSeat(seat) && (!isOutOfGame(player) || !canAutoEndRound());
     }
 
     private boolean allRequiredEndRoundApprovalsPresent() {

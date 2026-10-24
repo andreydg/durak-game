@@ -12,6 +12,7 @@ import com.example.durakgame.model.Suit;
 import com.example.durakgame.model.ViewerLegalMoves;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.AutoPlayDecisionEngine;
+import com.example.durakgame.service.autoplay.HeuristicAutoPlayDecisionEngine;
 import com.example.durakgame.service.store.GameStore;
 import com.example.durakgame.service.store.InMemoryGameStore;
 import com.example.durakgame.service.store.LobbyProjection;
@@ -31,6 +32,7 @@ import java.util.Set;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -781,25 +783,27 @@ class GameServiceTest {
     @Test
     void scheduledAutoPlayUsesEngineDecisionForDefense() throws InterruptedException {
         SnapshotGameStore store = new SnapshotGameStore();
+        List<Runnable> timers = new CopyOnWriteArrayList<>();
         // Engine instructs the bot defender to beat 9H with 10H (a non-forced, engine-driven move).
         AutoPlayDecisionEngine engine = (game, playerId, legalMoves) -> AutoPlayAction.defend("9H", "10H");
-        GameService service = newService(store, engine);
+        GameService service = new GameService(store, engine, new HeuristicAutoPlayDecisionEngine(), webSocket,
+                GameExpiryPolicy.defaults(), LobbyUpdatePublisher.noop(), (task, delay) -> timers.add(task));
         store.put(twoPlayerBotDefenderCanBeat());
 
         // The human's opening attack schedules the bot's defending turn.
         service.attack("TEST01", "h", Card.fromCode("9H"));
 
-        boolean defended = false;
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (System.currentTimeMillis() < deadline) {
-            List<com.example.durakgame.model.AttackEntry> table = service.getGame("TEST01").getTable();
-            if (!table.isEmpty() && table.getFirst().isDefended()) {
-                defended = true;
-                break;
-            }
-            Thread.sleep(100);
-        }
-        assertTrue(defended, "bot defender should apply the engine-chosen defense");
+        assertTrue(waitUntil(() -> {
+            Game game = service.getGame("TEST01");
+            return game.getTable().size() == 1
+                    && Card.fromCode("10H").equals(game.getTable().getFirst().getDefenseCard());
+        }, 10_000), "bot defender should apply the engine-chosen defense");
+        Game covered = service.getGame("TEST01");
+        assertEquals(cards("7D"), covered.getPlayers().get(1).getHand());
+        assertEquals(GameStatus.IN_PROGRESS, covered.getStatus());
+        assertEquals(0, covered.getBoutsCompleted());
+        assertFalse(covered.canAutoEndRound(), "the defender still has a card");
+        assertTrue(timers.isEmpty(), "ordinary defence does not need a delayed settlement");
     }
 
     @Test

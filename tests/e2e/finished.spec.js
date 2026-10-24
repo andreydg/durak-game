@@ -30,6 +30,8 @@ function game(status) {
         code: "FIN123",
         status,
         version: inProgress ? 12 : 11,
+        boutId: inProgress ? "rematch-deal:1" : "finished-deal:9",
+        canAutoEndRound: false,
         maxPlayers: 4,
         playerCount: 2,
         createdAt: "2026-08-28T12:00:00Z",

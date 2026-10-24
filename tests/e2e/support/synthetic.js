@@ -31,6 +31,8 @@ export function emptyLegalMoves() {
 export function syntheticGame({
     code = "SYNTH2",
     version = 5,
+    boutId = "synthetic-deal:1",
+    canAutoEndRound = false,
     status = "IN_PROGRESS",
     players = 2,
     handSize = 6,
@@ -70,6 +72,8 @@ export function syntheticGame({
         code,
         status,
         version,
+        boutId,
+        canAutoEndRound,
         maxPlayers: 4,
         playerCount: seats.length,
         createdAt: "2026-08-28T12:00:00Z",

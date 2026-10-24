@@ -170,6 +170,22 @@ class DurakRulesFuzzTest {
             }
             Game.Snapshot before = run.game.toSnapshot();
             List<Act> moves = advertisedMoves(st, run, run.game, before);
+            // Model the service timer as a separate mutation, sometimes racing a manual End round.
+            // If no seat can act (e.g. everyone is out), only that timer can settle the bout.
+            if (automaticEndEligible(before) && (moves.isEmpty() || run.rnd.nextBoolean())) {
+                run.log.add("automaticEndRound()");
+                try {
+                    if (!run.game.endRoundAutomatically()) {
+                        st.violation(run, "AUTOMATIC_END_REJECTED", compact(before));
+                        break;
+                    }
+                } catch (RuntimeException ex) {
+                    st.violation(run, "AUTOMATIC_END_REJECTED", ex + " | " + compact(before));
+                    break;
+                }
+                afterSuccess(st, run, new Act(-1, null, Type.END_ROUND, null, null), before, run.game.toSnapshot());
+                continue;
+            }
             if (moves.isEmpty()) {
                 st.violation(run, "STALL_NO_PLAYER_HAS_A_LEGAL_MOVE", compact(before));
                 break;
@@ -226,7 +242,8 @@ class DurakRulesFuzzTest {
             return;
         }
         if (!advertised) {
-            boolean repeatApproval = p.type() == Type.END_ROUND && before.endRoundApprovals().contains(p.playerId());
+            boolean repeatApproval = p.type() == Type.END_ROUND && eligibleEndRoundSeat(before, p.seat())
+                    && before.endRoundApprovals().contains(p.playerId());
             if (repeatApproval) {
                 st.info(run, "BENIGN: repeated endRound approval accepted (idempotent, bumps version)", p.toString());
             } else {
@@ -342,6 +359,11 @@ class DurakRulesFuzzTest {
                 }
                 run.h0 = hand(before, after.defenderIndex()).size();
             }
+            case DEFEND -> {
+                if (after.table().isEmpty()) {
+                    st.violation(run, "FINAL_DEFENCE_NOT_VISIBLE", act + " | " + compact(before));
+                }
+            }
             case END_ROUND -> {
                 if (!before.table().isEmpty() && after.table().isEmpty()) {
                     boutEnded(st, run, act, before, after);
@@ -358,12 +380,13 @@ class DurakRulesFuzzTest {
         int a = before.attackerIndex();
         int d = before.defenderIndex();
         boolean took = before.takingCardsInProgress();
+        boolean forced = automaticEndEligible(before);
 
         Set<String> approvals = new HashSet<>(before.endRoundApprovals());
         approvals.add(act.playerId());
         for (int i = 0; i < n; i++) {
             boolean out = before.talon().isEmpty() && hand(before, i).isEmpty();
-            if (!out && attackingSide(before, i) && !approvals.contains(before.players().get(i).id())) {
+            if (!forced && !out && attackingSide(before, i) && !approvals.contains(before.players().get(i).id())) {
                 st.violation(run, "BOUT_ENDED_WITHOUT_ALL_APPROVALS", "missing p" + i + " | " + compact(before));
             }
         }
@@ -442,6 +465,9 @@ class DurakRulesFuzzTest {
     }
 
     private void checkState(Stats st, Run run, Game game, Game.Snapshot s) {
+        if (game.canAutoEndRound() != automaticEndEligible(s)) {
+            st.violation(run, "AUTOMATIC_END_ELIGIBILITY_MISMATCH", compact(s));
+        }
         List<Card> all = new ArrayList<>();
         for (Game.PlayerSnapshot p : s.players()) {
             all.addAll(p.hand());
@@ -676,6 +702,9 @@ class DurakRulesFuzzTest {
                 moves.add(new Act(seat, id, Type.TAKE, null, null));
             }
             if (lm.canEndRound()) {
+                if (!eligibleEndRoundSeat(s, seat)) {
+                    st.violation(run, "END_ROUND_OFFERED_TO_INELIGIBLE_SEAT", id + " | " + compact(s));
+                }
                 moves.add(new Act(seat, id, Type.END_ROUND, null, null));
             }
         }
@@ -717,6 +746,12 @@ class DurakRulesFuzzTest {
         return Game.fromSnapshot(new Game.Snapshot("FUZZ01", 0L, 0L, 0L, "p0", GameStatus.IN_PROGRESS,
                 trump.suit(), trump, attacker, defender, null, false, 0, 0L, players, deck, List.of(), Set.of(),
                 List.of(), List.of(), false, null, null));
+    }
+
+    private static boolean automaticEndEligible(Game.Snapshot s) {
+        return s.status() == GameStatus.IN_PROGRESS && !s.takingCardsInProgress() && !s.table().isEmpty()
+                && hand(s, s.defenderIndex()).isEmpty()
+                && s.table().stream().allMatch(t -> t.defenseCard() != null);
     }
 
     static void apply(Game game, Act act) {
@@ -763,6 +798,10 @@ class DurakRulesFuzzTest {
 
     static boolean attackingSide(Game.Snapshot s, int seat) {
         return seat != s.defenderIndex() && !teammate(s, seat, s.defenderIndex());
+    }
+
+    private static boolean eligibleEndRoundSeat(Game.Snapshot s, int seat) {
+        return attackingSide(s, seat) && (!isOut(s, seat) || !automaticEndEligible(s));
     }
 
     static int nextEligible(Game.Snapshot s, int start) {
