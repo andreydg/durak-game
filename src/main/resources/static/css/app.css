@@ -1310,6 +1310,11 @@ button.btn-primary[aria-disabled="true"] {
 #lobbyOpenTables .lobby-list-join {
     width: auto;
 }
+/* The row stays on one line, so a long name with no spaces (names allow 24 characters) has to
+   wrap inside its column instead of running underneath Join. */
+#lobbyOpenTables .lobby-list-meta {
+    overflow-wrap: anywhere;
+}
 .lobby-list {
     list-style: none;
     margin: 0;
