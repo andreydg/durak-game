@@ -2,7 +2,7 @@ package com.example.durakgame.service.autoplay;
 
 import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
-import com.example.durakgame.service.autoplay.GeminiAnswer.DefencePair;
+import com.example.durakgame.service.autoplay.MoveAnswer.DefencePair;
 import com.example.durakgame.service.autoplay.GeminiAutoPlayDecisionEngineTest.GameBuilder;
 import org.junit.jupiter.api.Test;
 

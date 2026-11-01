@@ -1,13 +1,11 @@
 package com.example.durakgame.service.autoplay;
 
-import com.example.durakgame.model.AttackEntry;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.ViewerLegalMoves;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -16,30 +14,23 @@ import java.net.URI;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 
 /**
- * Chooses bot moves with Gemini and falls back to {@link HeuristicAutoPlayDecisionEngine}.
- *
- * <p>Every returned action is legal for the {@link ViewerLegalMoves} passed in: model answers are
- * normalized and validated, and anything illegal is replaced by the heuristic's move. Each model
- * call and each decision produce one single-line {@code key=value} log entry.
+ * Chooses bot moves with Gemini ({@code autoplay.provider=gemini}, the default) and falls back to
+ * {@link HeuristicAutoPlayDecisionEngine}; the decision flow is {@link LlmAutoPlayDecisionEngine}'s.
+ * Each model call produces one single-line {@code key=value} log entry.
  */
 @Component
 @Primary
-public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
-    private static final Logger log = LoggerFactory.getLogger(GeminiAutoPlayDecisionEngine.class);
-
+@ConditionalOnProperty(prefix = "autoplay", name = "provider", havingValue = "gemini", matchIfMissing = true)
+public class GeminiAutoPlayDecisionEngine extends LlmAutoPlayDecisionEngine {
     static final String DEFAULT_MODEL = GeminiSettings.DEFAULT_MODEL;
     private static final long MAX_CONNECT_TIMEOUT_MS = 5000;
-    private static final int LOG_TEXT_LIMIT = 300;
 
-    private final HeuristicAutoPlayDecisionEngine fallback;
     private final ObjectMapper objectMapper;
     private final GeminiTransport transport;
     private final LongSupplier nanoClock;
@@ -53,10 +44,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     private final boolean jsonModeSupported;
     private final boolean systemInstructionSupported;
     private final boolean thinkingConfigSupported;
-    private final LlmCircuitBreaker circuitBreaker;
-    private final LlmCallBudget callBudget;
-    private final DefencePlanCache planCache;
-    private final GeminiPrompt prompt;
+    private final MovePrompt prompt;
 
     @Autowired
     public GeminiAutoPlayDecisionEngine(
@@ -100,7 +88,8 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             GeminiTransport transport,
             LongSupplier nanoClock
     ) {
-        this.fallback = fallback;
+        super(fallback, nanoClock, settings.circuitBreakerFailureThreshold(), settings.circuitBreakerCooldownMs(),
+                settings.maxCallsPerMinute());
         this.objectMapper = objectMapper;
         this.transport = transport;
         this.nanoClock = nanoClock;
@@ -118,12 +107,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         this.thinkingConfigSupported = resolveCapability(settings.thinkingConfigFlag(), model.defaultThinkingConfig());
         boolean promptReasoningBudgetUsed = resolveCapability(settings.promptReasoningBudgetFlag(),
                 model.defaultPromptReasoningBudget());
-        this.circuitBreaker = new LlmCircuitBreaker(settings.circuitBreakerFailureThreshold(),
-                Duration.ofMillis(Math.max(0, settings.circuitBreakerCooldownMs())), nanoClock);
-        this.callBudget = new LlmCallBudget(settings.maxCallsPerMinute(), nanoClock);
-        this.planCache = new DefencePlanCache(DefencePlanCache.DEFAULT_MAX_PLANS, DefencePlanCache.DEFAULT_TTL,
-                nanoClock);
-        this.prompt = new GeminiPrompt(objectMapper, settings.publicCardMemoryEnabled(),
+        this.prompt = new MovePrompt(objectMapper, settings.publicCardMemoryEnabled(),
                 promptReasoningBudgetUsed ? reasoningBudgetInstruction(settings.reasoningBudgetSeconds()) : "");
         log.info("autoplay_gemini_config enabled={} apiKeyPresent={} model={} modelFamily={} jsonMode={} "
                         + "systemInstruction={} thinkingConfig={} thinkingLevel={} simpleThinkingLevel={} "
@@ -133,7 +117,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 systemInstructionSupported, thinkingConfigSupported, thinkingLevel, simpleThinkingLevel,
                 model.pinZeroTemperature() ? "0" : "default", timeout.toMillis(),
                 settings.circuitBreakerFailureThreshold(), settings.circuitBreakerCooldownMs(),
-                settings.maxCallsPerMinute(), callBudget.burst());
+                settings.maxCallsPerMinute(), callBurst());
     }
 
     private static boolean resolveCapability(String flag, boolean autoDefault) {
@@ -157,125 +141,14 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     }
 
     @Override
-    public AutoPlayAction choose(Game game, String playerId, ViewerLegalMoves legalMoves) {
-        List<AutoPlayAction> options = AutoPlayLegality.enumerate(legalMoves);
-        Decision decision = decide(game, playerId, legalMoves, options);
-        log.info("autoplay_decision code={} player={} source={} reason={} action={} card={} attackCard={} "
-                        + "options={}{}",
-                game.getCode(), playerId, decision.source(), decision.reason(), actionType(decision.action()),
-                orDash(decision.action() == null ? null : decision.action().cardCode()),
-                orDash(decision.action() == null ? null : decision.action().attackCardCode()),
-                options.size(), decision.detail() == null ? "" : " " + decision.detail());
-        return decision.action();
-    }
-
-    /** Where an action came from and, when the heuristic was used, why. */
-    private record Decision(AutoPlayAction action, String source, String reason, String detail) {
-        static Decision of(AutoPlayAction action, String source, String reason) {
-            return new Decision(action, source, reason, null);
-        }
-    }
-
-    private Decision decide(Game game, String playerId, ViewerLegalMoves legalMoves, List<AutoPlayAction> options) {
-        if (options.isEmpty()) {
-            return heuristic(game, playerId, legalMoves, "no_legal_moves");
-        }
-        if (alreadyPassed(game, legalMoves)) {
-            return Decision.of(null, "forced", "already_passed");
-        }
-        if (options.size() == 1 && isForced(game, options.getFirst())) {
-            return Decision.of(options.getFirst(), "forced", "single_legal_option");
-        }
-        if (!enabled || apiKey.isBlank()) {
-            return heuristic(game, playerId, legalMoves, "disabled");
-        }
-        if (legalMoves.canDefend()) {
-            /* The model may already have planned this defence; replay it while the table still matches. */
-            AutoPlayAction planned = planCache.next(game, playerId, legalMoves);
-            if (planned != null && AutoPlayLegality.isLegal(planned, legalMoves)) {
-                return Decision.of(planned, "plan_cache", "none");
-            }
-        } else {
-            planCache.discard(game.getCode(), playerId);
-        }
-        LlmCircuitBreaker.Permit permit = circuitBreaker.tryAcquire();
-        if (permit.rejected()) {
-            return heuristic(game, playerId, legalMoves, "circuit_open");
-        }
-        if (!callBudget.tryAcquire()) {
-            circuitBreaker.record(permit, LlmCircuitBreaker.Outcome.NEUTRAL);
-            return heuristic(game, playerId, legalMoves, "budget_exhausted");
-        }
-        ModelCall call = callModel(game, playerId, legalMoves, options.size());
-        circuitBreaker.record(permit, call.breakerOutcome());
-        if (!call.completed()) {
-            return heuristic(game, playerId, legalMoves, "primary_model_failed");
-        }
-        if (call.response().answer() == null) {
-            return heuristic(game, playerId, legalMoves, "unparseable");
-        }
-        GeminiAnswer answer = new GeminiAnswer(call.response().answer());
-        logStrategy(game, playerId, answer, call.response());
-        Set<String> undefended = undefendedAttacks(game, legalMoves);
-        AutoPlayAction action = answer.resolve(legalMoves, undefended);
-        if (action == null || !AutoPlayLegality.isLegal(action, legalMoves)) {
-            Decision fallbackDecision = heuristic(game, playerId, legalMoves, "illegal_model_action");
-            return new Decision(fallbackDecision.action(), fallbackDecision.source(), fallbackDecision.reason(),
-                    "model=" + answer.describe());
-        }
-        if (action.type() == AutoPlayAction.Type.DEFEND) {
-            planCache.store(game, playerId, legalMoves, action, answer.defencePlan(undefended));
-        }
-        return Decision.of(action, "llm", "none");
-    }
-
-    /**
-     * A lone legal option needs no model call, unless it is an optional throw-in: then "wait" is the
-     * unlisted alternative (for example after the bot already passed) and the choice stays open.
-     */
-    private static boolean isForced(Game game, AutoPlayAction onlyOption) {
-        return onlyOption.type() != AutoPlayAction.Type.ATTACK || game.getTable().isEmpty();
-    }
-
-    /**
-     * The bot already passed (END_ROUND) in this bout and nothing changed since: any new card on the
-     * table clears every pass. Only throw-ins are left to choose from, and playing one would contradict
-     * that pass, so the bot waits for the other players instead of asking the model again.
-     */
-    private static boolean alreadyPassed(Game game, ViewerLegalMoves legalMoves) {
-        if (legalMoves.canEndRound() || !legalMoves.canAttack()) {
-            return false;
-        }
-        List<AttackEntry> table = game.getTable();
-        return !table.isEmpty()
-                && (game.isTakingCardsInProgress() || table.stream().allMatch(AttackEntry::isDefended));
-    }
-
-    private Decision heuristic(Game game, String playerId, ViewerLegalMoves legalMoves, String reason) {
-        return Decision.of(fallback.choose(game, playerId, legalMoves), "heuristic", reason);
-    }
-
-    private static Set<String> undefendedAttacks(Game game, ViewerLegalMoves legalMoves) {
-        Set<String> attacks = new LinkedHashSet<>();
-        for (AttackEntry entry : game.getTable()) {
-            if (!entry.isDefended()) {
-                attacks.add(entry.getAttackCard().code());
-            }
-        }
-        attacks.addAll(legalMoves.defensesByAttackCard().keySet());
-        return attacks;
+    protected boolean configured() {
+        return enabled && !apiKey.isBlank();
     }
 
     /* ------------------------------------------------------------------ model call */
 
-    /**
-     * One model round trip: {@code completed} means an HTTP 2xx response arrived, and
-     * {@code breakerOutcome} is what the call says about the service's health.
-     */
-    private record ModelCall(boolean completed, GeminiResponse response, LlmCircuitBreaker.Outcome breakerOutcome) {
-    }
-
-    private ModelCall callModel(Game game, String playerId, ViewerLegalMoves legalMoves, int optionCount) {
+    @Override
+    protected ModelCall callModel(Game game, String playerId, ViewerLegalMoves legalMoves, int optionCount) {
         String level = thinkingConfigSupported ? thinkingLevelFor(optionCount) : null;
         String body;
         try {
@@ -283,7 +156,7 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         } catch (IOException | RuntimeException ex) {
             log.warn("autoplay_llm_request_failed code={} player={} error={}", game.getCode(), playerId,
                     ex.getClass().getSimpleName());
-            return new ModelCall(false, GeminiResponse.EMPTY, LlmCircuitBreaker.Outcome.NEUTRAL);
+            return ModelCall.failed(LlmCircuitBreaker.Outcome.NEUTRAL);
         }
         long startedAt = nanoClock.getAsLong();
         GeminiTransport.HttpResult result = null;
@@ -314,12 +187,9 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
             }
         }
         logCall(game, playerId, level, latencyMs, result, response, error);
-        return new ModelCall(result != null && result.successful(), response, outcome);
-    }
-
-    /** Package-private for tests. */
-    LlmCircuitBreaker.State circuitState() {
-        return circuitBreaker.state();
+        return result != null && result.successful()
+                ? ModelCall.answered(outcome, response.answer(), response.thoughts())
+                : ModelCall.failed(outcome);
     }
 
     /** Decisions with at most two legal options (one card vs pass, one defence vs take) think less. */
@@ -413,32 +283,8 @@ public class GeminiAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
                 orDash(response.finishReason()), error, errorDetail);
     }
 
-    private void logStrategy(Game game, String playerId, GeminiAnswer answer, GeminiResponse response) {
-        if (!log.isDebugEnabled()) {
-            return;
-        }
-        log.debug("autoplay_llm_strategy code={} player={} strategy=\"{}\" thoughts=\"{}\"",
-                game.getCode(), playerId, sanitize(answer.strategy()), sanitize(String.join(" ", response.thoughts())));
-    }
-
-    /** One line, bounded, quote-safe, and never containing the API key. */
-    private String sanitize(String text) {
-        if (text == null) {
-            return "";
-        }
-        String cleaned = text;
-        if (!apiKey.isBlank()) {
-            cleaned = cleaned.replace(apiKey, "[redacted]");
-        }
-        cleaned = cleaned.replaceAll("\\p{Cntrl}+", " ").replace('"', '\'').trim();
-        return cleaned.length() > LOG_TEXT_LIMIT ? cleaned.substring(0, LOG_TEXT_LIMIT) + "..." : cleaned;
-    }
-
-    private static String actionType(AutoPlayAction action) {
-        return action == null ? "none" : action.type().name();
-    }
-
-    private static String orDash(String value) {
-        return value == null || value.isBlank() ? "-" : value;
+    @Override
+    protected String redact(String text) {
+        return apiKey.isBlank() ? text : text.replace(apiKey, "[redacted]");
     }
 }

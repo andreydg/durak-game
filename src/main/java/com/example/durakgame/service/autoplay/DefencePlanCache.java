@@ -5,7 +5,7 @@ import com.example.durakgame.model.Card;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.Player;
 import com.example.durakgame.model.ViewerLegalMoves;
-import com.example.durakgame.service.autoplay.GeminiAnswer.DefencePair;
+import com.example.durakgame.service.autoplay.MoveAnswer.DefencePair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

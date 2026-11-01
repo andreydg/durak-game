@@ -26,6 +26,18 @@ set -euo pipefail
 #   GEMINI_SECRET_PROJECT=my-secret-project (defaults to PROJECT_ID)
 #   GEMINI_SECRET_VERSION=latest
 #   AUTOPLAY_GEMINI_MODEL=gemini-3.8-flash
+#   AUTOPLAY_PROVIDER=gemini (or anthropic: Claude plays the bots)
+#   AUTOPLAY_ANTHROPIC_ORGANIZATION_ID, AUTOPLAY_ANTHROPIC_WORKSPACE_ID,
+#   AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID, AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID
+#                            (Claude's workload identity federation, from the Claude Console: identifiers,
+#                             not credentials)
+#   AUTOPLAY_ANTHROPIC_INFERENCE_GEO=global (or us)
+#                            (Each AUTOPLAY_PROVIDER/AUTOPLAY_ANTHROPIC_* variable is set on the service only
+#                             when given; one left unset keeps the service's current value. Set to the
+#                             empty string, an AUTOPLAY_ANTHROPIC_* variable is set empty on the service:
+#                             an empty geo sends no inference_geo, an empty workspace suits a rule that
+#                             names a single workspace, and an empty organization, service account or rule
+#                             leaves Claude unconfigured. AUTOPLAY_PROVIDER must be gemini or anthropic.)
 #   RUNTIME_SERVICE_ACCOUNT=service-account@project.iam.gserviceaccount.com
 #   CONCURRENCY=200          (max concurrent requests on the single instance; each open tab holds a websocket)
 #   REQUEST_TIMEOUT=3600     (seconds; Cloud Run closes websockets at this limit, default would be 300)
@@ -52,6 +64,34 @@ MIN_INSTANCES="${MIN_INSTANCES:-0}"
 LOG_FORMATTER="${LOG_FORMATTER:-com.example.durakgame.logging.CloudLoggingJsonFormatter}"
 GCLOUD_BIN="${GCLOUD_BIN:-gcloud}"
 DEPLOY_ONLY="${DEPLOY_ONLY:-false}"
+
+# Settings the service keeps from one revision to the next unless they are given here. Unset keeps
+# the service's value; the empty string sets it empty, which is not the same: the application's
+# default applies only to a variable the service does not have.
+ENV_VARS="AUTOPLAY_GEMINI_MODEL=${AUTOPLAY_GEMINI_MODEL},LOGGING_STRUCTURED_FORMAT_CONSOLE=${LOG_FORMATTER}"
+if [[ -n "${AUTOPLAY_PROVIDER+set}" ]]; then
+  # Any other value, the empty string included, would stop the new revision from starting.
+  case "$(printf '%s' "${AUTOPLAY_PROVIDER}" | tr '[:upper:]' '[:lower:]')" in
+    gemini | anthropic) ;;
+    *)
+      echo "Error: AUTOPLAY_PROVIDER must be gemini or anthropic; leave it unset to keep the service's provider." >&2
+      exit 1
+      ;;
+  esac
+fi
+for name in AUTOPLAY_PROVIDER AUTOPLAY_ANTHROPIC_ORGANIZATION_ID AUTOPLAY_ANTHROPIC_WORKSPACE_ID \
+    AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID AUTOPLAY_ANTHROPIC_INFERENCE_GEO; do
+  if [[ -z "${!name+set}" ]]; then
+    continue
+  fi
+  value="${!name}"
+  # Ids, a provider and a geo: nothing that could split the --update-env-vars list.
+  if [[ -n "${value}" && ! "${value}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "Error: ${name} may only contain letters, digits, '.', '_' and '-'." >&2
+    exit 1
+  fi
+  ENV_VARS+=",${name}=${value}"
+done
 
 PREBUILT_IMAGE="${IMAGE:-}"
 IMAGE="${PREBUILT_IMAGE:-${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${TAG}}"
@@ -101,6 +141,7 @@ echo "==> Region: ${REGION}"
 echo "==> Service: ${SERVICE}"
 echo "==> Image: ${IMAGE}"
 echo "==> Gemini model: ${AUTOPLAY_GEMINI_MODEL}"
+echo "==> Bot provider: ${AUTOPLAY_PROVIDER:-kept from the current service (gemini when never set)}"
 if [[ "${DEPLOY_ONLY}" == "true" ]]; then
   echo "==> Gemini secret: kept from the current service"
 else
@@ -200,7 +241,7 @@ DEPLOY_ARGS=(
   --memory 512Mi
   --cpu 1
   --service-account "${RUNTIME_SERVICE_ACCOUNT}"
-  --update-env-vars "AUTOPLAY_GEMINI_MODEL=${AUTOPLAY_GEMINI_MODEL},LOGGING_STRUCTURED_FORMAT_CONSOLE=${LOG_FORMATTER}"
+  --update-env-vars "${ENV_VARS}"
   --project "${PROJECT_ID}"
 )
 
