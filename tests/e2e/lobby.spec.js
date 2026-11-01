@@ -289,6 +289,7 @@ test.describe("Lobby & room creation", () => {
         const otherPage = await otherContext.newPage();
         await otherPage.goto("/");
         await expect(otherPage.locator("#lobbyGameList")).toContainText(code, { timeout: 15_000 });
+        await expect(otherPage.locator("#lobbyOpenTables")).toBeVisible();
         await otherContext.close();
     });
 

@@ -24,6 +24,7 @@ export const el = {
     playerNameInput: byId("playerName"),
     joinHint: byId("joinHint"),
     joinBtn: byId("joinBtn"),
+    lobbyOpenTables: byId("lobbyOpenTables"),
     lobbyGameList: byId("lobbyGameList"),
 
     gameView: byId("gameView"),
