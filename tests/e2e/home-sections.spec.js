@@ -119,4 +119,33 @@ test.describe("Home page sections", () => {
         await page.keyboard.press("Enter");
         await expect(about).toHaveJSProperty("open", true);
     });
+
+    for (const width of [320, 375]) {
+        test(`a long name in Open tables wraps beside Join at ${width}px`, async ({page}) => {
+            // Names allow 24 characters and need no spaces. The document width alone misses an
+            // overlap (it stays at the viewport width while the name runs underneath Join), so
+            // compare where the rendered text ends with where the button starts.
+            const longName = {code: "LNGNM2", playerNames: ["AlexandertheGreatAndMore"], playerCount: 1, maxPlayers: 4};
+            await page.setViewportSize({width, height: 740});
+            await routeLobbies(page, {current: [longName, table]});
+            await page.goto("/");
+            await expect(page.locator(`.lobby-list-join[data-code="${longName.code}"]`)).toBeVisible();
+
+            const rows = await page.locator("#lobbyGameList .lobby-list-item").evaluateAll(items => items.map(item => {
+                const meta = item.querySelector(".lobby-list-meta");
+                const text = document.createRange();
+                text.selectNodeContents(meta);
+                return {
+                    textRight: text.getBoundingClientRect().right,
+                    joinLeft: item.querySelector(".lobby-list-join").getBoundingClientRect().left,
+                    overflow: meta.scrollWidth - meta.clientWidth
+                };
+            }));
+            expect(rows).toHaveLength(2);
+            for (const row of rows) {
+                expect(row.textRight).toBeLessThanOrEqual(row.joinLeft);
+                expect(row.overflow).toBeLessThanOrEqual(0);
+            }
+        });
+    }
 });
