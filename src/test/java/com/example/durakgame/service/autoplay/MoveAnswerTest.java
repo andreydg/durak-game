@@ -11,7 +11,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-class GeminiAnswerTest {
+class MoveAnswerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final ViewerLegalMoves ATTACKER_MOVES = new ViewerLegalMoves(
@@ -32,7 +32,7 @@ class GeminiAnswerTest {
 
     private AutoPlayAction resolve(String json, ViewerLegalMoves moves) throws Exception {
         Set<String> undefended = Set.copyOf(moves.defensesByAttackCard().keySet());
-        return new GeminiAnswer(objectMapper.readTree(json)).resolve(moves, undefended);
+        return new MoveAnswer(objectMapper.readTree(json)).resolve(moves, undefended);
     }
 
     @Test
@@ -107,22 +107,22 @@ class GeminiAnswerTest {
     @Test
     void readsStructuredAndFreeTextDefencePlans() throws Exception {
         Set<String> undefended = Set.of("7H", "9C");
-        GeminiAnswer structured = new GeminiAnswer(objectMapper.readTree(
+        MoveAnswer structured = new MoveAnswer(objectMapper.readTree(
                 "{\"defensePlan\":[{\"attackCardCode\":\"7h\",\"cardCode\":\"KH\"},{\"attack\":\"9C\",\"defense\":\"8S\"}]}"));
-        assertEquals(List.of(new GeminiAnswer.DefencePair("7H", "KH"), new GeminiAnswer.DefencePair("9C", "8S")),
+        assertEquals(List.of(new MoveAnswer.DefencePair("7H", "KH"), new MoveAnswer.DefencePair("9C", "8S")),
                 structured.defencePlan(undefended));
 
-        GeminiAnswer map = new GeminiAnswer(objectMapper.readTree("{\"defensePlan\":{\"7H\":\"KH\",\"9C\":\"8S\"}}"));
+        MoveAnswer map = new MoveAnswer(objectMapper.readTree("{\"defensePlan\":{\"7H\":\"KH\",\"9C\":\"8S\"}}"));
         assertEquals(structured.defencePlan(undefended), map.defencePlan(undefended));
 
-        GeminiAnswer text = new GeminiAnswer(objectMapper.readTree(
+        MoveAnswer text = new MoveAnswer(objectMapper.readTree(
                 "{\"defensePlan\":\"KH beats 7H, then 9C with 8S as planned\"}"));
         assertEquals(structured.defencePlan(undefended), text.defencePlan(undefended));
     }
 
     @Test
     void describesTheRawAnswerForLogsWithoutUnsafeCharacters() throws Exception {
-        GeminiAnswer answer = new GeminiAnswer(objectMapper.readTree(
+        MoveAnswer answer = new MoveAnswer(objectMapper.readTree(
                 "{\"type\":\"DEFEND\\nFAKE=1\",\"cardCode\":\"6c\",\"attackCardCode\":\"7 h\"}"));
 
         assertEquals("DEFENDFAKE1/6c/7h", answer.describe());

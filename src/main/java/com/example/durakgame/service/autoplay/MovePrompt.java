@@ -21,13 +21,14 @@ import java.util.TreeMap;
 /**
  * Builds the model prompt. Everything that does not change between turns (rules, strategy, answer
  * format) is a constant prefix, byte for byte, and all per-turn data comes last as one JSON object,
- * so Gemini's implicit prompt caching can reuse the prefix.
+ * so the provider's prompt cache can reuse the prefix (Gemini caches implicitly; Claude's request
+ * marks the end of {@link #userPrefix()} as its cache breakpoint).
  *
  * <p>The per-turn state holds only what a human in the bot's seat can see. Seats are labelled
  * relative to the bot ("you", then P2, P3, P4 in turn order); player names and ids are never sent,
  * which also keeps player-chosen names from being injected into the prompt.
  */
-final class GeminiPrompt {
+final class MovePrompt {
     static final String SELF = "you";
 
     static final String SYSTEM_INSTRUCTION = """
@@ -135,7 +136,7 @@ final class GeminiPrompt {
     /**
      * @param reasoningBudgetInstruction optional static instruction (for Gemma models); empty for none
      */
-    GeminiPrompt(ObjectMapper objectMapper, boolean publicCardMemoryEnabled, String reasoningBudgetInstruction) {
+    MovePrompt(ObjectMapper objectMapper, boolean publicCardMemoryEnabled, String reasoningBudgetInstruction) {
         this.objectMapper = objectMapper;
         this.publicCardMemoryEnabled = publicCardMemoryEnabled;
         String budget = reasoningBudgetInstruction == null || reasoningBudgetInstruction.isBlank()

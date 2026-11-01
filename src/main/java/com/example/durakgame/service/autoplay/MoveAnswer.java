@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  * inferred (a defender's same-rank "attack" is a transfer, a missing defence target comes from the
  * model's own plan); anything else that is not legal is rejected rather than repaired.
  */
-final class GeminiAnswer {
+final class MoveAnswer {
     /** Upper-case card codes in free text; the look-arounds keep words such as "was" from matching. */
     private static final Pattern CARD_IN_TEXT = Pattern.compile("(?<![A-Za-z0-9])(10|[6-9JQKA])([CDHS])(?![A-Za-z0-9])");
     private static final int LOG_FIELD_LIMIT = 12;
@@ -30,7 +30,7 @@ final class GeminiAnswer {
 
     private final JsonNode node;
 
-    GeminiAnswer(JsonNode node) {
+    MoveAnswer(JsonNode node) {
         this.node = node;
     }
 
