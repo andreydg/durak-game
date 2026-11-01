@@ -163,7 +163,7 @@ The request sends the rules as `system`, then one user message of two text block
 - `AUTOPLAY_ANTHROPIC_EFFORT` (`medium` by default; `low`, `medium`, `high`, `xhigh` or `max`; decisions with three or more legal options)
 - `AUTOPLAY_ANTHROPIC_SIMPLE_EFFORT` (`low` by default; decisions with at most two legal options; empty means the same as above)
 - `AUTOPLAY_ANTHROPIC_MAX_TOKENS` (`8192` by default; adaptive thinking counts against it)
-- `AUTOPLAY_ANTHROPIC_INFERENCE_GEO` (`global` by default at list price, or `us` to keep inference in the United States at 1.1x; empty leaves the field out)
+- `AUTOPLAY_ANTHROPIC_INFERENCE_GEO` (`global` by default at list price, or `us` to keep inference in the United States at 1.1x; set but empty leaves the field out)
 - `AUTOPLAY_ANTHROPIC_CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `AUTOPLAY_ANTHROPIC_CIRCUIT_BREAKER_COOLDOWN_MS`, `AUTOPLAY_ANTHROPIC_MAX_CALLS_PER_MINUTE` (`3`, `60000` and `120` by default, as for Gemini)
 
 An effort or geo the API would reject, or an empty model, stops the service from starting, so a bad value leaves the previous revision serving.
@@ -189,7 +189,7 @@ Switching over:
 2. Once it says `READY`, set `AUTOPLAY_PROVIDER=anthropic`. The configuration line `autoplay_claude_config` is logged at WARN if the switch happened without the ids, which leaves every bot on the heuristic.
 3. Watch `latencyMs`, `error=timeout` and `cachedTokens` in the `autoplay_llm_call` lines. If moves take too long, lower `AUTOPLAY_ANTHROPIC_EFFORT` or raise `AUTOPLAY_REQUEST_TIMEOUT_MS`. Setting `AUTOPLAY_PROVIDER=gemini` switches back.
 
-The deploy script passes any of these settings it is given (`AUTOPLAY_PROVIDER` and the `AUTOPLAY_ANTHROPIC_*` ids and geo) to the service, and a setting it is not given keeps its current value, so releases from main keep them.
+The deploy script passes any of these settings it is given (`AUTOPLAY_PROVIDER` and the `AUTOPLAY_ANTHROPIC_*` ids and geo) to the service, and a setting it is not given keeps its current value, so releases from main keep them. A setting given as the empty string is set empty, which differs from leaving it out: an empty geo sends no `inference_geo`, while a service without the variable uses the default, `global`. An empty workspace suits a rule that names a single workspace, and an empty organization, service account or rule leaves Claude unconfigured. `AUTOPLAY_PROVIDER` must be `gemini` or `anthropic`; the script refuses anything else, the empty string included, before it runs gcloud.
 
 ## Deploy to Google Cloud Run
 
@@ -231,7 +231,7 @@ Optional environment variables:
 - `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
 - `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
 - `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.8-flash`)
-- `AUTOPLAY_PROVIDER`, `AUTOPLAY_ANTHROPIC_ORGANIZATION_ID`, `AUTOPLAY_ANTHROPIC_WORKSPACE_ID`, `AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID`, `AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID`, `AUTOPLAY_ANTHROPIC_INFERENCE_GEO` (each is set on the service only when given; one left unset keeps the service's current value, see [Claude](#claude-on-anthropics-api))
+- `AUTOPLAY_PROVIDER`, `AUTOPLAY_ANTHROPIC_ORGANIZATION_ID`, `AUTOPLAY_ANTHROPIC_WORKSPACE_ID`, `AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID`, `AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID`, `AUTOPLAY_ANTHROPIC_INFERENCE_GEO` (each is set on the service only when given, and the empty string sets it empty; one left unset keeps the service's current value. `AUTOPLAY_PROVIDER` must be `gemini` or `anthropic`. See [Claude](#claude-on-anthropics-api))
 - `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
 - `CONCURRENCY` (default `200`; every open tab holds a websocket that counts against it)
 - `REQUEST_TIMEOUT` (default `3600` seconds; Cloud Run closes websockets at this limit)

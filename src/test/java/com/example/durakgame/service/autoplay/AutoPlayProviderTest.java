@@ -3,9 +3,14 @@ package com.example.durakgame.service.autoplay;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.env.MutablePropertySources;
+import org.springframework.core.env.PropertiesPropertySource;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Map;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -60,11 +65,7 @@ class AutoPlayProviderTest {
 
     @Test
     void productionStartsOnGeminiWithClaudeReadyToSwitchTo() throws IOException {
-        Properties properties = new Properties();
-        try (InputStream input = getClass().getResourceAsStream("/application.properties")) {
-            assertNotNull(input, "application.properties must be available on the test classpath");
-            properties.load(input);
-        }
+        Properties properties = applicationProperties();
 
         assertEquals("${AUTOPLAY_PROVIDER:gemini}", properties.getProperty("autoplay.provider"));
         assertEquals("${AUTOPLAY_ANTHROPIC_MODEL:claude-opus-5-5}", properties.getProperty("autoplay.anthropic.model"));
@@ -84,5 +85,37 @@ class AutoPlayProviderTest {
         assertEquals("low", ClaudeSettings.DEFAULT_SIMPLE_EFFORT);
         assertEquals(8192, ClaudeSettings.DEFAULT_MAX_TOKENS);
         assertEquals("global", ClaudeSettings.DEFAULT_INFERENCE_GEO);
+    }
+
+    /**
+     * What the deploy script relies on when it sets a variable to the empty string: the service then
+     * reads it as empty (no inference_geo field, no workspace_id), and only a variable it does not
+     * have falls back to the default.
+     */
+    @Test
+    void anEmptyVariableIsNotAMissingOne() throws IOException {
+        StandardEnvironment environment = new StandardEnvironment();
+        MutablePropertySources sources = environment.getPropertySources();
+        sources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+        sources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
+        sources.addLast(new PropertiesPropertySource("application", applicationProperties()));
+        sources.addFirst(new SystemEnvironmentPropertySource("service", Map.of(
+                "AUTOPLAY_ANTHROPIC_INFERENCE_GEO", "", "AUTOPLAY_ANTHROPIC_WORKSPACE_ID", "")));
+
+        assertEquals("", environment.getProperty("autoplay.anthropic.inference-geo"));
+        assertEquals("", environment.getProperty("autoplay.anthropic.workspace-id"));
+
+        sources.remove("service");
+        assertEquals("global", environment.getProperty("autoplay.anthropic.inference-geo"));
+        assertEquals("", environment.getProperty("autoplay.anthropic.workspace-id"));
+    }
+
+    private Properties applicationProperties() throws IOException {
+        Properties properties = new Properties();
+        try (InputStream input = getClass().getResourceAsStream("/application.properties")) {
+            assertNotNull(input, "application.properties must be available on the test classpath");
+            properties.load(input);
+        }
+        return properties;
     }
 }

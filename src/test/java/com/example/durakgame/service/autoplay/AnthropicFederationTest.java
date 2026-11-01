@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -38,6 +39,7 @@ import java.util.function.LongSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -61,6 +63,10 @@ class AnthropicFederationTest {
     private volatile String identityQuery;
     private volatile CountDownLatch tokenGate = new CountDownLatch(0);
     private final CountDownLatch tokenEntered = new CountDownLatch(1);
+    /** The stalled Messages reply: counted down once its headers and first bytes are out. */
+    private final CountDownLatch stalledBodyStarted = new CountDownLatch(1);
+    /** Holds back the rest of that reply until the test releases it. */
+    private final CountDownLatch stalledBodyGate = new CountDownLatch(1);
     private final AtomicInteger identityCalls = new AtomicInteger();
     private HttpServer server;
     private ExecutorService serverThreads;
@@ -96,12 +102,26 @@ class AnthropicFederationTest {
             messageHeaders.add(exchange.getRequestHeaders());
             messageBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             Reply next = messageReplies.poll();
-            if (next != null && next.status() == 0) {
-                sleep(Duration.ofSeconds(2));
-                next = new Reply(200, "{}");
-            }
             reply(exchange, next != null ? next : new Reply(200, "{\"type\":\"message\"}"),
                     Map.of("request-id", "req_0123"));
+        });
+        server.createContext("/v1/stalled-messages", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            byte[] head = "{\"type\":\"message\",\"content\":[".getBytes(StandardCharsets.UTF_8);
+            byte[] rest = "]}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("content-type", "application/json");
+            exchange.sendResponseHeaders(200, head.length + rest.length);
+            OutputStream body = exchange.getResponseBody();
+            body.write(head);
+            body.flush();
+            stalledBodyStarted.countDown();
+            try {
+                stalledBodyGate.await(20, TimeUnit.SECONDS);
+                body.write(rest);
+                body.close();
+            } catch (IOException | InterruptedException abandoned) {
+                // The caller gave up on the reply; there is nobody left to finish it for.
+            }
         });
         server.start();
         federationLogger = (Logger) LoggerFactory.getLogger(AnthropicFederation.class);
@@ -114,6 +134,7 @@ class AnthropicFederationTest {
     void stop() {
         federationLogger.detachAppender(logs);
         tokenGate.countDown();
+        stalledBodyGate.countDown();
         server.stop(0);
         serverThreads.shutdownNow();
     }
@@ -330,17 +351,28 @@ class AnthropicFederationTest {
         assertTrue(messageBodies.isEmpty());
     }
 
+    /**
+     * The JDK's request timeout ends once the response headers arrive; the caller's budget must also
+     * cover a body that stops coming after them.
+     */
     @Test
-    void theTimeoutCoversTheWholeResponse() {
-        AnthropicFederation federation = new AnthropicFederation(IDS, identityUri(), tokenUri(),
-                HttpClient.newHttpClient(), System::nanoTime, Duration.ofSeconds(5), Duration.ofSeconds(2));
-        AnthropicMessagesTransport transport = transport(federation, System::nanoTime);
-        messageReplies.add(new Reply(0, ""));
-        long started = System.nanoTime();
+    void theTimeoutCoversABodyThatStallsAfterTheHeaders() throws Exception {
+        AnthropicMessagesTransport transport = AnthropicMessagesTransport.federated(federation(IDS),
+                base().resolve("/v1/stalled-messages"), HttpClient.newHttpClient(), System::nanoTime);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            Future<AnthropicMessagesTransport.HttpResult> call = caller.submit(
+                    () -> transport.post("{}", Duration.ofSeconds(1)));
+            assertTrue(stalledBodyStarted.await(10, TimeUnit.SECONDS), "the headers and first bytes were sent");
 
-        assertThrows(HttpTimeoutException.class, () -> transport.post("{}", Duration.ofMillis(500)));
-
-        assertTrue(System.nanoTime() - started < Duration.ofMillis(1900).toNanos(), "the slow reply was not awaited");
+            ExecutionException failure = assertThrows(ExecutionException.class, () -> call.get(10, TimeUnit.SECONDS),
+                    "the call ends within its one-second budget, not when the body would");
+            assertInstanceOf(HttpTimeoutException.class, failure.getCause());
+            assertEquals(1, stalledBodyGate.getCount(), "the rest of the body was still held back");
+        } finally {
+            stalledBodyGate.countDown();
+            caller.shutdownNow();
+        }
     }
 
     /* ------------------------------------------------------------------ helpers */
@@ -388,14 +420,6 @@ class AnthropicFederationTest {
         exchange.sendResponseHeaders(reply.status(), bytes.length == 0 ? -1 : bytes.length);
         try (OutputStream body = exchange.getResponseBody()) {
             body.write(bytes);
-        }
-    }
-
-    private static void sleep(Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
         }
     }
 }

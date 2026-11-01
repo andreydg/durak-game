@@ -80,10 +80,23 @@ assert_not_contains() {
   fi
 }
 
+assert_line() {
+  local file="$1"
+  local expected="$2"
+  grep -Fx -- "${expected}" "${file}" >/dev/null || fail "${file} did not contain the line: ${expected}"
+}
+
+# Each run starts with the optional service settings unset, whatever the caller's environment holds.
 run_deploy() {
   local calls_file="$1"
   shift
   env \
+    -u AUTOPLAY_PROVIDER \
+    -u AUTOPLAY_ANTHROPIC_ORGANIZATION_ID \
+    -u AUTOPLAY_ANTHROPIC_WORKSPACE_ID \
+    -u AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID \
+    -u AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID \
+    -u AUTOPLAY_ANTHROPIC_INFERENCE_GEO \
     CALLS_FILE="${calls_file}" \
     GCLOUD_BIN="${FAKE_GCLOUD}" \
     PROJECT_ID="andreyg-main" \
@@ -275,5 +288,113 @@ assert_contains "${TMP_DIR}/bad-claude.err" "AUTOPLAY_ANTHROPIC_FEDERATION_RULE_
 if [[ -s "${BAD_CLAUDE_CALLS}" ]]; then
   fail "a rejected value still reached gcloud"
 fi
+
+# Unset keeps the service's value, the empty string sets it empty. service_env_after prints the
+# service's variables after a recorded deploy: the "NAME=value" lines in $1, with every
+# --update-env-vars list in $2 applied over them, as Cloud Run applies it.
+service_env_after() {
+  awk -F'\t' '
+    function set(pair,    name) {
+      name = substr(pair, 1, index(pair, "=") - 1)
+      if (!(name in env)) order[++count] = name
+      env[name] = substr(pair, index(pair, "=") + 1)
+    }
+    FNR == NR { set($0); next }
+    $1 == "run" && $2 == "deploy" {
+      for (i = 3; i < NF; i++) {
+        if ($i == "--update-env-vars") {
+          pairs = split($(i + 1), list, ",")
+          for (j = 1; j <= pairs; j++) set(list[j])
+        }
+      }
+    }
+    END { for (i = 1; i <= count; i++) print order[i] "=" env[order[i]] }
+  ' "$1" "$2"
+}
+
+EXISTING_ENV="${TMP_DIR}/existing.env"
+cat >"${EXISTING_ENV}" <<'ENV'
+AUTOPLAY_PROVIDER=anthropic
+AUTOPLAY_ANTHROPIC_ORGANIZATION_ID=org-existing
+AUTOPLAY_ANTHROPIC_WORKSPACE_ID=wrkspc_existing
+AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID=svac_existing
+AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID=fdrl_existing
+AUTOPLAY_ANTHROPIC_INFERENCE_GEO=us
+ENV
+
+# A release that names none of them (the workflow's) keeps every one.
+service_env_after "${EXISTING_ENV}" "${DEPLOY_ONLY_CALLS}" >"${TMP_DIR}/kept.env"
+while IFS= read -r line; do
+  assert_line "${TMP_DIR}/kept.env" "${line}"
+done <"${EXISTING_ENV}"
+
+# An empty workspace (for a rule that names a single workspace) and an empty geo (no inference_geo
+# field; removing the variable would bring back the application's default, global) are set empty.
+CLEARED_CALLS="${TMP_DIR}/cleared.calls"
+run_deploy "${CLEARED_CALLS}" \
+  DEPLOY_ONLY="true" \
+  IMAGE="us-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123" \
+  AUTOPLAY_ANTHROPIC_WORKSPACE_ID="" \
+  AUTOPLAY_ANTHROPIC_INFERENCE_GEO="" \
+  >"${TMP_DIR}/cleared.out"
+assert_contains "${CLEARED_CALLS}" $',LOGGING_STRUCTURED_FORMAT_CONSOLE=com.example.durakgame.logging.CloudLoggingJsonFormatter,AUTOPLAY_ANTHROPIC_WORKSPACE_ID=,AUTOPLAY_ANTHROPIC_INFERENCE_GEO=\t'
+service_env_after "${EXISTING_ENV}" "${CLEARED_CALLS}" >"${TMP_DIR}/cleared.env"
+for line in "AUTOPLAY_ANTHROPIC_WORKSPACE_ID=" "AUTOPLAY_ANTHROPIC_INFERENCE_GEO=" \
+    "AUTOPLAY_PROVIDER=anthropic" "AUTOPLAY_ANTHROPIC_ORGANIZATION_ID=org-existing" \
+    "AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID=svac_existing" "AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID=fdrl_existing"; do
+  assert_line "${TMP_DIR}/cleared.env" "${line}"
+done
+
+# The other federation ids clear the same way, which leaves Claude unconfigured.
+IDS_CLEARED_CALLS="${TMP_DIR}/ids-cleared.calls"
+run_deploy "${IDS_CLEARED_CALLS}" \
+  DEPLOY_ONLY="true" \
+  AUTOPLAY_ANTHROPIC_ORGANIZATION_ID="" \
+  AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID="" \
+  AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID="" \
+  >"${TMP_DIR}/ids-cleared.out"
+assert_contains "${IDS_CLEARED_CALLS}" $',AUTOPLAY_ANTHROPIC_ORGANIZATION_ID=,AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID=,AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID=\t'
+service_env_after "${EXISTING_ENV}" "${IDS_CLEARED_CALLS}" >"${TMP_DIR}/ids-cleared.env"
+for line in "AUTOPLAY_ANTHROPIC_ORGANIZATION_ID=" "AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID=" \
+    "AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID=" "AUTOPLAY_ANTHROPIC_WORKSPACE_ID=wrkspc_existing" \
+    "AUTOPLAY_ANTHROPIC_INFERENCE_GEO=us"; do
+  assert_line "${TMP_DIR}/ids-cleared.env" "${line}"
+done
+
+# A provider is gemini or anthropic in any case, as the service reads it. Anything else, the empty
+# string included, is refused before gcloud runs instead of leaving the old provider in place.
+CASED_PROVIDER_CALLS="${TMP_DIR}/cased-provider.calls"
+run_deploy "${CASED_PROVIDER_CALLS}" DEPLOY_ONLY="true" AUTOPLAY_PROVIDER="Anthropic" >"${TMP_DIR}/cased-provider.out"
+assert_contains "${CASED_PROVIDER_CALLS}" $',AUTOPLAY_PROVIDER=Anthropic\t'
+provider_case=0
+for provider in "" "claude" " anthropic" "gemini,AUTOPLAY_ANTHROPIC_INFERENCE_GEO=us"; do
+  provider_case=$((provider_case + 1))
+  calls="${TMP_DIR}/bad-provider-${provider_case}.calls"
+  if run_deploy "${calls}" DEPLOY_ONLY="true" AUTOPLAY_PROVIDER="${provider}" \
+    >"${TMP_DIR}/bad-provider.out" 2>"${TMP_DIR}/bad-provider.err"; then
+    fail "deployment unexpectedly continued with AUTOPLAY_PROVIDER='${provider}'"
+  fi
+  assert_contains "${TMP_DIR}/bad-provider.err" "AUTOPLAY_PROVIDER must be gemini or anthropic"
+  if [[ -s "${calls}" ]]; then
+    fail "AUTOPLAY_PROVIDER='${provider}' still reached gcloud"
+  fi
+done
+
+# Nothing given can add or split assignments in the --update-env-vars list.
+injection_case=0
+for name in AUTOPLAY_ANTHROPIC_WORKSPACE_ID AUTOPLAY_ANTHROPIC_INFERENCE_GEO; do
+  for value in "x,AUTOPLAY_PROVIDER=gemini" "us=global" "wrk space" $'wrk\nAUTOPLAY_PROVIDER=gemini'; do
+    injection_case=$((injection_case + 1))
+    calls="${TMP_DIR}/injection-${injection_case}.calls"
+    if run_deploy "${calls}" DEPLOY_ONLY="true" "${name}=${value}" \
+      >"${TMP_DIR}/injection.out" 2>"${TMP_DIR}/injection.err"; then
+      fail "deployment unexpectedly continued with ${name}='${value}'"
+    fi
+    assert_contains "${TMP_DIR}/injection.err" "${name} may only contain"
+    if [[ -s "${calls}" ]]; then
+      fail "${name}='${value}' still reached gcloud"
+    fi
+  done
+done
 
 echo "Secret Manager deployment contract tests passed."
