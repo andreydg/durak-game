@@ -10,7 +10,7 @@ test.describe("Search discovery and rules content", () => {
         await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${canonicalOrigin}/`);
         await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", /two to four players/);
         await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", `${canonicalOrigin}/social-card.png`);
-        await expect(page.getByRole("heading", {name: "What is Durak"})).toBeVisible();
+        await expect(page.getByRole("heading", {name: "About Durak"})).toBeVisible();
         await expect(page.locator("#faq")).toHaveCount(0);
         await expect(page.locator('link[hreflang="ru"]')).toHaveCount(0);
 

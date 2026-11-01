@@ -72,6 +72,13 @@ el.joinForm.addEventListener("submit", async (event) => {
     await runAction("Join game", () => performJoin(null), el.joinBtn, {scope: "lobby"});
 });
 
+/* The shared name field belongs to neither form: Enter there joins once a room code is filled in. */
+el.hostNameInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing || el.hostNameInput.form || !el.gameCodeInput.value.trim()) return;
+    event.preventDefault();
+    el.joinBtn.click();
+});
+
 el.lobbyGameList?.addEventListener("click", (e) => {
     const btn = e.target.closest(".lobby-list-join");
     if (!btn || !el.lobbyGameList.contains(btn)) return;
@@ -179,7 +186,10 @@ Object.assign(window, {refreshGame, refreshLobbyLists, runAction, stopPolling});
             if (el.joinHint) {
                 el.joinHint.textContent = `Invite loaded for room ${invitedCode}. Add your name or join as a random guest.`;
             }
-            window.setTimeout(() => el.playerNameInput.focus(), 0);
+            const nameField = el.playerNameInput && el.playerNameInput.type !== "hidden"
+                ? el.playerNameInput
+                : el.hostNameInput;
+            window.setTimeout(() => nameField.focus(), 0);
         }
         render();
     }

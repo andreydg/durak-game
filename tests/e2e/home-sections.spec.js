@@ -98,29 +98,25 @@ test.describe("Home page sections", () => {
         await expect(notice).toHaveCount(0);
     });
 
-    test("What is Durak and Online play start collapsed and open on demand", async ({page}) => {
+    test("About Durak is the one guide on the page and opens on demand", async ({page}) => {
         await page.goto("/");
-        const intro = page.locator("details:has(#what-is-durak)");
-        const play = page.locator("details:has(#how-it-works)");
+        const about = page.locator("details:has(#what-is-durak)");
 
-        for (const section of [intro, play]) {
-            await expect(section).toHaveJSProperty("open", false);
-        }
-        await expect(page.getByRole("heading", {name: "What is Durak"})).toBeVisible();
-        await expect(page.getByRole("heading", {name: "Online play"})).toBeVisible();
+        await expect(page.locator("#lobbyView details")).toHaveCount(1);
+        await expect(about).toHaveJSProperty("open", false);
+        await expect(page.getByRole("heading", {name: "About Durak"})).toBeVisible();
         await expect(page.getByText("Durak (Дурак) is a fast card shedding game")).toBeHidden();
         await expect(page.getByRole("link", {name: "Read the complete Durak rules →"})).toBeHidden();
 
-        await intro.locator("summary").click();
-        await expect(intro).toHaveJSProperty("open", true);
-        await expect(page.getByText("Durak (Дурак) is a fast card shedding game")).toBeVisible();
-        await expect(play).toHaveJSProperty("open", false);
-
-        await play.locator("summary").focus();
-        await page.keyboard.press("Enter");
-        await expect(play).toHaveJSProperty("open", true);
+        await about.locator("summary").click();
+        await expect(about).toHaveJSProperty("open", true);
+        await expect(page.getByText("Durak (Дурак) is a fast card shedding game for 2–4 players")).toBeVisible();
         await expect(page.getByRole("link", {name: "Read the complete Durak rules →"})).toBeVisible();
+
+        await about.locator("summary").focus();
         await page.keyboard.press("Enter");
-        await expect(play).toHaveJSProperty("open", false);
+        await expect(about).toHaveJSProperty("open", false);
+        await page.keyboard.press("Enter");
+        await expect(about).toHaveJSProperty("open", true);
     });
 });

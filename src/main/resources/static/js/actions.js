@@ -177,7 +177,10 @@ export async function performJoin(roomCode) {
     if (!code) {
         throw new Error("That room code is not valid. Room codes have 6 letters and digits (no 0, 1, I or O).");
     }
-    const joined = await api(gamePath(code, "/join"), "POST", {playerName: el.playerNameInput.value.trim()});
+    // The page's one "Playing as" field; a page from the previous release has its own name field in
+    // the join form (hidden and empty on this one).
+    const playerName = el.playerNameInput?.value.trim() || el.hostNameInput.value.trim();
+    const joined = await api(gamePath(code, "/join"), "POST", {playerName});
     adoptSession(joined?.game, joined?.playerId, joined?.playerToken);
 }
 
