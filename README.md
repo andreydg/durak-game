@@ -135,6 +135,8 @@ Gemini 3 and newer keep their default sampling settings; `temperature: 0` is onl
 
 The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, other seats' hand sizes as the table shows them (exact below six, otherwise `6+`, the same for the take limit), whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so the provider's prompt cache can reuse the prefix (visible as `cachedTokens` in the logs): Gemini caches implicitly, and Claude's request marks the end of the instructions as its cache breakpoint.
 
+The instructions end with a strategy section about the whole game rather than the current bout. It covers trumps as the scarcest resource, what taking costs early compared with late, counting trumps, and planning for the endgame once the talon is empty. It presents these as trade-offs for the model to weigh, not fixed rules, so the bot can decide case by case when spending a trump is worth it.
+
 Each model call logs one line, and each bot decision logs one line:
 
 ```text
