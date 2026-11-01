@@ -306,13 +306,15 @@ export const defend = () => runAction("Defend", async () => {
 });
 
 /**
- * Drag card to battle: transfer first, then attack, then defend (against the pair it was dropped
- * on when it can beat that one, else the "Attack card to beat" menu's choice).
+ * Drag card to battle. Dropped on an attack card it can beat, the card defends that one; anywhere
+ * else the whole row applies: transfer first, then attack, then defend (against the "Attack card
+ * to beat" menu's choice).
  */
 export async function playCardToTable(cardCode, preferredAttackCard) {
     const game = state.game;
     if (!game || game.status !== "IN_PROGRESS" || !cardCode || isBusy() || state.seatInvalid) return;
-    const move = chooseDropAction(game.legalMoves, cardCode, [preferredAttackCard, el.defendTargetSelect.value]);
+    const move = chooseDropAction(game.legalMoves, cardCode, [preferredAttackCard, el.defendTargetSelect.value],
+        preferredAttackCard);
     if (move?.kind === "transfer") {
         await runAction("Transfer", playerAction("/transfer", {card: cardCode}));
     } else if (move?.kind === "attack") {
