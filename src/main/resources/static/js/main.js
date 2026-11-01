@@ -8,7 +8,7 @@
  *   lobby.js    Open tables                        sync.js    game refreshes, heartbeat, socket
  *   actions.js  user actions and seat lifecycle    main.js    this wiring
  */
-import {roomCodeFromSearch} from "./logic.js";
+import {chooseDropAction, roomCodeFromSearch} from "./logic.js";
 import {seat} from "./api.js";
 import {state} from "./state.js";
 import {el} from "./dom.js";
@@ -101,14 +101,41 @@ el.defendTargetSelect.addEventListener("change", () => {
     if (state.game) renderActionState(state.game);
 });
 
-/* Hand cards are dragged with HTML5 drag and drop onto the battle row (or onto one pair). */
+/*
+ * Hand cards are dragged with HTML5 drag and drop onto the battle row (or onto one pair). The
+ * outline shows what the drop will do, decided as playCardToTable decides it: the pair the card
+ * will defend, else the whole row for a transfer or attack. Dragover events can read a drag's
+ * types but not its data, so a drag from the hand also carries its card in a type of its own.
+ * Nothing is remembered between drags: a drag that started anywhere else (outside the hand or
+ * the page) has no such type, even if an earlier drag's card was removed before its drag ended.
+ */
+const HAND_CARD_TYPE = "application/x-durak-hand-card-";
+el.myHand.addEventListener("dragstart", (e) => {
+    const code = e.defaultPrevented ? "" : e.target.closest?.(".hand-card-btn")?.dataset.cardCode || "";
+    if (code) e.dataTransfer.setData(HAND_CARD_TYPE + code.toLowerCase(), code);
+});
+/** The hand card a drag carries, or "" for any other drag (browsers lower-case data types). */
+function draggedHandCard(dataTransfer) {
+    const type = Array.from(dataTransfer?.types || []).find(t => t.startsWith(HAND_CARD_TYPE));
+    return type ? type.slice(HAND_CARD_TYPE.length).toUpperCase() : "";
+}
 el.battleCards.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     const pair = e.target.closest(".battle-pair");
-    setBattlePairDropHover(pair);
-    /* Row highlight when not over a specific pair (attack / transfer onto open felt). */
-    el.battleCards.classList.toggle("battle-drop-target", !pair);
+    const card = draggedHandCard(e.dataTransfer);
+    if (!card) {
+        setBattlePairDropHover(pair);
+        el.battleCards.classList.toggle("battle-drop-target", !pair);
+        return;
+    }
+    const attackCard = pair?.dataset?.attackCard?.trim() || "";
+    const move = chooseDropAction(state.game?.legalMoves, card, [attackCard, el.defendTargetSelect.value], attackCard);
+    const defended = move?.kind === "defend"
+        ? [...el.battleCards.querySelectorAll(".battle-pair")].find(p => p.dataset.attackCard === move.target) || null
+        : null;
+    setBattlePairDropHover(defended);
+    el.battleCards.classList.toggle("battle-drop-target", Boolean(move) && !defended);
 });
 el.battleCards.addEventListener("dragleave", (e) => {
     if (e.relatedTarget && el.battleCards.contains(e.relatedTarget)) return;

@@ -985,16 +985,33 @@ describe("chooseDropAction", () => {
         defensesByAttackCard: { "7H": ["9H", "7C"], "8C": ["9H"] }
     };
 
-    it("transfers first, then attacks, then defends", () => {
+    it("on the open row, transfers first, then attacks, then defends", () => {
         expect(L.chooseDropAction(moves, "7C")).toEqual({ kind: "transfer" });
         expect(L.chooseDropAction(moves, "7D")).toEqual({ kind: "attack" });
         expect(L.chooseDropAction(moves, "9H")).toEqual({ kind: "defend", target: "7H" });
         expect(L.chooseDropAction({ ...moves, canTransfer: false }, "7C")).toEqual({ kind: "attack" });
     });
 
-    it("defends the pair the card was dropped on, else the menu's choice", () => {
+    it("defends the first preferred target it beats, else the first attack it beats", () => {
         expect(L.chooseDropAction(moves, "9H", ["8C", "7H"])).toEqual({ kind: "defend", target: "8C" });
         expect(L.chooseDropAction(moves, "9H", ["QQ", "8C"])).toEqual({ kind: "defend", target: "8C" });
+    });
+
+    it("defends the attack card it was dropped on when it beats it, even if it could transfer", () => {
+        // Hearts are trump: 6H can transfer the 6D (same rank) or beat it.
+        const sixes = { canTransfer: true, transferableCardCodes: ["6H"], canTake: true,
+            defensesByAttackCard: { "6D": ["6H", "7H", "KD"] } };
+        expect(L.chooseDropAction(sixes, "6H", ["6D"], "6D")).toEqual({ kind: "defend", target: "6D" });
+        expect(L.chooseDropAction(sixes, "6H", ["", "6D"])).toEqual({ kind: "transfer" });
+        expect(L.chooseDropAction(moves, "7C", ["7H"], "7H")).toEqual({ kind: "defend", target: "7H" });
+    });
+
+    it("uses the whole row when dropped on a pair it cannot beat", () => {
+        // 7C beats 7H but not 8C; a beaten or unknown pair is not a defence target either.
+        expect(L.chooseDropAction(moves, "7C", ["8C"], "8C")).toEqual({ kind: "transfer" });
+        expect(L.chooseDropAction({ ...moves, canTransfer: false }, "7C", ["8C"], "8C")).toEqual({ kind: "attack" });
+        expect(L.chooseDropAction({ ...moves, canTransfer: false, canAttack: false }, "7C", ["9D", ""], "9D"))
+            .toEqual({ kind: "defend", target: "7H" });
     });
 
     it("does nothing for cards without a legal move", () => {
