@@ -65,8 +65,11 @@ export async function refreshLobbyLists() {
                     ? document.activeElement.getAttribute("data-code")
                     : null;
                 el.lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : "";
-                // The home page shows Open tables only while there is a table to join.
-                el.lobbyOpenTables?.classList.toggle("hidden", rows.length === 0);
+                // The home page shows Open tables only while there is a table to join. The stylesheet
+                // derives that from the rendered list; the class covers browsers without :has(). The
+                // lookup covers a dom.js from the release before it exported the section.
+                const openTables = el.lobbyOpenTables || document.getElementById("lobbyOpenTables");
+                openTables?.classList.toggle("hidden", !el.lobbyGameList.querySelector(".lobby-list-join"));
                 if (focusedCode !== null) {
                     // The list was rebuilt under a keyboard user: keep them on the same table's
                     // Join button, or the first one, or the lobby heading once the section hides.
@@ -90,7 +93,12 @@ export async function refreshLobbyLists() {
         } catch (error) {
             const err = "<p class=\"lobby-list-empty muted\">Could not load open tables. Try refreshing the page.</p>";
             try {
-                if (el.lobbyGameList) el.lobbyGameList.innerHTML = err;
+                if (el.lobbyGameList) {
+                    // Open tables stays as it was: a shown section swaps its tables for the notice,
+                    // which the marker keeps visible; a hidden one stays hidden.
+                    const shown = el.lobbyGameList.querySelector(".lobby-list-join, [data-open-tables-notice]");
+                    el.lobbyGameList.innerHTML = shown ? err.replace("<p ", "<p data-open-tables-notice ") : err;
+                }
                 if (el.gameLobbyGameList) el.gameLobbyGameList.innerHTML = err;
             } catch (_) {
                 // A broken renderer must not keep the single-flight lock held forever.

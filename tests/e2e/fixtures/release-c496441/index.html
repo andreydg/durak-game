@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durak Online | Card Game for 2 to 4 Players</title>
+    <meta name="description" content="Durak (Дурак) is a card shedding game for two to four players. Play with friends in public or private rooms, or against Elektronik.">
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1">
+    <meta name="theme-color" content="#f4f4f4">
+    <link rel="canonical" href="https://durak.andreyg.com/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Durak Online">
+    <meta property="og:title" content="Durak Online | Card Game for 2 to 4 Players">
+    <meta property="og:description" content="A card shedding game for two to four players, with public rooms, private rooms, and an Elektronik opponent.">
+    <meta property="og:url" content="https://durak.andreyg.com/">
+    <meta property="og:image" content="https://durak.andreyg.com/social-card.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Durak Online card game">
+    <meta property="og:locale" content="en_US">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Durak Online">
+    <meta name="twitter:description" content="A card shedding game for two to four players, with public rooms, private rooms, and an Elektronik opponent.">
+    <meta name="twitter:image" content="https://durak.andreyg.com/social-card.png">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
+    <link rel="stylesheet" href="/css/app.css?v=c53a25b69832">
+    <link rel="stylesheet" href="/css/content.css?v=a48f0f18bf67">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebApplication",
+          "@id": "https://durak.andreyg.com/#game",
+          "name": "Durak Online",
+          "alternateName": "Дурак",
+          "url": "https://durak.andreyg.com/",
+          "description": "A browser-based Durak card game for two to four players, private groups, and play against Elektronik.",
+          "applicationCategory": "GameApplication",
+          "operatingSystem": "Any",
+          "browserRequirements": "Requires JavaScript and a modern web browser",
+          "inLanguage": "en"
+        }
+      ]
+    }
+    </script>
+</head>
+<body>
+<div id="appAlert" class="app-alert hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
+<div id="liveAnnouncer" class="visually-hidden" aria-live="polite"></div>
+<section id="reconnectView" class="panel reconnect-view hidden" role="status">
+    <p>Reconnecting to room <strong id="reconnectCode" class="room-code"></strong>…</p>
+</section>
+<section id="lobbyView" class="lobby-root">
+    <header class="lobby-hero">
+        <nav class="site-nav" aria-label="Site navigation">
+            <a href="/rules.html">How to play</a>
+        </nav>
+        <div class="lobby-brand">
+            <div class="lobby-card-deco" aria-hidden="true">
+                <span class="card-back-face"></span>
+                <span class="card-back-face"></span>
+                <span class="card-back-face"></span>
+            </div>
+            <div>
+                <h1 id="lobbyHeading" class="lobby-title" tabindex="-1">Durak <span>Дурак</span></h1>
+                <p class="lobby-tagline">Create a room or join with a code.</p>
+                <div class="lobby-suits" aria-hidden="true">♠ ♥ ♦ ♣</div>
+            </div>
+        </div>
+    </header>
+    <div class="lobby-forms">
+        <form id="hostForm" class="panel lobby-card">
+            <h2>Play or host</h2>
+            <button type="button" class="btn-primary lobby-quick-action" id="quickPlayBtn">Quick Play vs Elektronik</button>
+            <p class="lobby-choice-separator">or create a room</p>
+            <div class="lobby-field">
+                <label for="hostName">Your name <span class="lobby-optional">(optional)</span></label>
+                <input id="hostName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
+            </div>
+            <label class="lobby-privacy-option" for="publicRoom">
+                <input id="publicRoom" type="checkbox" checked>
+                <span><strong>List my room publicly</strong><small>Friends can join with the code.</small></span>
+            </label>
+            <div class="lobby-actions">
+                <button type="submit" class="btn-primary" id="createBtn">Create room</button>
+            </div>
+        </form>
+        <form id="joinForm" class="panel lobby-card">
+            <h2>Join with code</h2>
+            <div class="lobby-join-grid">
+                <div class="lobby-field" style="margin-bottom:0;">
+                    <label for="gameCode">Room code</label>
+                    <input id="gameCode" type="text" placeholder="e.g. A1B2C3" autocomplete="off" autocapitalize="characters">
+                </div>
+                <div class="lobby-field" style="margin-bottom:0;">
+                    <label for="playerName">Your name <span class="lobby-optional">(optional)</span></label>
+                    <input id="playerName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
+                </div>
+            </div>
+            <p id="joinHint" class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code. We’ll assign a guest name if the name field is empty.</p>
+            <div class="lobby-actions">
+                <button type="submit" class="btn-primary" id="joinBtn">Join game</button>
+            </div>
+        </form>
+    </div>
+    <div class="lobby-open-tables panel" id="lobbyOpenTables">
+        <h2 id="openTablesHeading" tabindex="-1">Open tables</h2>
+        <p class="lobby-hint muted" style="margin-top:-0.35rem;margin-bottom:0.75rem;">Rooms stay listed until four players join, the host starts, the table is inactive for 30 minutes, or it has waited for 2 hours. A completed round that returns to the lobby starts a fresh waiting window. Tap Join to use your name from the form above (or a random name if empty).</p>
+        <div id="lobbyGameList" class="lobby-list-host" aria-live="polite"></div>
+    </div>
+
+    <div class="seo-content">
+        <section class="seo-panel seo-intro" aria-labelledby="what-is-durak">
+            <h2 id="what-is-durak">What is Durak</h2>
+            <p>Durak (Дурак) is a fast card shedding game. Players attack and defend in turn while trying to empty their hands. The last player holding cards is the durak.</p>
+            <ul class="feature-list" aria-label="Game features">
+                <li><strong>2–4 players</strong><span>Individual or team play</span></li>
+                <li><strong>Public or private rooms</strong><span>Join by table or code</span></li>
+                <li><strong>Elektronik opponent</strong><span>Two-player Quick Play</span></li>
+            </ul>
+        </section>
+
+        <section class="seo-panel" aria-labelledby="how-it-works">
+            <h2 id="how-it-works">Online play</h2>
+            <ol class="step-list">
+                <li><span>1</span><div><strong>Choose a table</strong><p>Use Quick Play vs Elektronik, create a room, or join with a six-character code.</p></div></li>
+                <li><span>2</span><div><strong>Invite players</strong><p>Copy the private link, or leave the room public so it appears under Open tables.</p></div></li>
+                <li><span>3</span><div><strong>Attack and defend</strong><p>Match ranks when attacking and beat cards with a higher card or a trump when defending.</p></div></li>
+                <li><span>4</span><div><strong>Avoid being the durak</strong><p>Empty your hand before everyone else. The last player with cards loses.</p></div></li>
+            </ol>
+            <p class="content-link-row"><a href="/rules.html">Read the complete Durak rules →</a></p>
+        </section>
+    </div>
+</section>
+
+<section id="gameView" class="stack hidden">
+    <div class="panel room-header">
+        <div>
+            <div class="room-title-row">
+                <h2 id="roomHeading" class="room-title" tabindex="-1">Game <span id="gameCodeLabel" class="room-code"></span></h2>
+                <span id="statusLabel" class="status-pill"></span>
+                <span id="visibilityLabel" class="visibility-pill"></span>
+            </div>
+            <div class="muted room-meta" id="roleLabel"></div>
+        </div>
+        <div class="room-actions">
+            <button id="startBtn" class="btn btn-accent">Start</button>
+            <button id="addBotBtn" class="btn btn-secondary">Add bot</button>
+            <button id="shareBtn" class="btn btn-secondary" aria-live="polite">Copy invite</button>
+            <button id="leaveBtn" class="btn btn-danger">Leave</button>
+        </div>
+        <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. The game starts automatically when 4 players are seated.</div>
+        <div id="gameOpenTablesWrap" class="game-open-tables panel hidden">
+            <h3 class="game-open-tables-title">Open tables on this server</h3>
+            <p class="lobby-hint muted game-open-tables-hint">Your room stays listed while it is waiting and active. Friends also see it on the home page under Open tables.</p>
+            <div id="gameLobbyGameList" aria-live="polite"></div>
+        </div>
+    </div>
+
+    <div id="seatNotice" class="seat-notice hidden" role="alert">
+        <p id="seatNoticeText" class="seat-notice-text"></p>
+        <button id="seatNoticeLobbyBtn" type="button" class="btn btn-secondary">Back to lobby</button>
+    </div>
+
+    <section id="resultPanel" class="panel result-panel hidden" aria-labelledby="resultTitle">
+        <div id="resultIcon" class="result-icon" aria-hidden="true">🏆</div>
+        <div class="result-copy">
+            <p class="result-eyebrow">Game complete</p>
+            <h2 id="resultTitle" tabindex="-1">Round finished</h2>
+            <p id="resultSummary" class="muted"></p>
+            <p id="rematchWaiting" class="result-waiting muted hidden">Waiting for the host to deal the next game.</p>
+        </div>
+        <div class="result-actions">
+            <button id="rematchBtn" class="btn btn-accent">Play again</button>
+        </div>
+    </section>
+
+    <div id="playingArea" class="table-shell">
+        <div class="hud">
+            <span class="pill" title="Attacker"><span class="visually-hidden">Attacker: </span><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
+            <span class="pill" title="Defender"><span class="visually-hidden">Defender: </span><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
+            <span id="trumpSuitHud" class="pill hidden" title="Trump suit"></span>
+        </div>
+        <div id="openingLeadHud" class="opening-lead-hud hidden"></div>
+        <div class="table-felt-wrap">
+            <aside class="deck-outside deck-area hidden" id="deckArea" aria-label="Draw pile and trump">
+                <div class="deck-tableau">
+                    <div id="talonStack" class="talon-stack"></div>
+                    <img id="trumpUnderImg" class="trump-under hidden" alt="">
+                </div>
+            </aside>
+            <div class="table-grid" id="tableGrid">
+            <div class="seat top seat-top-1" id="seatTop1"></div>
+            <div class="seat top seat-top-2" id="seatTop2"></div>
+            <div class="seat top seat-top-3" id="seatTop3"></div>
+            <div class="seat center">
+                <div id="battleTableBanner" class="battle-table-banner hidden"></div>
+                <div id="battleCards" class="battle-row"></div>
+            </div>
+            <div class="seat bottom my-hand">
+                <div class="seat-title" id="mySeatTitle">You</div>
+                <div class="muted my-role-line" id="myRoleLine" aria-live="polite"></div>
+                <div class="hand-scroll">
+                    <div class="hand-scroll-x">
+                        <div id="myHand" class="hand-row" role="group" aria-label="Your cards"></div>
+                    </div>
+                </div>
+                <div class="action-strip">
+                    <button id="attackBtn">Attack</button>
+                    <button id="defendBtn">Defend</button>
+                    <button id="transferBtn">Transfer</button>
+                    <button id="takeBtn">Take cards</button>
+                    <button id="endRoundBtn">End round</button>
+                    <label for="defendTargetSelect" class="visually-hidden">Attack card to beat</label>
+                    <select id="defendTargetSelect" class="hidden"></select>
+                </div>
+                <div id="actionHint" class="muted"></div>
+                <button id="helpToggleBtn" class="help-toggle-btn" type="button" aria-expanded="false">Help ?</button>
+                <p id="gameplayHint" class="muted hidden">Click or <strong>drag</strong> a card: <strong>transfer</strong> / <strong>attack</strong> use the whole battle row. To <strong>defend</strong>, drop on the specific attack card you are beating (or use Defend + the “vs …” menu).</p>
+            </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<dialog id="leaveDialog" class="leave-dialog" aria-labelledby="leaveDialogTitle" aria-describedby="leaveDialogText">
+    <form method="dialog">
+        <h2 id="leaveDialogTitle">Leave this game?</h2>
+        <p id="leaveDialogText">The game is still in progress. Leaving ends it for everyone at the table and sends the room back to the lobby.</p>
+        <div class="leave-dialog-actions">
+            <button type="submit" value="stay" class="btn btn-secondary" id="leaveCancelBtn" autofocus>Stay</button>
+            <button type="submit" value="leave" class="btn btn-danger" id="leaveConfirmBtn">Leave game</button>
+        </div>
+    </form>
+</dialog>
+
+<section id="messagesPanel" class="panel hidden">
+    <h3>Messages</h3>
+    <pre id="messages">Ready.</pre>
+</section>
+
+<!-- ES modules: generated by scripts/update-asset-versions.mjs -->
+<script type="importmap">
+{
+  "imports": {
+    "/js/actions.js": "/js/actions.js?v=7bc1683cad9c",
+    "/js/api.js": "/js/api.js?v=1e52de4122f5",
+    "/js/dom.js": "/js/dom.js?v=65e7212005ba",
+    "/js/lobby.js": "/js/lobby.js?v=4f22bef02c0b",
+    "/js/logic.js": "/js/logic.js?v=defffe4711cc",
+    "/js/socket.js": "/js/socket.js?v=4824dd8b5f8e",
+    "/js/state.js": "/js/state.js?v=503977d50881",
+    "/js/sync.js": "/js/sync.js?v=5e859860c397",
+    "/js/view.js": "/js/view.js?v=473a1963a6a4"
+  }
+}
+</script>
+<link rel="modulepreload" href="/js/actions.js?v=7bc1683cad9c">
+<link rel="modulepreload" href="/js/api.js?v=1e52de4122f5">
+<link rel="modulepreload" href="/js/dom.js?v=65e7212005ba">
+<link rel="modulepreload" href="/js/lobby.js?v=4f22bef02c0b">
+<link rel="modulepreload" href="/js/logic.js?v=defffe4711cc">
+<link rel="modulepreload" href="/js/socket.js?v=4824dd8b5f8e">
+<link rel="modulepreload" href="/js/state.js?v=503977d50881">
+<link rel="modulepreload" href="/js/sync.js?v=5e859860c397">
+<link rel="modulepreload" href="/js/view.js?v=473a1963a6a4">
+<script type="module" src="/js/main.js?v=f5de585ce905"></script>
+<!-- /ES modules -->
+</body>
+</html>
