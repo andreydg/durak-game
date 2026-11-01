@@ -84,15 +84,41 @@ final class MovePrompt {
             holding cards belongs to one team, that team loses. If everyone runs out at the same time, it is a draw.
 
             5. Strategy
-            - While the talon still has cards: shed low non-trumps, keep trumps and aces, and prefer taking a couple \
-            of low cards over spending a high trump on them.
-            - Transferring with a low card is often better than beating: you shed a card and the next player faces \
-            the whole table.
-            - Never give a defender who is taking anything but junk (low non-trumps): no trumps, no aces.
-            - Once the talon is empty, every card counts: keep throwing in what the defender must answer, avoid \
-            taking, and lead cards nobody can beat any more.
-            - Count cards: discarded cards are gone for good; cards a seat picked up stay in that hand until played. \
-            Never assume other hands or the order of the talon.
+            Durak is decided at the end, when the talon is empty and nobody can refill: whoever is left holding \
+            cards loses. Judge each move by the hand it leaves you for that endgame, not only by this bout. What \
+            follows are considerations to weigh against each other, not fixed rules; the right move depends on the \
+            whole game state.
+            - Trumps are the scarcest resource: there are only nine. A trump you keep can still beat any non-trump \
+            later, when every card counts, but against a trump only a higher trump helps, so what a trump is worth \
+            depends on its rank and on the higher trumps still unseen. Spending one is a real cost, so compare it \
+            with the cost of the alternative instead of treating any legal beat as free.
+            - What taking costs depends on the phase. While the talon is still large, a few low cards picked up are \
+            cheap: you can shed them in later attacks, and you keep the strong cards you would otherwise have \
+            spent. Near the end, and once the talon is empty, every extra card is hard to get rid of, so spending \
+            a strong card to avoid taking is usually right.
+            - When the only beat is a trump or a high card, weigh it: how many cards you would pick up and how \
+            useful they are; how many trumps you hold and how they rank against the trumps still unseen; how far \
+            the game has gone (boutsCompleted, the discarded cards, whether the talon is empty or down to the trump \
+            card); and whether keeping the lead (a successful defender leads the next bout) is worth the card. \
+            Covering a low card with a high trump early is rarely worth it; spending your lowest trump when you \
+            hold several, or to avoid picking up a large or valuable pile, often is.
+            - When you do beat a card, use the cheapest card that does the job: a same-suit card before a trump, \
+            a low trump before a high one.
+            - Track trumps: count the ones discarded, the ones in your hand, the ones a seat has picked up, and the \
+            face-up trump card, which goes to whoever draws the last card. Knowing roughly how many trumps each \
+            opponent may still hold tells you how safe your high cards are and whether a high non-trump can still \
+            be beaten.
+            - Transferring sheds a card and passes the whole table on, which is often better than beating. A trump \
+            used to transfer becomes an attack card, though: if the next player takes, they keep it.
+            - When attacking or throwing in, play cards that cost the defender something and that you can spare: \
+            low non-trumps first, ranks you hold more of so you can follow up, and ranks the defender has shown \
+            trouble beating. Trumps and aces thrown at a defender who is taking end up strengthening their hand.
+            - Plan the endgame before it arrives: as the talon runs low, aim for a hand you can shed, such as cards \
+            that are hard to beat or several of one rank. Once the talon is empty, keep throwing in what the \
+            defender must answer, avoid taking, and lead cards nobody can beat any more.
+            - Use what you can see: discarded cards are gone for good, and cards a seat picked up stay in that hand \
+            until played. You cannot see the other hands or the order of the talon, so do not assume anything about \
+            them beyond that.
             - Team games: help your partner run out and put pressure on the opponents.
             """;
 

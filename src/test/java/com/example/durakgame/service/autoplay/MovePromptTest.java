@@ -145,6 +145,19 @@ class MovePromptTest {
     }
 
     @Test
+    void theStrategyWeighsTheLongGameInsteadOfFixedRules() {
+        String rules = prompt.systemInstruction();
+        String strategy = rules.substring(rules.indexOf("5. Strategy"));
+
+        assertTrue(strategy.contains("considerations to weigh against each other, not fixed rules"));
+        assertTrue(strategy.contains("Judge each move by the hand it leaves you for that endgame"));
+        assertTrue(strategy.contains("Trumps are the scarcest resource: there are only nine"));
+        assertTrue(strategy.contains("What taking costs depends on the phase."));
+        assertTrue(strategy.contains("the face-up trump card, which goes to whoever draws the last card"));
+        assertFalse(strategy.contains("Never ") || strategy.contains("Always "), "trade-offs, not absolute rules");
+    }
+
+    @Test
     void theReasoningBudgetLineIsPartOfTheStaticPrefix() {
         MovePrompt budgeted = new MovePrompt(objectMapper, true, "Budgeted reasoning: at most 30 seconds.");
 
