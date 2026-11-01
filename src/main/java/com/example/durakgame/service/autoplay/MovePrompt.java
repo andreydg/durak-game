@@ -88,9 +88,10 @@ final class MovePrompt {
             cards loses. Judge each move by the hand it leaves you for that endgame, not only by this bout. What \
             follows are considerations to weigh against each other, not fixed rules; the right move depends on the \
             whole game state.
-            - Trumps are the scarcest resource: there are only nine, and each one you keep is a sure answer later, \
-            when every card counts. Spending one is a real cost, so compare it with the cost of the alternative \
-            instead of treating any legal beat as free.
+            - Trumps are the scarcest resource: there are only nine. A trump you keep can still beat any non-trump \
+            later, when every card counts, but against a trump only a higher trump helps, so what a trump is worth \
+            depends on its rank and on the higher trumps still unseen. Spending one is a real cost, so compare it \
+            with the cost of the alternative instead of treating any legal beat as free.
             - What taking costs depends on the phase. While the talon is still large, a few low cards picked up are \
             cheap: you can shed them in later attacks, and you keep the strong cards you would otherwise have \
             spent. Near the end, and once the talon is empty, every extra card is hard to get rid of, so spending \
