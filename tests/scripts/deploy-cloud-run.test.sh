@@ -243,4 +243,37 @@ fi
 assert_contains "${TMP_DIR}/deploy-only-missing.err" "DEPLOY_ONLY updates an existing service"
 assert_not_contains "${DEPLOY_ONLY_MISSING_CALLS}" $'run\tdeploy'
 
+# Claude's settings reach the service only when given; deploy-only runs (the workflow's) keep them.
+assert_not_contains "${DEFAULT_CALLS}" 'AUTOPLAY_PROVIDER'
+assert_not_contains "${DEPLOY_ONLY_CALLS}" 'AUTOPLAY_ANTHROPIC_'
+assert_contains "${DEFAULT_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.8-flash,LOGGING_STRUCTURED_FORMAT_CONSOLE=com.example.durakgame.logging.CloudLoggingJsonFormatter\t'
+CLAUDE_CALLS="${TMP_DIR}/claude.calls"
+run_deploy "${CLAUDE_CALLS}" \
+  DEPLOY_ONLY="true" \
+  IMAGE="us-west1-docker.pkg.dev/andreyg-main/durak-game/durak-game:abc123" \
+  AUTOPLAY_PROVIDER="anthropic" \
+  AUTOPLAY_ANTHROPIC_ORGANIZATION_ID="6f1d0e2c-0000-4c6f-9a70-6d3e2f1a0b11" \
+  AUTOPLAY_ANTHROPIC_WORKSPACE_ID="wrkspc_01Durak" \
+  AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID="svac_01Durak" \
+  AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID="fdrl_01Durak" \
+  AUTOPLAY_ANTHROPIC_INFERENCE_GEO="us" \
+  >"${TMP_DIR}/claude.out"
+assert_contains "${CLAUDE_CALLS}" $'--update-env-vars\tAUTOPLAY_GEMINI_MODEL=gemini-3.8-flash,LOGGING_STRUCTURED_FORMAT_CONSOLE=com.example.durakgame.logging.CloudLoggingJsonFormatter,AUTOPLAY_PROVIDER=anthropic,AUTOPLAY_ANTHROPIC_ORGANIZATION_ID=6f1d0e2c-0000-4c6f-9a70-6d3e2f1a0b11,AUTOPLAY_ANTHROPIC_WORKSPACE_ID=wrkspc_01Durak,AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID=svac_01Durak,AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID=fdrl_01Durak,AUTOPLAY_ANTHROPIC_INFERENCE_GEO=us\t'
+assert_contains "${TMP_DIR}/claude.out" "Bot provider: anthropic"
+
+PARTIAL_CLAUDE_CALLS="${TMP_DIR}/partial-claude.calls"
+run_deploy "${PARTIAL_CLAUDE_CALLS}" DEPLOY_ONLY="true" AUTOPLAY_PROVIDER="gemini" >"${TMP_DIR}/partial-claude.out"
+assert_contains "${PARTIAL_CLAUDE_CALLS}" ',AUTOPLAY_PROVIDER=gemini'
+assert_not_contains "${PARTIAL_CLAUDE_CALLS}" 'AUTOPLAY_ANTHROPIC_'
+
+BAD_CLAUDE_CALLS="${TMP_DIR}/bad-claude.calls"
+if run_deploy "${BAD_CLAUDE_CALLS}" AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID="fdrl_1,AUTOPLAY_PROVIDER=gemini" \
+  >"${TMP_DIR}/bad-claude.out" 2>"${TMP_DIR}/bad-claude.err"; then
+  fail "deployment unexpectedly continued with a value that would split --update-env-vars"
+fi
+assert_contains "${TMP_DIR}/bad-claude.err" "AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID may only contain"
+if [[ -s "${BAD_CLAUDE_CALLS}" ]]; then
+  fail "a rejected value still reached gcloud"
+fi
+
 echo "Secret Manager deployment contract tests passed."

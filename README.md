@@ -57,7 +57,7 @@ The Firestore emulator tests run automatically in CI (against the emulator Docke
 ## Security & limits
 
 - **Per-player tokens.** Create/join returns a secret token (sent back via the `X-Durak-Token` header). The server reveals a player's hand and accepts their moves only with a matching token, so the room code alone can't read hands or spoof opponents. The (public) player id is never accepted as a token. Rejected tokens are logged as `auth_rejected` (seat and reason, never the token), at most once a minute per seat.
-- **Rate limiting.** Per-client token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; WebSocket handshakes count against the general limit. Defaults are generous enough for players behind a shared NAT. The client is the `X-Forwarded-For` entry appended by the trusted proxy, counted from the right (`app.ratelimit.forwarded-for-hops`: `1` for Cloud Run, `2` behind an external load balancer); entries further left are client-supplied and ignored. IPv6 clients are bucketed per /64. This limit also caps Gemini spend, since a Quick Play game can make the bot's first model call without further input.
+- **Rate limiting.** Per-client token buckets guard the API (`app.ratelimit.*`), with a stricter limit on game creation; WebSocket handshakes count against the general limit. Defaults are generous enough for players behind a shared NAT. The client is the `X-Forwarded-For` entry appended by the trusted proxy, counted from the right (`app.ratelimit.forwarded-for-hops`: `1` for Cloud Run, `2` behind an external load balancer); entries further left are client-supplied and ignored. IPv6 clients are bucketed per /64. This limit also caps model spend, since a Quick Play game can make the bot's first model call without further input.
 - **Websockets.** Handshakes are accepted only from the site's own origin; `app.websocket.allowed-origins` adds more. Game sockets are accepted only for strings that can be a room code. Open sockets are capped per client address (`app.websocket.max-sessions-per-client`, default 20), per room (`app.websocket.max-sessions-per-game`, default 50) and in total (`app.websocket.max-sessions`, default 150). Every open socket holds one of Cloud Run's request slots (`--concurrency` 200), so the total stays below it. The handshake reserves the socket's place in all three caps before upgrading; a handshake over a cap gets HTTP 429 (address or room) or 503 (total) and its connection is closed, so no client can pile up sockets that were opened only to be closed. The place is released when the connection closes, or at once when the handshake doesn't upgrade. Each socket has a small outgoing queue drained by its own virtual thread, so a slow or dead client never delays a move or other players. A client that falls 32 messages behind, or blocks a single write for 5 seconds, is closed by that thread (never by a broadcaster), and the connection is dropped right after the close frame; the client reconnects. Sockets only listen: a binary message is refused with 1003 and its connection dropped the same way, so a server-side close never leaves an open connection whose place was already given back.
 - **Browser hardening.** Every response carries a Content-Security-Policy (scripts only from this origin; an inline import map would be allowed by its hash), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a referrer policy, a permissions policy, and HSTS over HTTPS. Deals are shuffled with `SecureRandom`.
 - **Health.** `/actuator/health` reports `DOWN` when the game store is unreachable; it's the platform health-check path.
@@ -105,12 +105,14 @@ Rooms use activity-based expiration: waiting lobbies expire after 30 minutes of 
 
 The API and lobby list enforce expiration immediately but never delete: an expired room answers 410 and is hidden from the lobby list, because a read may hold a stale copy and deleting could remove a room that a concurrent heartbeat just renewed. Storage cleanup is separate. Firestore documents carry `lastActivityAt`, `lobbyStartedAt`, and `expireAt`, and a TTL policy on `games.expireAt` (which the deploy script configures by default) deletes expired rooms asynchronously. With the in-memory store, a reaper evicts them every minute (`GAME_REAPER_INTERVAL_MS`).
 
-## Auto-play (Gemini)
+## Auto-play (Gemini or Claude)
 
-The host can add bot players in the lobby. Bots use the primary LLM to choose moves. Every move the engine returns is checked against the bot's legal moves: card codes are normalized (`6c` is `6C`), and an answer that is still illegal (or missing, or unparseable) is replaced by the deterministic heuristic's move. The heuristic is also used whenever the model is disabled or unavailable. A decision with a single forced option never calls the model, and neither does a bot that already passed in the current bout: nothing has changed since (any new card clears passes), so it waits for the other players instead of being pushed into a throw-in it just declined. When the model defends against several attacks at once it returns a plan for all of them; the bot replays the rest of that plan on its next defend decisions in the same bout (while the table still matches it exactly) instead of asking again.
+The host can add bot players in the lobby. Bots use the primary LLM to choose moves: Gemini by default, or Claude on Anthropic's API with `AUTOPLAY_PROVIDER=anthropic` (see [Claude](#claude-on-anthropics-api) below). Every move the engine returns is checked against the bot's legal moves: card codes are normalized (`6c` is `6C`), and an answer that is still illegal (or missing, or unparseable) is replaced by the deterministic heuristic's move. The heuristic is also used whenever the model is disabled or unavailable. A decision with a single forced option never calls the model, and neither does a bot that already passed in the current bout: nothing has changed since (any new card clears passes), so it waits for the other players instead of being pushed into a throw-in it just declined. When the model defends against several attacks at once it returns a plan for all of them; the bot replays the rest of that plan on its next defend decisions in the same bout (while the table still matches it exactly) instead of asking again.
 
 Environment variables:
 
+- `AUTOPLAY_PROVIDER` (`gemini` by default, or `anthropic`; any other value stops the service from starting)
+- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default; one model call's whole time budget, for either provider)
 - `GEMINI_API_KEY` (empty by default; when absent, bots use heuristic fallback; Cloud Run receives this from Secret Manager)
 - `AUTOPLAY_GEMINI_ENABLED` (`true` by default)
 - `AUTOPLAY_GEMINI_MODEL` (`gemini-3.8-flash` by default; a `models/` prefix is accepted)
@@ -118,7 +120,6 @@ Environment variables:
 - `AUTOPLAY_GEMINI_THINKING_LEVEL` (`HIGH` by default; decisions with three or more legal options)
 - `AUTOPLAY_GEMINI_SIMPLE_THINKING_LEVEL` (`LOW` by default; decisions with at most two legal options, such as one throw-in card vs pass or one beating card vs take; empty means the same level as above)
 - `AUTOPLAY_GEMINI_REASONING_BUDGET_SECONDS` (`30` by default; prompt-level budgeted reasoning instruction for Gemma models)
-- `AUTOPLAY_REQUEST_TIMEOUT_MS` (`30000` by default)
 - `AUTOPLAY_GEMINI_CIRCUIT_BREAKER_FAILURE_THRESHOLD` (`3` by default; after this many consecutive timeouts, I/O errors or HTTP 429/5xx responses, bots stop calling the model; `0` disables the breaker)
 - `AUTOPLAY_GEMINI_CIRCUIT_BREAKER_COOLDOWN_MS` (`60000` by default; how long the breaker stays open before a single probe call decides whether to resume)
 - `AUTOPLAY_GEMINI_MAX_CALLS_PER_MINUTE` (`120` by default; global token bucket across all games with a burst of ten seconds' worth of calls, so spend stays capped even if request-level rate limiting is bypassed; `0` disables the cap)
@@ -132,22 +133,63 @@ Model capability overrides (each accepts `auto`, `true`, or `false`; `auto` deri
 
 Gemini 3 and newer keep their default sampling settings; `temperature: 0` is only pinned for Gemini 1.x/2.x and Gemma models.
 
-The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, other seats' hand sizes as the table shows them (exact below six, otherwise `6+`, the same for the take limit), whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so Gemini's implicit prompt caching can reuse the prefix (visible as `cachedTokens` in the logs).
+The prompt only contains what a human in the bot's seat can see: its own hand, the table, the trump, other seats' hand sizes as the table shows them (exact below six, otherwise `6+`, the same for the take limit), whether the talon is empty or down to the face-up trump (never the exact count), the number of completed bouts, discarded cards and publicly picked-up cards. Seats are labelled relative to the bot (`you`, `P2`, `P3`, `P4` in turn order, with role and partner/opponent flags); player names and ids are never sent. The rules and instructions form a byte-identical prefix and all per-turn data comes last, so the provider's prompt cache can reuse the prefix (visible as `cachedTokens` in the logs): Gemini caches implicitly, and Claude's request marks the end of the instructions as its cache breakpoint.
 
 Each model call logs one line, and each bot decision logs one line:
 
 ```text
 autoplay_llm_call code=… player=… model=… thinkingLevel=… latencyMs=… httpStatus=… promptTokens=… cachedTokens=… outputTokens=… thoughtTokens=… totalTokens=… finishReason=… error=…
+autoplay_llm_call code=… player=… model=… effort=… latencyMs=… httpStatus=… promptTokens=… cachedTokens=… cacheWriteTokens=… outputTokens=… finishReason=… requestId=… error=…
 autoplay_decision code=… player=… source=llm|plan_cache|forced|heuristic reason=… action=… card=… attackCard=… options=…
 ```
 
-`reason` says why the heuristic was used (`disabled`, `circuit_open`, `budget_exhausted`, `primary_model_failed`, `unparseable`, `illegal_model_action`, `no_legal_moves`) or why no call was needed (`single_legal_option`, `already_passed`), and is `none` for model and plan-cache decisions. An illegal model answer is echoed as `model=TYPE/card/attackCard`. The API key and player names are never logged.
+The first call line is Gemini's, the second Claude's (`promptTokens` there counts the cached prefix too, and `outputTokens` includes thinking). `reason` says why the heuristic was used (`disabled`, `circuit_open`, `budget_exhausted`, `primary_model_failed`, `unparseable`, `refusal`, `max_tokens`, `illegal_model_action`, `no_legal_moves`) or why no call was needed (`single_legal_option`, `already_passed`), and is `none` for model and plan-cache decisions. An illegal model answer is echoed as `model=TYPE/card/attackCard`. The API key, access tokens and player names are never logged.
 
 The heuristic bot is deterministic and also sees only its own seat's information. It compares the cheapest complete defence with transferring and with taking the table, weighted by game phase (it takes a low card early rather than burn a high trump, but not once the talon is empty); it keeps trumps and aces while the talon still has cards, only dumps low non-trumps on a defender who is taking, and in the endgame plays to run out of cards, including leading cards that public card counting shows nobody can beat.
 
 API endpoint:
 
 - `POST /api/games/{code}/bots` with body `{ "playerId": "<hostPlayerId>", "botName": "optional" }`
+
+### Claude on Anthropic's API
+
+With `AUTOPLAY_PROVIDER=anthropic`, Claude Opus 5.5 plays the bots through Anthropic's own Messages API, called over plain HTTP like Gemini (no SDK). There is no API key. The service authenticates as its Cloud Run identity by workload identity federation, the way Glass Bead's direct route does: it fetches a Google-signed identity token for the audience `https://api.anthropic.com` from the metadata server and exchanges it at `https://api.anthropic.com/v1/oauth/token` for a short-lived bearer token. The token is cached and replaced two minutes before it expires; one exchange runs at a time; a 401 from Messages drops the token, and the next call exchanges again. The rest of the flow is shared with Gemini: forced moves, plan replay, legality checks, the heuristic fallback, the circuit breaker and the call budget.
+
+The request sends the rules as `system`, then one user message of two text blocks: the constant instructions, marked as the prompt-cache breakpoint, and the per-turn state. It sets `output_config.effort`, lighter for decisions with at most two options, and asks for a JSON-schema answer (`output_config.format`) whose card fields only accept the 36 cards of the deck. It sends no `thinking` field, so thinking stays adaptive, and no temperature, tools or fallbacks: a `refusal` or `max_tokens` stop falls back to the heuristic. HTTP 429, 5xx (including 529 overloaded), 401/403, a failed token exchange, a timeout or an I/O error counts against the circuit breaker; other statuses (a 400 means a bug in our request) do not.
+
+- `AUTOPLAY_ANTHROPIC_ORGANIZATION_ID`, `AUTOPLAY_ANTHROPIC_WORKSPACE_ID`, `AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID`, `AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID` (empty by default; the federation set up in the Claude Console. They are identifiers, not credentials. Until the organization, service account and rule are set, Claude is never called and nothing touches the network; the workspace may stay empty for a rule that names a single workspace)
+- `AUTOPLAY_ANTHROPIC_ENABLED` (`true` by default)
+- `AUTOPLAY_ANTHROPIC_MODEL` (`claude-opus-5-5` by default)
+- `AUTOPLAY_ANTHROPIC_EFFORT` (`medium` by default; `low`, `medium`, `high`, `xhigh` or `max`; decisions with three or more legal options)
+- `AUTOPLAY_ANTHROPIC_SIMPLE_EFFORT` (`low` by default; decisions with at most two legal options; empty means the same as above)
+- `AUTOPLAY_ANTHROPIC_MAX_TOKENS` (`8192` by default; adaptive thinking counts against it)
+- `AUTOPLAY_ANTHROPIC_INFERENCE_GEO` (`global` by default at list price, or `us` to keep inference in the United States at 1.1x; empty leaves the field out)
+- `AUTOPLAY_ANTHROPIC_CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `AUTOPLAY_ANTHROPIC_CIRCUIT_BREAKER_COOLDOWN_MS`, `AUTOPLAY_ANTHROPIC_MAX_CALLS_PER_MINUTE` (`3`, `60000` and `120` by default, as for Gemini)
+
+An effort or geo the API would reject, or an empty model, stops the service from starting, so a bad value leaves the previous revision serving.
+
+Setup, in the Claude Console:
+
+1. A workspace for Durak (`wrkspc_…`) with a spend limit. Anthropic's charges are billed by Anthropic, so the Google Cloud budget alert does not see them.
+2. A service account (`svac_…`) that is a member of that workspace.
+3. A federation issuer for Google (`https://accounts.google.com`, keys by discovery), if the organization has none yet.
+4. A federation rule (`fdrl_…`) for that issuer, audience `https://api.anthropic.com`, matching the runtime service account's identity token (subject: the account's numeric unique ID, from `gcloud iam service-accounts describe <email> --format='value(uniqueId)'`; email: the account's address), targeting the service account in the workspace, with scope `workspace:developer` and a 600 s token lifetime.
+
+No Google Cloud IAM change is needed: any workload can get its own identity token from the metadata server.
+
+Switching over:
+
+1. Set the ids (and the geo) on the service. A new revision exchanges once at startup when the ids are set, even while Gemini still plays, and logs one line per exchange:
+
+   ```text
+   autoplay_anthropic_federation outcome=READY|UNAVAILABLE failure=… trigger=BOOT|CALL latencyMs=…
+   ```
+
+   `failure` is one of `IDENTITY` (no identity token from the metadata server), `TIMEOUT`, `NETWORK`, `DENIED` (Anthropic refused the identity: the rule, the ids or the account do not match), `REJECTED` (another 4xx, such as a malformed id), `RATE_LIMITED`, `PROVIDER` (5xx) or `MALFORMED`.
+2. Once it says `READY`, set `AUTOPLAY_PROVIDER=anthropic`. The configuration line `autoplay_claude_config` is logged at WARN if the switch happened without the ids, which leaves every bot on the heuristic.
+3. Watch `latencyMs`, `error=timeout` and `cachedTokens` in the `autoplay_llm_call` lines. If moves take too long, lower `AUTOPLAY_ANTHROPIC_EFFORT` or raise `AUTOPLAY_REQUEST_TIMEOUT_MS`. Setting `AUTOPLAY_PROVIDER=gemini` switches back.
+
+The deploy script passes any of these settings it is given (`AUTOPLAY_PROVIDER` and the `AUTOPLAY_ANTHROPIC_*` ids and geo) to the service, and a setting it is not given keeps its current value, so releases from main keep them.
 
 ## Deploy to Google Cloud Run
 
@@ -189,6 +231,7 @@ Optional environment variables:
 - `GEMINI_SECRET_PROJECT` (defaults to `PROJECT_ID`; set it when the secret lives elsewhere)
 - `GEMINI_SECRET_VERSION` (default `latest`; set a numeric version to pin deployments)
 - `AUTOPLAY_GEMINI_MODEL` (default `gemini-3.8-flash`)
+- `AUTOPLAY_PROVIDER`, `AUTOPLAY_ANTHROPIC_ORGANIZATION_ID`, `AUTOPLAY_ANTHROPIC_WORKSPACE_ID`, `AUTOPLAY_ANTHROPIC_SERVICE_ACCOUNT_ID`, `AUTOPLAY_ANTHROPIC_FEDERATION_RULE_ID`, `AUTOPLAY_ANTHROPIC_INFERENCE_GEO` (each is set on the service only when given; one left unset keeps the service's current value, see [Claude](#claude-on-anthropics-api))
 - `RUNTIME_SERVICE_ACCOUNT` (auto-detected from an existing service, otherwise the project's default compute service account)
 - `CONCURRENCY` (default `200`; every open tab holds a websocket that counts against it)
 - `REQUEST_TIMEOUT` (default `3600` seconds; Cloud Run closes websockets at this limit)

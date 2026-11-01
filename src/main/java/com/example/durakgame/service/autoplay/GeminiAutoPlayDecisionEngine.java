@@ -5,6 +5,7 @@ import com.example.durakgame.model.ViewerLegalMoves;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -19,12 +20,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 
 /**
- * Chooses bot moves with Gemini and falls back to {@link HeuristicAutoPlayDecisionEngine}; the
- * decision flow is {@link LlmAutoPlayDecisionEngine}'s. Each model call produces one single-line
- * {@code key=value} log entry.
+ * Chooses bot moves with Gemini ({@code autoplay.provider=gemini}, the default) and falls back to
+ * {@link HeuristicAutoPlayDecisionEngine}; the decision flow is {@link LlmAutoPlayDecisionEngine}'s.
+ * Each model call produces one single-line {@code key=value} log entry.
  */
 @Component
 @Primary
+@ConditionalOnProperty(prefix = "autoplay", name = "provider", havingValue = "gemini", matchIfMissing = true)
 public class GeminiAutoPlayDecisionEngine extends LlmAutoPlayDecisionEngine {
     static final String DEFAULT_MODEL = GeminiSettings.DEFAULT_MODEL;
     private static final long MAX_CONNECT_TIMEOUT_MS = 5000;
