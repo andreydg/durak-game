@@ -1299,6 +1299,13 @@ button.btn-primary[aria-disabled="true"] {
     margin-left: auto;
     margin-right: auto;
 }
+/* Open tables shows only while its list offers a table to join, or the notice of a refresh that
+   failed while it did. This reads the rendered list rather than a class the script sets, so a page
+   whose HTML, lobby.js and dom.js come from different releases (a deploy or rollback between loading
+   the page and its modules) still shows the tables either release renders. */
+#lobbyOpenTables:not(:has(.lobby-list-join, [data-open-tables-notice])) {
+    display: none;
+}
 .lobby-open-tables h2 {
     margin: 0 0 0.65rem;
     font-size: 1.1rem;

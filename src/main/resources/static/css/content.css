@@ -44,6 +44,49 @@
     margin-bottom: 0.65rem;
     font-size: clamp(1.2rem, 3vw, 1.55rem);
 }
+/* Home page sections that start collapsed: the summary row is the panel's header. */
+.seo-collapsible > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    cursor: pointer;
+    list-style: none;
+}
+.seo-collapsible > summary::-webkit-details-marker {
+    display: none;
+}
+.seo-collapsible > summary h2 {
+    margin: 0;
+}
+.seo-collapsible > summary::after {
+    content: "";
+    flex: none;
+    width: 0.55rem;
+    height: 0.55rem;
+    margin: 0 0.3rem 0.25rem 0;
+    border-right: 2px solid var(--text-soft);
+    border-bottom: 2px solid var(--text-soft);
+    transform: rotate(45deg);
+    transition: transform 0.15s ease;
+}
+.seo-collapsible[open] > summary {
+    margin-bottom: 0.65rem;
+}
+.seo-collapsible[open] > summary::after {
+    margin-bottom: -0.25rem;
+    transform: rotate(-135deg);
+}
+.seo-collapsible > summary:focus-visible {
+    outline: 2px solid var(--accent-bright);
+    outline-offset: 4px;
+    border-radius: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+    .seo-collapsible > summary::after {
+        transition: none;
+    }
+}
 .seo-panel > p:not(.content-eyebrow):not(.content-link-row),
 .content-card p,
 .content-card li {

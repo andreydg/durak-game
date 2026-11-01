@@ -57,7 +57,6 @@ export async function refreshLobbyLists() {
             if (!res.ok) throw new Error("bad");
             const rows = await res.json();
 
-            const emptyHome = "<p class=\"lobby-list-empty muted\">No open tables yet. Create one above or enter a code.</p>";
             const emptyInRoom = "<p class=\"lobby-list-empty muted\">No lobby tables returned. Try Refresh or wait a moment.</p>";
 
             /* Always fill #lobbyGameList when data arrives; do not gate on lobbyView visibility (async fetch can race with show/hide). */
@@ -65,14 +64,19 @@ export async function refreshLobbyLists() {
                 const focusedCode = el.lobbyGameList.contains(document.activeElement)
                     ? document.activeElement.getAttribute("data-code")
                     : null;
-                el.lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : emptyHome;
+                el.lobbyGameList.innerHTML = rows.length ? lobbyRowsHtml(rows, true, null) : "";
+                // The home page shows Open tables only while there is a table to join. The stylesheet
+                // derives that from the rendered list; the class covers browsers without :has(). The
+                // lookup covers a dom.js from the release before it exported the section.
+                const openTables = el.lobbyOpenTables || document.getElementById("lobbyOpenTables");
+                openTables?.classList.toggle("hidden", !el.lobbyGameList.querySelector(".lobby-list-join"));
                 if (focusedCode !== null) {
                     // The list was rebuilt under a keyboard user: keep them on the same table's
-                    // Join button, or the first one, or the list heading if the list emptied.
+                    // Join button, or the first one, or the lobby heading once the section hides.
                     const buttons = [...el.lobbyGameList.querySelectorAll(".lobby-list-join")];
                     const again = buttons.find(btn => btn.getAttribute("data-code") === focusedCode)
                         || buttons[0]
-                        || document.getElementById("openTablesHeading");
+                        || document.getElementById("lobbyHeading");
                     again?.focus();
                 }
                 // After restoring focus, so a pending join keeps its (focused) button aria-disabled.
@@ -89,7 +93,12 @@ export async function refreshLobbyLists() {
         } catch (error) {
             const err = "<p class=\"lobby-list-empty muted\">Could not load open tables. Try refreshing the page.</p>";
             try {
-                if (el.lobbyGameList) el.lobbyGameList.innerHTML = err;
+                if (el.lobbyGameList) {
+                    // Open tables stays as it was: a shown section swaps its tables for the notice,
+                    // which the marker keeps visible; a hidden one stays hidden.
+                    const shown = el.lobbyGameList.querySelector(".lobby-list-join, [data-open-tables-notice]");
+                    el.lobbyGameList.innerHTML = shown ? err.replace("<p ", "<p data-open-tables-notice ") : err;
+                }
                 if (el.gameLobbyGameList) el.gameLobbyGameList.innerHTML = err;
             } catch (_) {
                 // A broken renderer must not keep the single-flight lock held forever.
