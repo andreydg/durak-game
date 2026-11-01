@@ -26,8 +26,8 @@ function sixesGame() {
     });
 }
 
-/** Serves the game and records the table moves the page posts. */
-async function routeMoves(page) {
+/** Serves `current()` and records the table moves the page posts. */
+async function routeMoves(page, current = sixesGame) {
     const moves = [];
     await page.routeWebSocket("**/ws/games/**", () => {});
     await page.route(`**/api/games/${CODE}**`, async route => {
@@ -36,7 +36,7 @@ async function routeMoves(page) {
         if (request.method() === "POST" && ["/attack", "/defend", "/transfer"].includes(action)) {
             moves.push({action, body: request.postDataJSON()});
         }
-        await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify(sixesGame())});
+        await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify(current())});
     });
     return moves;
 }
@@ -109,5 +109,61 @@ test.describe("Dragging a card to the table", () => {
         await expect(row).not.toHaveClass(/battle-drop-target/);
         await expect(pair).not.toHaveClass(/battle-pair-drop-target/);
         await page.mouse.up();
+    });
+
+    test("a drag from outside the hand is not taken for a card a refresh removed mid-drag", async ({page}) => {
+        let game = sixesGame();
+        const moves = await routeMoves(page, () => game);
+        await page.goto("/");
+        const row = page.locator("#battleCards");
+        const pair = row.locator('.battle-pair[data-attack-card="6D"]');
+        await expect(pair).toBeVisible();
+
+        // Start dragging QC, then a refresh takes QC out of the hand, so its button is detached.
+        const queen = await centre(page.locator('#myHand [data-card-code="QC"]'));
+        await page.mouse.move(queen.x, queen.y);
+        await page.mouse.down();
+        await page.mouse.move(queen.x + 20, queen.y - 40, {steps: 5});
+        game = sixesGame();
+        game.version = 8;
+        game.players[0] = {...game.players[0], hand: ["6H", "7H", "JH", "KD"], handSize: 4};
+        await page.evaluate(() => window.refreshGame(false));
+        await expect(page.locator('#myHand [data-card-code="QC"]')).toHaveCount(0);
+
+        // Cancel by releasing over the room heading, which takes no drops. The detached button's
+        // dragend can no longer bubble through #myHand.
+        const heading = await centre(page.locator("#roomHeading"));
+        await page.mouse.move(heading.x, heading.y, {steps: 5});
+        await page.mouse.up();
+
+        // Something from outside the hand dragged over the 6D gets the plain pointer outline,
+        // not the outline (here: none) for the QC of the drag that ended unseen.
+        await page.evaluate(() => {
+            const outside = document.createElement("div");
+            outside.id = "outsideDrag";
+            outside.draggable = true;
+            outside.textContent = "outside";
+            Object.assign(outside.style, {
+                position: "fixed", left: "8px", top: "8px", width: "90px", height: "40px",
+                background: "#ddd", zIndex: "9999"
+            });
+            document.body.appendChild(outside);
+        });
+        const outside = await centre(page.locator("#outsideDrag"));
+        await page.mouse.move(outside.x, outside.y);
+        await page.mouse.down();
+        const onPair = await centre(pair);
+        await page.mouse.move(onPair.x, onPair.y, {steps: 8});
+        // A real drag keeps firing dragover while it hovers; Playwright fires it only when the
+        // pointer moves, and a routine refresh can re-render the table in between. Nudge the
+        // pointer before each read, as a hover would.
+        let nudge = 0;
+        await expect.poll(async () => {
+            await page.mouse.move(onPair.x + (nudge++ % 2), onPair.y);
+            return pair.getAttribute("class");
+        }).toMatch(/battle-pair-drop-target/);
+        await expect(row).not.toHaveClass(/battle-drop-target/);
+        await page.mouse.up();
+        expect(moves).toEqual([]);
     });
 });
