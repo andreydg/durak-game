@@ -51,7 +51,7 @@ describe("crawlable SEO pages", () => {
         const document = documentFor("index.html");
         const visibleSource = document.querySelector("#lobbyView")?.textContent || "";
 
-        expect(document.querySelector("#what-is-durak")?.textContent).toBe("What is Durak");
+        expect(document.querySelector("#what-is-durak")?.textContent).toBe("About Durak");
         expect(document.querySelector("#faq")).toBeNull();
         expect(visibleSource).toContain("Durak (Дурак) is a fast card shedding game");
         expect(visibleSource).toContain("2–4 players");

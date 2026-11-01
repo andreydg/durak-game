@@ -27,8 +27,8 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
-    <link rel="stylesheet" href="/css/app.css?v=05dbdef98bc6">
-    <link rel="stylesheet" href="/css/content.css?v=f938a7b37b1f">
+    <link rel="stylesheet" href="/css/app.css?v=af22ebfa5b6c">
+    <link rel="stylesheet" href="/css/content.css?v=9f56172e9da8">
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -73,66 +73,42 @@
             </div>
         </div>
     </header>
-    <div class="lobby-forms">
-        <form id="hostForm" class="panel lobby-card">
-            <h2>Play or host</h2>
-            <button type="button" class="btn-primary lobby-quick-action" id="quickPlayBtn">Quick Play vs Elektronik</button>
-            <p class="lobby-choice-separator">or create a room</p>
-            <div class="lobby-field">
-                <label for="hostName">Your name <span class="lobby-optional">(optional)</span></label>
-                <input id="hostName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
-            </div>
-            <label class="lobby-privacy-option" for="publicRoom">
-                <input id="publicRoom" type="checkbox" checked>
-                <span><strong>List my room publicly</strong><small>Friends can join with the code.</small></span>
-            </label>
-            <div class="lobby-actions">
+    <section class="panel lobby-play" aria-labelledby="playHeading">
+        <h2 id="playHeading" class="visually-hidden">Play</h2>
+        <div class="lobby-name-row">
+            <label for="hostName">Playing as</label>
+            <input id="hostName" type="text" placeholder="(optional)" autocomplete="nickname">
+        </div>
+        <div class="lobby-room-row">
+            <form id="hostForm" class="lobby-create">
                 <button type="submit" class="btn-primary" id="createBtn">Create room</button>
-            </div>
-        </form>
-        <form id="joinForm" class="panel lobby-card">
-            <h2>Join with code</h2>
-            <div class="lobby-join-grid">
-                <div class="lobby-field" style="margin-bottom:0;">
-                    <label for="gameCode">Room code</label>
-                    <input id="gameCode" type="text" placeholder="e.g. A1B2C3" autocomplete="off" autocapitalize="characters">
-                </div>
-                <div class="lobby-field" style="margin-bottom:0;">
-                    <label for="playerName">Your name <span class="lobby-optional">(optional)</span></label>
-                    <input id="playerName" type="text" placeholder="Leave blank for a random name" autocomplete="nickname">
-                </div>
-            </div>
-            <p id="joinHint" class="lobby-hint muted" style="margin:0.4rem 0 0;">Enter the room code. We’ll assign a guest name if the name field is empty.</p>
-            <div class="lobby-actions">
-                <button type="submit" class="btn-primary" id="joinBtn">Join game</button>
-            </div>
-        </form>
-    </div>
+                <label class="lobby-public-option" for="publicRoom" title="Show the room under Open tables">
+                    <input id="publicRoom" type="checkbox" checked>
+                    List publicly
+                </label>
+            </form>
+            <form id="joinForm" class="lobby-join">
+                <label for="gameCode" class="visually-hidden">Room code</label>
+                <input id="gameCode" type="text" placeholder="Room code" autocomplete="off" autocapitalize="characters">
+                <button type="submit" class="btn-primary" id="joinBtn">Join</button>
+                <!-- The previous release's scripts read this when joining; it stays until no open tab runs them. -->
+                <input id="playerName" type="hidden" value="">
+            </form>
+        </div>
+        <p id="joinHint" class="lobby-hint muted"></p>
+        <div class="lobby-quick-row">
+            <button type="button" class="btn-primary" id="quickPlayBtn">Quick Play vs Elektronik</button>
+        </div>
+    </section>
     <div class="lobby-open-tables panel" id="lobbyOpenTables">
         <h2 id="openTablesHeading" tabindex="-1">Open tables</h2>
-        <p class="lobby-hint muted" style="margin-top:-0.35rem;margin-bottom:0.75rem;">Rooms stay listed until four players join, the host starts, the table is inactive for 30 minutes, or it has waited for 2 hours. A completed round that returns to the lobby starts a fresh waiting window. Tap Join to use your name from the form above (or a random name if empty).</p>
         <div id="lobbyGameList" class="lobby-list-host" aria-live="polite"></div>
     </div>
 
     <div class="seo-content">
-        <details class="seo-panel seo-intro seo-collapsible">
-            <summary><h2 id="what-is-durak">What is Durak</h2></summary>
-            <p>Durak (Дурак) is a fast card shedding game. Players attack and defend in turn while trying to empty their hands. The last player holding cards is the durak.</p>
-            <ul class="feature-list" aria-label="Game features">
-                <li><strong>2–4 players</strong><span>Individual or team play</span></li>
-                <li><strong>Public or private rooms</strong><span>Join by table or code</span></li>
-                <li><strong>Elektronik opponent</strong><span>Two-player Quick Play</span></li>
-            </ul>
-        </details>
-
-        <details class="seo-panel seo-collapsible">
-            <summary><h2 id="how-it-works">Online play</h2></summary>
-            <ol class="step-list">
-                <li><span>1</span><div><strong>Choose a table</strong><p>Use Quick Play vs Elektronik, create a room, or join with a six-character code.</p></div></li>
-                <li><span>2</span><div><strong>Invite players</strong><p>Copy the private link, or leave the room public so it appears under Open tables.</p></div></li>
-                <li><span>3</span><div><strong>Attack and defend</strong><p>Match ranks when attacking and beat cards with a higher card or a trump when defending.</p></div></li>
-                <li><span>4</span><div><strong>Avoid being the durak</strong><p>Empty your hand before everyone else. The last player with cards loses.</p></div></li>
-            </ol>
+        <details class="seo-panel seo-collapsible seo-quiet">
+            <summary><h2 id="what-is-durak">About Durak</h2></summary>
+            <p>Durak (Дурак) is a fast card shedding game for 2–4 players. Players attack and defend in turn while trying to empty their hands. The last player holding cards is the durak.</p>
             <p class="content-link-row"><a href="/rules.html">Read the complete Durak rules →</a></p>
         </details>
     </div>
@@ -248,7 +224,7 @@
 <script type="importmap">
 {
   "imports": {
-    "/js/actions.js": "/js/actions.js?v=7bc1683cad9c",
+    "/js/actions.js": "/js/actions.js?v=16a581a6793d",
     "/js/api.js": "/js/api.js?v=1e52de4122f5",
     "/js/dom.js": "/js/dom.js?v=99f5722c40f3",
     "/js/lobby.js": "/js/lobby.js?v=a88884aae4c4",
@@ -260,7 +236,7 @@
   }
 }
 </script>
-<link rel="modulepreload" href="/js/actions.js?v=7bc1683cad9c">
+<link rel="modulepreload" href="/js/actions.js?v=16a581a6793d">
 <link rel="modulepreload" href="/js/api.js?v=1e52de4122f5">
 <link rel="modulepreload" href="/js/dom.js?v=99f5722c40f3">
 <link rel="modulepreload" href="/js/lobby.js?v=a88884aae4c4">
@@ -269,7 +245,7 @@
 <link rel="modulepreload" href="/js/state.js?v=503977d50881">
 <link rel="modulepreload" href="/js/sync.js?v=5e859860c397">
 <link rel="modulepreload" href="/js/view.js?v=473a1963a6a4">
-<script type="module" src="/js/main.js?v=f5de585ce905"></script>
+<script type="module" src="/js/main.js?v=1e957f0f6364"></script>
 <!-- /ES modules -->
 </body>
 </html>

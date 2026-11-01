@@ -98,29 +98,54 @@ test.describe("Home page sections", () => {
         await expect(notice).toHaveCount(0);
     });
 
-    test("What is Durak and Online play start collapsed and open on demand", async ({page}) => {
+    test("About Durak is the one guide on the page and opens on demand", async ({page}) => {
         await page.goto("/");
-        const intro = page.locator("details:has(#what-is-durak)");
-        const play = page.locator("details:has(#how-it-works)");
+        const about = page.locator("details:has(#what-is-durak)");
 
-        for (const section of [intro, play]) {
-            await expect(section).toHaveJSProperty("open", false);
-        }
-        await expect(page.getByRole("heading", {name: "What is Durak"})).toBeVisible();
-        await expect(page.getByRole("heading", {name: "Online play"})).toBeVisible();
+        await expect(page.locator("#lobbyView details")).toHaveCount(1);
+        await expect(about).toHaveJSProperty("open", false);
+        await expect(page.getByRole("heading", {name: "About Durak"})).toBeVisible();
         await expect(page.getByText("Durak (Дурак) is a fast card shedding game")).toBeHidden();
         await expect(page.getByRole("link", {name: "Read the complete Durak rules →"})).toBeHidden();
 
-        await intro.locator("summary").click();
-        await expect(intro).toHaveJSProperty("open", true);
-        await expect(page.getByText("Durak (Дурак) is a fast card shedding game")).toBeVisible();
-        await expect(play).toHaveJSProperty("open", false);
-
-        await play.locator("summary").focus();
-        await page.keyboard.press("Enter");
-        await expect(play).toHaveJSProperty("open", true);
+        await about.locator("summary").click();
+        await expect(about).toHaveJSProperty("open", true);
+        await expect(page.getByText("Durak (Дурак) is a fast card shedding game for 2–4 players")).toBeVisible();
         await expect(page.getByRole("link", {name: "Read the complete Durak rules →"})).toBeVisible();
+
+        await about.locator("summary").focus();
         await page.keyboard.press("Enter");
-        await expect(play).toHaveJSProperty("open", false);
+        await expect(about).toHaveJSProperty("open", false);
+        await page.keyboard.press("Enter");
+        await expect(about).toHaveJSProperty("open", true);
     });
+
+    for (const width of [320, 375]) {
+        test(`a long name in Open tables wraps beside Join at ${width}px`, async ({page}) => {
+            // Names allow 24 characters and need no spaces. The document width alone misses an
+            // overlap (it stays at the viewport width while the name runs underneath Join), so
+            // compare where the rendered text ends with where the button starts.
+            const longName = {code: "LNGNM2", playerNames: ["AlexandertheGreatAndMore"], playerCount: 1, maxPlayers: 4};
+            await page.setViewportSize({width, height: 740});
+            await routeLobbies(page, {current: [longName, table]});
+            await page.goto("/");
+            await expect(page.locator(`.lobby-list-join[data-code="${longName.code}"]`)).toBeVisible();
+
+            const rows = await page.locator("#lobbyGameList .lobby-list-item").evaluateAll(items => items.map(item => {
+                const meta = item.querySelector(".lobby-list-meta");
+                const text = document.createRange();
+                text.selectNodeContents(meta);
+                return {
+                    textRight: text.getBoundingClientRect().right,
+                    joinLeft: item.querySelector(".lobby-list-join").getBoundingClientRect().left,
+                    overflow: meta.scrollWidth - meta.clientWidth
+                };
+            }));
+            expect(rows).toHaveLength(2);
+            for (const row of rows) {
+                expect(row.textRight).toBeLessThanOrEqual(row.joinLeft);
+                expect(row.overflow).toBeLessThanOrEqual(0);
+            }
+        });
+    }
 });
