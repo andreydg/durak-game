@@ -7,11 +7,79 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#createBtn")).toBeVisible();
         await expect(page.locator("#createBtn")).toHaveClass(/btn-primary/);
         await expect(page.locator("#joinBtn")).toBeVisible();
-        await expect(page.locator("#hostName")).toBeVisible();
+        await expect(page.locator("#joinBtn")).toHaveClass(/btn-primary/);
+        await expect(page.getByLabel("Playing as")).toBeVisible();
+        await expect(page.locator("#hostName")).toHaveAttribute("placeholder", "(optional)");
+        await expect(page.getByLabel("Room code")).toHaveAttribute("placeholder", "Room code");
+        await expect(page.locator("#playerName")).toBeHidden();
+        await expect(page.locator("#joinHint")).toBeHidden();
         await expect(page.locator("#quickPlayBtn")).toHaveText("Quick Play vs Elektronik");
+        await expect(page.locator("#quickPlayBtn")).toHaveClass(/btn-primary/);
+        // Create room and Join share the first row; Quick Play is the row below.
         const quickBox = await page.locator("#quickPlayBtn").boundingBox();
         const createBox = await page.locator("#createBtn").boundingBox();
-        expect(quickBox?.y).toBeLessThan(createBox?.y ?? 0);
+        const joinBox = await page.locator("#joinBtn").boundingBox();
+        expect(quickBox?.y).toBeGreaterThan((createBox?.y ?? 0) + (createBox?.height ?? 0));
+        expect(Math.abs((joinBox?.y ?? 0) - (createBox?.y ?? 0))).toBeLessThan(4);
+    });
+
+    for (const width of [320, 375]) {
+        test(`the home page fits a ${width}px screen`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 740 });
+            await page.goto("/");
+            await expect(page.locator("#quickPlayBtn")).toBeVisible();
+            const size = await page.evaluate(() => ({
+                scrollWidth: document.documentElement.scrollWidth,
+                clientWidth: document.documentElement.clientWidth
+            }));
+            expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth);
+            const join = await page.locator("#joinBtn").boundingBox();
+            expect((join?.x ?? 0) + (join?.width ?? 0)).toBeLessThanOrEqual(width);
+        });
+    }
+
+    test("the one name field names you in a room you join by code", async ({ page }) => {
+        const joins = [];
+        await page.route("**/api/games/ZZZZ22/join", route => {
+            joins.push(route.request().postDataJSON());
+            return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "Game not found" }) });
+        });
+        await page.goto("/");
+        await page.fill("#hostName", "Carol");
+        await page.fill("#gameCode", "zzzz22");
+        await expect(page.locator("#gameCode")).toHaveCSS("text-transform", "uppercase");
+        await page.click("#joinBtn");
+
+        await expect(page.locator("#appAlert")).toContainText("Game not found");
+        expect(joins).toEqual([{ playerName: "Carol" }]);
+    });
+
+    test("Enter in the name field joins once a room code is filled in", async ({ page }) => {
+        const joins = [];
+        await page.route("**/api/games/*/join", route => {
+            joins.push(route.request().postDataJSON());
+            return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "Game not found" }) });
+        });
+        await page.goto("/");
+        await page.locator("#hostName").fill("Dana");
+        await page.locator("#hostName").press("Enter");
+        // No code yet: Enter does nothing (no room is created either).
+        await page.waitForTimeout(300);
+        await expect(page.locator("#lobbyView")).toBeVisible();
+        expect(joins).toEqual([]);
+
+        await page.fill("#gameCode", "ZZZZ22");
+        await page.locator("#hostName").press("Enter");
+        await expect(page.locator("#appAlert")).toContainText("Game not found");
+        expect(joins).toEqual([{ playerName: "Dana" }]);
+    });
+
+    test("an invite link fills the code and puts the cursor in the name field", async ({ page }) => {
+        await page.goto("/?room=zzzz22");
+        await expect(page.locator("#gameCode")).toHaveValue("ZZZZ22");
+        await expect(page.locator("#joinHint")).toBeVisible();
+        await expect(page.locator("#joinHint")).toContainText("Invite loaded for room ZZZZ22");
+        await expect(page.locator("#hostName")).toBeFocused();
     });
 
     test("invalid room code shows an accessible error", async ({ page }) => {
@@ -253,10 +321,11 @@ test.describe("Lobby & room creation", () => {
         await otherPage.goto(`/?room=${code.toLowerCase()}`);
         await expect(otherPage.locator("#gameCode")).toHaveValue(code);
         await expect(otherPage.locator("#joinHint")).toContainText(`Invite loaded for room ${code}`);
-        await otherPage.fill("#playerName", "Invited Friend");
+        await otherPage.fill("#hostName", "Invited Friend");
         await otherPage.click("#joinBtn");
         await expect(otherPage.locator("#gameView")).toBeVisible();
         await expect(otherPage.locator("#gameCodeLabel")).toHaveText(code);
+        await expect(otherPage.locator("#roleLabel")).toContainText("Invited Friend");
         await expect(otherPage.locator("#visibilityLabel")).toHaveText("Invite only");
         await otherContext.close();
     });
