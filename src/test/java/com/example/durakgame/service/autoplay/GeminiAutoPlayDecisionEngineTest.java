@@ -311,6 +311,31 @@ class GeminiAutoPlayDecisionEngineTest {
         transport.respond(200, answer("{\"type\":\"ATTACK\",\"cardCode\":\"AS\"}"));
         assertEquals(heuristicMove, engine.choose(game, BOT, moves));
         assertTrue(logLines("autoplay_decision").getLast().endsWith(" model=ATTACK/AS/-"));
+
+        transport.respond(200, answer("{\"strategy\":\"Take it all.\",\"type\":\"TAKE\"}"));
+        assertEquals(heuristicMove, engine.choose(game, BOT, moves));
+        assertTrue(logLines("autoplay_decision").getLast().endsWith(" strategy=\"Take it all.\" model=TAKE/-/-"));
+    }
+
+    @Test
+    void theDecisionLineCarriesTheModelsStrategyOnOneQuoteSafeLine() throws Exception {
+        GeminiAutoPlayDecisionEngine engine = engine(settings());
+        Game game = openingAttack();
+        transport.respond(200, answer("{\"strategy\":\"Lead the spare \\\"7C\\\",\\nkeep the trumps.\","
+                + "\"type\":\"ATTACK\",\"cardCode\":\"7C\"}"));
+
+        engine.choose(game, BOT, game.computeViewerLegalMoves(BOT));
+        String line = logLines("autoplay_decision").getLast();
+        assertTrue(line.contains(" source=llm reason=none action=ATTACK card=7C "), line);
+        assertTrue(line.endsWith(" strategy=\"Lead the spare '7C', keep the trumps.\""), line);
+
+        transport.respond(200, answer("{\"strategy\":\"" + "x".repeat(400) + "\",\"type\":\"ATTACK\",\"cardCode\":\"7C\"}"));
+        engine.choose(game, BOT, game.computeViewerLegalMoves(BOT));
+        assertTrue(logLines("autoplay_decision").getLast().endsWith(" strategy=\"" + "x".repeat(300) + "...\""));
+
+        transport.respond(200, answer("{\"type\":\"ATTACK\",\"cardCode\":\"7C\"}"));
+        engine.choose(game, BOT, game.computeViewerLegalMoves(BOT));
+        assertFalse(logLines("autoplay_decision").getLast().contains("strategy="), "no strategy, no field");
     }
 
     @Test
@@ -548,7 +573,7 @@ class GeminiAutoPlayDecisionEngineTest {
                 + "latencyMs=1234 httpStatus=200 promptTokens=2100 cachedTokens=1536 outputTokens=37 "
                 + "thoughtTokens=512 totalTokens=2649 finishReason=STOP error=none", calls.getFirst());
         assertEquals("autoplay_decision code=TEST01 player=" + BOT + " source=llm reason=none action=ATTACK "
-                + "card=7C attackCard=- options=4", decisions.getFirst());
+                + "card=7C attackCard=- options=4 strategy=\"lead low\"", decisions.getFirst());
         for (ILoggingEvent event : logs.list) {
             String line = event.getFormattedMessage();
             assertFalse(line.contains("\n"), "log entries must be single-line: " + line);

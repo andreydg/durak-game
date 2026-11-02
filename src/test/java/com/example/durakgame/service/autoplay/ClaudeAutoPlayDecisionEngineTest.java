@@ -340,7 +340,7 @@ class ClaudeAutoPlayDecisionEngineTest {
                 + "latencyMs=2345 httpStatus=200 promptTokens=2110 cachedTokens=1786 cacheWriteTokens=12 "
                 + "outputTokens=420 finishReason=end_turn requestId=req_011CUx9forged1 error=none", calls.getFirst());
         assertEquals("autoplay_decision code=TEST01 player=" + BOT + " source=llm reason=none action=ATTACK "
-                + "card=7C attackCard=- options=4", logLines("autoplay_decision").getFirst());
+                + "card=7C attackCard=- options=4 strategy=\"lead low\"", logLines("autoplay_decision").getFirst());
         for (ILoggingEvent event : logs.list) {
             String line = event.getFormattedMessage();
             assertFalse(line.contains("\n"), "log entries must be single-line: " + line);

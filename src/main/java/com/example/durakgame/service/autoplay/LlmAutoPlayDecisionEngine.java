@@ -86,19 +86,24 @@ abstract class LlmAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
     public AutoPlayAction choose(Game game, String playerId, ViewerLegalMoves legalMoves) {
         List<AutoPlayAction> options = AutoPlayLegality.enumerate(legalMoves);
         Decision decision = decide(game, playerId, legalMoves, options);
+        String strategy = sanitize(decision.strategy());
         log.info("autoplay_decision code={} player={} source={} reason={} action={} card={} attackCard={} "
-                        + "options={}{}",
+                        + "options={}{}{}",
                 game.getCode(), playerId, decision.source(), decision.reason(), actionType(decision.action()),
                 orDash(decision.action() == null ? null : decision.action().cardCode()),
                 orDash(decision.action() == null ? null : decision.action().attackCardCode()),
-                options.size(), decision.detail() == null ? "" : " " + decision.detail());
+                options.size(), strategy.isEmpty() ? "" : " strategy=\"" + strategy + "\"",
+                decision.detail() == null ? "" : " " + decision.detail());
         return decision.action();
     }
 
-    /** Where an action came from and, when the heuristic was used, why. */
-    private record Decision(AutoPlayAction action, String source, String reason, String detail) {
+    /**
+     * Where an action came from, when the heuristic was used why, and the one-sentence strategy the
+     * model gave with its answer (null when no model answered).
+     */
+    private record Decision(AutoPlayAction action, String source, String reason, String detail, String strategy) {
         static Decision of(AutoPlayAction action, String source, String reason) {
-            return new Decision(action, source, reason, null);
+            return new Decision(action, source, reason, null, null);
         }
     }
 
@@ -147,12 +152,12 @@ abstract class LlmAutoPlayDecisionEngine implements AutoPlayDecisionEngine {
         if (action == null || !AutoPlayLegality.isLegal(action, legalMoves)) {
             Decision fallbackDecision = heuristic(game, playerId, legalMoves, "illegal_model_action");
             return new Decision(fallbackDecision.action(), fallbackDecision.source(), fallbackDecision.reason(),
-                    "model=" + answer.describe());
+                    "model=" + answer.describe(), answer.strategy());
         }
         if (action.type() == AutoPlayAction.Type.DEFEND) {
             planCache.store(game, playerId, legalMoves, action, answer.defencePlan(undefended));
         }
-        return Decision.of(action, "llm", "none");
+        return new Decision(action, "llm", "none", null, answer.strategy());
     }
 
     /**
