@@ -535,12 +535,17 @@ export function defenceChoice(defensesByAttack, selected, previousTarget) {
 }
 
 /**
- * What dropping `card` on the table does: transfer first, then attack, then defend (against the
- * first of `preferredTargets` it can beat, else the first attack it beats). Null when nothing.
+ * What dropping `card` on the table does. Dropped on an attack card it can beat (`droppedOn`), it
+ * defends that card, even when it could also transfer. Anywhere else the drop uses the whole row:
+ * transfer first, then attack, then defend (against the first of `preferredTargets` it can beat,
+ * else the first attack it beats). Null when nothing.
  */
-export function chooseDropAction(legalMoves, card, preferredTargets = []) {
+export function chooseDropAction(legalMoves, card, preferredTargets = [], droppedOn = "") {
     const moves = legalMoves || {};
     if (!card) return null;
+    if (droppedOn && defenceTargets(moves.defensesByAttackCard, card).includes(droppedOn)) {
+        return { kind: "defend", target: droppedOn };
+    }
     if (moves.canTransfer && (moves.transferableCardCodes || []).includes(card)) return { kind: "transfer" };
     if (moves.canAttack && (moves.attackableCardCodes || []).includes(card)) return { kind: "attack" };
     const target = chooseDefenceTarget(moves.defensesByAttackCard, card, preferredTargets);
