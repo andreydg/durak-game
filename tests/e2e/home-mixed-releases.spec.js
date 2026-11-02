@@ -5,12 +5,12 @@ import {readFileSync} from "node:fs";
  * The home page now has one "Playing as" field where the previous page had a name field in each
  * form. A deploy or rollback between loading the page and loading its modules can pair this build's
  * HTML with the previous release's scripts, or the reverse: ?v= is a cache key, not a version the
- * server keeps, so every URL returns the running release's bytes. fixtures/release-12acae6 holds
- * that release's index.html, main.js, actions.js and dom.js byte for byte (12acae6, the last
+ * server keeps, so every URL returns the running release's bytes. fixtures/release-0b96163 holds
+ * that release's index.html, main.js, actions.js and dom.js byte for byte (0b96163, the last
  * release with two name fields). Whatever the mix, nothing may throw, and rooms can still be
  * created and joined.
  */
-const previous = file => readFileSync(new URL(`./fixtures/release-12acae6/${file}`, import.meta.url), "utf8");
+const previous = file => readFileSync(new URL(`./fixtures/release-0b96163/${file}`, import.meta.url), "utf8");
 
 /** Answers every request for /js/<file> (any ?v=) with the previous release's copy; counts them. */
 async function servePreviousModule(page, file) {
