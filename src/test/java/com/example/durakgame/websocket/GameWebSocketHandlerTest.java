@@ -159,6 +159,10 @@ class GameWebSocketHandlerTest {
         handler.afterConnectionEstablished(healthy);
         int updates = SessionSender.QUEUE_CAPACITY + 8;
 
+        // Enough updates to overflow the stuck client's queue, each waiting until the healthy client
+        // has it. Sent in one burst, the healthy client's queue would fill too whenever its sender
+        // thread isn't scheduled in time (as on a busy CI runner), and it would be dropped like any
+        // client that far behind: that is the intended limit, not what this test is about.
         long slowestMs = 0;
         for (int i = 0; i < updates; i++) {
             long started = System.nanoTime();
@@ -167,10 +171,10 @@ class GameWebSocketHandlerTest {
             if (i == 0) {
                 assertTrue(stuck.awaitSendAttempts(1, Duration.ofSeconds(2)));
             }
+            assertTrue(healthy.awaitMessageCount(i + 1, Duration.ofSeconds(2)), "the healthy client missed update " + i);
         }
 
         assertTrue(slowestMs < 200, "a broadcast waited " + slowestMs + " ms for the stuck client");
-        assertTrue(healthy.awaitMessageCount(updates, Duration.ofSeconds(2)), "the healthy client missed updates");
         stuck.sendGate.countDown();
         assertTrue(stuck.awaitCloseCalls(1, Duration.ofSeconds(2)));
         assertTrue(stuck.closedBy.startsWith("websocket-send-"), "closed by " + stuck.closedBy);
@@ -181,6 +185,8 @@ class GameWebSocketHandlerTest {
         assertTrue(stuck.awaitClosed(Duration.ofSeconds(2)));
         assertEquals(CloseStatus.SESSION_NOT_RELIABLE.getCode(), stuck.closeStatus.getCode());
         assertEquals(1, stuck.closeCalls.get());
+        assertTrue(healthy.isOpen(), "the healthy client was dropped");
+        assertEquals(0, healthy.closeCalls.get());
     }
 
     @Test
