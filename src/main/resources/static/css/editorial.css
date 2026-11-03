@@ -1,0 +1,70 @@
+/* Shared landing/guide typography. Font files are local; the existing self-only CSP stays intact. */
+@font-face {
+    font-family: "DM Sans";
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url("/fonts/dm-sans-latin-v17.woff2") format("woff2");
+}
+@font-face {
+    font-family: "DM Serif Display";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/fonts/dm-serif-display-latin-v17.woff2") format("woff2");
+}
+:root {
+    --font-editorial: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-display: "DM Serif Display", Georgia, serif;
+    --editorial-paper: #fff;
+    --editorial-border: #dfddda;
+    --editorial-green: #347f4c;
+    --editorial-green-hover: #2c7042;
+}
+/* The game keeps its existing background and monospace controls. */
+body:has(#lobbyView:not(.hidden)),
+body.content-page {
+    background: var(--bg);
+}
+.brand-title {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+    color: var(--text);
+}
+.brand-title span {
+    color: var(--accent);
+}
+.brand-suits {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1.5rem;
+    margin-top: 0.875rem;
+    color: var(--accent);
+    opacity: 0.85;
+    font: 0.875rem/1 var(--font-mono);
+}
+.site-nav a,
+.content-nav a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.75rem;
+    padding: 0.65rem 1rem;
+    border: 1px solid var(--editorial-border);
+    border-radius: 999px;
+    color: var(--text);
+    background: transparent;
+    font: 600 0.75rem/1.5 var(--font-editorial);
+}
+.site-nav a:hover,
+.content-nav a:hover {
+    background: var(--editorial-paper);
+}
+.lobby-root :is(a, button, input, summary):focus-visible,
+.content-page :is(a, button, summary):focus-visible {
+    outline: 2px solid var(--editorial-green);
+    outline-offset: 4px;
+}

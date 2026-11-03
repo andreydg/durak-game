@@ -890,6 +890,26 @@ describe("lobbyRowsHtml", () => {
         expect(html).toContain("This room");
         expect(html).toContain("lobby-list-item--yours");
         expect(html).not.toContain("lobby-list-join");
+        expect(html).not.toContain("lobby-list-avatar");
+    });
+
+    it("renders decorative initials only for the home list, with a safe empty-name fallback", () => {
+        const container = document.createElement("div");
+        container.innerHTML = L.lobbyRowsHtml([
+            ...rows,
+            {code: "EMPTY2", playerNames: [], playerCount: 0, maxPlayers: 4},
+            {code: "SPACE2", playerNames: ["   "], playerCount: 1, maxPlayers: 4},
+            {code: "UNICD2", playerNames: ["  éva"], playerCount: 1, maxPlayers: 4},
+            {code: "ANGLE2", playerNames: ["<img src=x>"], playerCount: 1, maxPlayers: 4}
+        ], true, null);
+        const avatars = [...container.querySelectorAll(".lobby-list-avatar")];
+        expect(avatars.map(avatar => avatar.textContent)).toEqual(["A", "C", "♠", "♠", "É", "<"]);
+        for (const avatar of avatars) {
+            expect(avatar.getAttribute("aria-hidden")).toBe("true");
+            // Old stylesheets should not show a stray initial during mixed-release loads.
+            expect(avatar.hidden).toBe(true);
+        }
+        expect(container.querySelector("img")).toBeNull();
     });
 
     it("escapes player names to prevent HTML injection", () => {
