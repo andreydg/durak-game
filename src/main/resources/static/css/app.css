@@ -1118,10 +1118,15 @@ body:has(#lobbyView:not(.hidden)) {
 }
 .lobby-title span {
     margin-left: 0.35rem;
+    color: var(--accent);
 }
 .lobby-tagline {
     margin: 0.75rem 0 0;
     color: var(--text-soft);
+}
+/* Cached pre-editorial HTML has .lobby-suits but no .brand-suits or editorial.css. */
+.lobby-suits {
+    color: var(--accent);
 }
 /* In-game view should use full page width (with body padding as margin). */
 #gameView.stack {
@@ -1232,6 +1237,7 @@ body:has(#lobbyView:not(.hidden)) {
     border-right: 0;
     border-radius: 10px 0 0 10px;
     text-transform: uppercase;
+    font-family: var(--font-mono);
     letter-spacing: 0.12em;
     background: #f5f5f5;
 }
@@ -1252,8 +1258,9 @@ body:has(#lobbyView:not(.hidden)) {
     font-size: 0.75rem;
     color: var(--text-soft);
 }
-/* Keep a usable code field even when large text makes an attached Join button too wide. */
-@container (max-width: 12em) {
+/* Six mono characters, letter spacing, input padding and Join need about 13.2 container em.
+   Leave room for borders too; container em is the form's 0.875rem font size. */
+@container (max-width: 14em) {
     .lobby-join-field { flex-direction: column; gap: 0.5rem; }
     .lobby-join-field #gameCode { flex: auto; border-right: 1px solid var(--editorial-border, var(--border)); border-radius: 10px; }
     .lobby-join-field .btn-primary { width: 100%; min-width: 0; border-radius: 10px; }
@@ -1272,7 +1279,7 @@ body:has(#lobbyView:not(.hidden)) {
     border: 0;
     border-radius: 10px;
     background: transparent;
-    color: var(--editorial-green, var(--success));
+    color: var(--editorial-green-text, #2c7042);
     font: 600 0.875rem/1.5 var(--font-editorial, system-ui, sans-serif);
 }
 .lobby-play .btn-quick:hover:not(:disabled):not([aria-disabled="true"]) {
@@ -1295,10 +1302,10 @@ body:has(#lobbyView:not(.hidden)) {
 #joinHint:empty {
     display: none;
 }
-@media (max-width: 700px) {
+@media (max-width: 43.75em) {
     .lobby-root { padding: 1rem 0.75rem; }
 }
-@media (max-width: 540px) {
+@media (max-width: 33.75em) {
     .lobby-root { padding: 0.75rem 0.375rem; }
     .lobby-hero { padding-top: 2rem; margin-bottom: 1.125rem; }
     .site-nav { top: -0.625rem; }
@@ -1390,7 +1397,7 @@ button.btn-primary[aria-disabled="true"] {
     border: 1px solid var(--editorial-border, var(--border));
     border-radius: 9px;
     background: transparent;
-    color: var(--editorial-green, var(--success));
+    color: var(--editorial-green-text, #2c7042);
     font: 600 0.75rem/1.5 var(--font-editorial, system-ui, sans-serif);
     text-shadow: none;
     box-shadow: none;
@@ -1429,14 +1436,14 @@ button.btn-primary[aria-disabled="true"] {
     min-width: 0;
     font-size: 0.75rem;
 }
-@media (max-width: 700px) {
+@media (max-width: 43.75em) {
     #lobbyOpenTables .lobby-list-meta { flex-direction: column; gap: 0.125rem; }
 }
 @container (max-width: 18em) {
     /* Decoration yields to the room code and Join when text is enlarged. */
     #lobbyOpenTables .lobby-list-avatar { display: none; }
 }
-@media (max-width: 540px) {
+@media (max-width: 33.75em) {
     .lobby-open-tables { margin-top: 1.375rem; }
     #lobbyOpenTables .lobby-list-item { gap: 0.625rem; }
     #lobbyOpenTables .lobby-list-join { padding-inline: 0.875rem; }

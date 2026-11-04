@@ -20,6 +20,7 @@
     --editorial-border: #dfddda;
     --editorial-green: #347f4c;
     --editorial-green-hover: #2c7042;
+    --editorial-green-text: #2c7042;
 }
 /* The game keeps its existing background and monospace controls. */
 body:has(#lobbyView:not(.hidden)),

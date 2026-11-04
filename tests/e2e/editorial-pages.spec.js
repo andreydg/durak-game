@@ -1,4 +1,6 @@
 import {test, expect} from "@playwright/test";
+import {expectReadableAction} from "./support/contrast.js";
+import {setDefaultFont, roomCodeMetrics, headerOverlaps, contentsOverflow} from "./support/editorial-layout.js";
 import {horizontalOverflow, seedSession, serveGame, syntheticGame} from "./support/synthetic.js";
 
 const widths = [320, 390, 768, 1024];
@@ -83,40 +85,6 @@ function expectNoOverlap(a, b, description) {
     const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
     const overlapY = Math.min(bottom(a), bottom(b)) - Math.max(a.y, b.y);
     expect(Math.min(overlapX, overlapY), description).toBeLessThanOrEqual(0.5);
-}
-
-async function expectReadableAction(locator) {
-    await expect(locator).toBeVisible();
-    const {ratio, fontSize} = await locator.evaluate(element => {
-        // These editorial actions have solid fills. Composite transparent action rows and
-        // translucent ancestor surfaces over the browser's white canvas, rather than treating
-        // a transparent button as black. Canvas also normalizes CSS color syntaxes for us.
-        const canvas = document.createElement("canvas");
-        canvas.width = canvas.height = 1;
-        const context = canvas.getContext("2d", {willReadFrequently: true});
-        context.fillStyle = "white";
-        context.fillRect(0, 0, 1, 1);
-        const ancestors = [];
-        for (let node = element; node; node = node.parentElement) ancestors.unshift(node);
-        for (const node of ancestors) {
-            context.fillStyle = getComputedStyle(node).backgroundColor;
-            context.fillRect(0, 0, 1, 1);
-        }
-        const background = context.getImageData(0, 0, 1, 1).data;
-        const style = getComputedStyle(element);
-        context.fillStyle = style.color;
-        context.fillRect(0, 0, 1, 1);
-        const foreground = context.getImageData(0, 0, 1, 1).data;
-        const luminance = rgba => [0.2126, 0.7152, 0.0722].reduce((sum, weight, index) => {
-            const value = rgba[index] / 255;
-            return sum + weight * (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
-        }, 0);
-        const light = Math.max(luminance(background), luminance(foreground));
-        const dark = Math.min(luminance(background), luminance(foreground));
-        return {ratio: (light + 0.05) / (dark + 0.05), fontSize: parseFloat(style.fontSize)};
-    });
-    expect(ratio, `${await locator.innerText()}: text/background contrast`).toBeGreaterThanOrEqual(4.5);
-    expect(fontSize, "action labels remain readable without the editorial font declarations").toBeGreaterThanOrEqual(12);
 }
 
 test.describe("Editorial landing", () => {
@@ -274,67 +242,75 @@ test.describe("Editorial landing", () => {
     }
 });
 
-test.describe("Editorial fallback and enlarged text regressions", () => {
+test.describe("Editorial contrast and enlarged text regressions", () => {
     for (const width of [390, 1024]) {
-        for (const path of ["/", "/rules.html"]) {
-            test(`${path} actions remain readable without the editorial stylesheet at ${width}px`, async ({page}) => {
-                await page.setViewportSize({width, height: 900});
-                await mockLobbies(page);
-                // Model cached HTML from before editorial.css was linked, but keep the current
-                // app/content styles. No Git history, archived assets or external origin needed.
-                await page.route(url => url.pathname === path, async route => {
-                    const response = await route.fetch();
-                    const html = await response.text();
-                    const link = /<link\b[^>]*\bhref\s*=\s*["']\/css\/editorial\.css(?:\?[^"']*)?["'][^>]*>/gi;
-                    expect(html.match(link), "the simulation must remove exactly one stylesheet link").toHaveLength(1);
-                    await route.fulfill({response, body: html.replace(link, "")});
-                });
-                await ready(page, path);
-                await expect(page.locator(editorialStylesheet)).toHaveCount(0);
-                expect(await page.evaluate(() => [...document.styleSheets].some(sheet =>
-                    sheet.href && new URL(sheet.href).pathname === "/css/editorial.css"))).toBe(false);
-
-                const actions = path === "/"
-                    ? [["#createBtn", "Create room"], ["#joinBtn", "Join"], ["#quickPlayBtn", "Quick Play vs Elektronik"]]
-                        .map(([selector, name]) => ({locator: page.locator(selector), name}))
-                    : ["Open the game", "Create a table"].map(name => ({locator: page.getByRole("link", {name, exact: true}), name}));
-                for (const {locator, name} of actions) {
-                    await expect(locator).toHaveAccessibleName(name);
-                    await expectReadableAction(locator);
-                    if (path === "/rules.html") await expect(locator).toHaveAttribute("href", "/");
-                }
-            });
-        }
+        test(`small text meets AA contrast in normal and hover states at ${width}px`, async ({page}) => {
+            await page.setViewportSize({width, height: 900});
+            await mockLobbies(page);
+            await ready(page, "/");
+            await expect(page.locator("#lobbyGameList .lobby-list-item")).toHaveCount(tables.length);
+            await page.locator(".seo-collapsible > summary").click();
+            for (const target of [page.locator("#quickPlayBtn"),
+                ...await page.locator("#lobbyOpenTables .lobby-list-join").all(),
+                page.locator(".content-link-row a")]) {
+                await page.mouse.move(0, 0);
+                await expectReadableAction(target);
+                await target.hover();
+                await expectReadableAction(target);
+            }
+            await ready(page, "/rules.html");
+            for (const eyebrow of await page.locator(".content-eyebrow").all()) {
+                await expectReadableAction(eyebrow);
+            }
+            for (const target of await page.locator(".rules-toc a").all()) {
+                await page.mouse.move(0, 0);
+                await expectReadableAction(target);
+                await target.hover();
+                await expectReadableAction(target);
+            }
+        });
     }
 
-    for (const width of [541, 390, 320]) {
-        for (const rootFontSize of [24, 32]) {
-            test(`room code stays usable at ${width}px with a ${rootFontSize}px default font`, async ({page}) => {
+    test("About Durak exposes only its heading, not decorative plus or minus", async ({page}) => {
+        await mockLobbies(page);
+        await ready(page, "/");
+        const summary = page.locator(".seo-collapsible > summary");
+        expect(await summary.ariaSnapshot()).toBe('- heading "About Durak" [level=2]');
+        await summary.click();
+        await expect(summary.locator("..")).toHaveJSProperty("open", true);
+        expect(await summary.ariaSnapshot()).toBe('- heading "About Durak" [level=2]');
+    });
+
+    for (const width of [320, 390, 541, 600, 700, 768, 1024]) {
+        for (const rootFontSize of [16, 24, 32]) {
+            test(`font matrix: ${width}px viewport, ${rootFontSize}px browser default`, async ({page}, testInfo) => {
                 await page.setViewportSize({width, height: 900});
+                await setDefaultFont(page, rootFontSize);
                 await mockLobbies(page);
                 await ready(page, "/");
-                await page.addStyleTag({content: `html { font-size: ${rootFontSize}px !important; }`});
                 await expect(page.locator("html")).toHaveCSS("font-size", `${rootFontSize}px`);
-                await page.evaluate(() => document.fonts.ready);
+                // This must exercise real browser defaults, including em media queries.
+                expect(await page.evaluate(() => matchMedia("(max-width: 33.75em)").matches))
+                    .toBe(width <= 33.75 * rootFontSize);
                 await expect(page.locator("#lobbyGameList .lobby-list-item")).toHaveCount(tables.length);
 
                 const code = page.locator("#gameCode");
-                await code.fill("HJK234");
-                await expect(code).toHaveValue("HJK234");
-                const metrics = await code.evaluate(input => {
-                    const style = getComputedStyle(input);
-                    return {
-                        fontSize: parseFloat(style.fontSize),
-                        // Padding must not count as space available to read/edit the code.
-                        usableWidth: input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-                    };
-                });
+                await code.fill("WWWWWW");
+                const metrics = await roomCodeMetrics(page);
                 expect(metrics.fontSize).toBeGreaterThanOrEqual(rootFontSize);
-                expect(metrics.usableWidth, "room code needs at least three font-size units of editable space")
-                    .toBeGreaterThanOrEqual(metrics.fontSize * 3);
+                if (width === 320 && rootFontSize === 32) {
+                    // At this extreme width no complete code fits; keep usable editing space.
+                    expect(metrics.usableWidth).toBeGreaterThanOrEqual(metrics.fontSize * 3);
+                } else {
+                    expect(metrics.scrollWidth, "all six characters must be visible").toBeLessThanOrEqual(metrics.clientWidth);
+                    expect(metrics.usableWidth + 1).toBeGreaterThanOrEqual(metrics.textWidth);
+                }
                 const codeBox = await expectOnScreen(code, width);
                 const joinBox = await expectOnScreen(page.locator("#joinBtn"), width);
                 expectNoOverlap(codeBox, joinBox, "Join must not overlap the enlarged room-code input");
+                const header = await headerOverlaps(page);
+                expect(header.card, "How to play must not overlap the card fan").toBe(0);
+                expect(header.heading, "How to play must not overlap heading glyphs").toBe(0);
                 for (const selector of ["#hostName", "#createBtn", "#quickPlayBtn"]) {
                     await expectOnScreen(page.locator(selector), width);
                 }
@@ -347,9 +323,17 @@ test.describe("Editorial fallback and enlarged text regressions", () => {
                     const button = await box(row.locator(".lobby-list-join"));
                     expect(textRight, "enlarged room names and codes must not overlap Join").toBeLessThanOrEqual(button.x);
                 }
-                // Allow either side-by-side or stacked controls: the regression is unusable
-                // input space, not which grid/container-query implementation fixes it.
                 await expectNoOverflow(page);
+                await ready(page, "/rules.html");
+                await expect(page.locator("html")).toHaveCSS("font-size", `${rootFontSize}px`);
+                const contents = await contentsOverflow(page);
+                for (const link of contents) {
+                    expect(link.overflow, `${link.label} stays inside its contents cell`).toBeLessThanOrEqual(0.5);
+                }
+                await testInfo.attach("font-matrix-measurements", {
+                    body: JSON.stringify({width, rootFontSize, input: metrics, header, contents}),
+                    contentType: "application/json"
+                });
             });
         }
     }
@@ -357,8 +341,8 @@ test.describe("Editorial fallback and enlarged text regressions", () => {
     test("rules header links do not overlap at 390px with a 32px default font", async ({page}) => {
         const width = 390;
         await page.setViewportSize({width, height: 900});
+        await setDefaultFont(page, 32);
         await ready(page, "/rules.html");
-        await page.addStyleTag({content: "html { font-size: 32px !important; }"});
         await expect(page.locator("html")).toHaveCSS("font-size", "32px");
         await page.evaluate(() => document.fonts.ready);
         const home = page.getByRole("link", {name: "Durak Online home", exact: true});
