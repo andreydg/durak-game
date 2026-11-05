@@ -59,6 +59,25 @@ describe("crawlable SEO pages", () => {
         expect(visibleSource).toContain("Quick Play vs Elektronik");
     });
 
+    test("both pages share same-origin editorial fonts with bundled licenses and fallbacks", () => {
+        for (const [file] of pages) {
+            expect(documentFor(file).querySelector('link[href^="/css/editorial.css?v="]')).not.toBeNull();
+        }
+        const css = source("css/editorial.css");
+        expect(css).not.toMatch(/@import|https?:\/\//);
+        expect(css).toContain("font-display: swap");
+        expect(css).toContain("Georgia, serif");
+        const fonts = [...css.matchAll(/url\("(\/fonts\/[^\"]+)"\)/g)].map(match => match[1]);
+        expect(fonts).toHaveLength(2);
+        for (const font of fonts) {
+            const bytes = readFileSync(join(staticDir, font.slice(1)));
+            expect(bytes.subarray(0, 4).toString()).toBe("wOF2");
+        }
+        expect(source("fonts/OFL.txt")).toContain("SIL OPEN FONT LICENSE Version 1.1");
+        expect(source("fonts/OFL.txt")).toContain("The DM Sans Project Authors");
+        expect(source("fonts/OFL.txt")).toContain("Copyright 2019 Google LLC");
+    });
+
     test.each(["index.html", "rules.html"])("%s content-versions every stylesheet and script", file => {
         const document = documentFor(file);
         const references = [

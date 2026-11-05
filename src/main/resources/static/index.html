@@ -27,8 +27,9 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
-    <link rel="stylesheet" href="/css/app.css?v=af22ebfa5b6c">
-    <link rel="stylesheet" href="/css/content.css?v=9f56172e9da8">
+    <link rel="stylesheet" href="/css/editorial.css?v=501820a972c4">
+    <link rel="stylesheet" href="/css/app.css?v=d8be10028838">
+    <link rel="stylesheet" href="/css/content.css?v=c9ed8dc32a4e">
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -67,9 +68,9 @@
                 <span class="card-back-face"></span>
             </div>
             <div>
-                <h1 id="lobbyHeading" class="lobby-title" tabindex="-1">Durak <span>Дурак</span></h1>
+                <h1 id="lobbyHeading" class="lobby-title brand-title" tabindex="-1">Durak <span>Дурак</span></h1>
                 <p class="lobby-tagline">Create a room or join with a code.</p>
-                <div class="lobby-suits" aria-hidden="true">♠ ♥ ♦ ♣</div>
+                <div class="lobby-suits brand-suits" aria-hidden="true"><span>♠︎</span><span>♥︎</span><span>♦︎</span><span>♣︎</span></div>
             </div>
         </div>
     </header>
@@ -81,7 +82,7 @@
         </div>
         <div class="lobby-room-row">
             <form id="hostForm" class="lobby-create">
-                <button type="submit" class="btn-primary" id="createBtn">Create room</button>
+                <button type="submit" class="btn-primary" id="createBtn"><span class="lobby-plus" aria-hidden="true">+</span> Create room</button>
                 <label class="lobby-public-option" for="publicRoom" title="Show the room under Open tables">
                     <input id="publicRoom" type="checkbox" checked>
                     List publicly
@@ -89,15 +90,21 @@
             </form>
             <form id="joinForm" class="lobby-join">
                 <label for="gameCode" class="visually-hidden">Room code</label>
-                <input id="gameCode" type="text" placeholder="Room code" autocomplete="off" autocapitalize="characters">
-                <button type="submit" class="btn-primary" id="joinBtn">Join</button>
+                <div class="lobby-join-field">
+                    <input id="gameCode" type="text" placeholder="Room code" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="roomCodeHelp">
+                    <button type="submit" class="btn-primary" id="joinBtn">Join</button>
+                </div>
+                <span id="roomCodeHelp" class="lobby-code-help">Six-character code</span>
                 <!-- The previous release's scripts read this when joining; it stays until no open tab runs them. -->
                 <input id="playerName" type="hidden" value="">
             </form>
         </div>
         <p id="joinHint" class="lobby-hint muted"></p>
         <div class="lobby-quick-row">
-            <button type="button" class="btn-primary" id="quickPlayBtn">Quick Play vs Elektronik</button>
+            <button type="button" class="btn-quick" id="quickPlayBtn">
+                <svg class="lobby-bot-icon" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 8V4H9M4 12H2m20 0h-2"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M9 12v4m6-4v4"/></svg>
+                <span>Quick Play vs Elektronik</span><span class="lobby-quick-arrow" aria-hidden="true">→</span>
+            </button>
         </div>
     </section>
     <div class="lobby-open-tables panel" id="lobbyOpenTables">
@@ -224,11 +231,11 @@
 <script type="importmap">
 {
   "imports": {
-    "/js/actions.js": "/js/actions.js?v=84f4938c5e48",
+    "/js/actions.js": "/js/actions.js?v=a88f4e8217bd",
     "/js/api.js": "/js/api.js?v=1e52de4122f5",
     "/js/dom.js": "/js/dom.js?v=99f5722c40f3",
     "/js/lobby.js": "/js/lobby.js?v=a88884aae4c4",
-    "/js/logic.js": "/js/logic.js?v=9fc244c62a59",
+    "/js/logic.js": "/js/logic.js?v=103b554a3527",
     "/js/socket.js": "/js/socket.js?v=4824dd8b5f8e",
     "/js/state.js": "/js/state.js?v=503977d50881",
     "/js/sync.js": "/js/sync.js?v=5e859860c397",
@@ -236,11 +243,11 @@
   }
 }
 </script>
-<link rel="modulepreload" href="/js/actions.js?v=84f4938c5e48">
+<link rel="modulepreload" href="/js/actions.js?v=a88f4e8217bd">
 <link rel="modulepreload" href="/js/api.js?v=1e52de4122f5">
 <link rel="modulepreload" href="/js/dom.js?v=99f5722c40f3">
 <link rel="modulepreload" href="/js/lobby.js?v=a88884aae4c4">
-<link rel="modulepreload" href="/js/logic.js?v=9fc244c62a59">
+<link rel="modulepreload" href="/js/logic.js?v=103b554a3527">
 <link rel="modulepreload" href="/js/socket.js?v=4824dd8b5f8e">
 <link rel="modulepreload" href="/js/state.js?v=503977d50881">
 <link rel="modulepreload" href="/js/sync.js?v=5e859860c397">

@@ -13,8 +13,9 @@ test.describe("Lobby & room creation", () => {
         await expect(page.getByLabel("Room code")).toHaveAttribute("placeholder", "Room code");
         await expect(page.locator("#playerName")).toBeHidden();
         await expect(page.locator("#joinHint")).toBeHidden();
-        await expect(page.locator("#quickPlayBtn")).toHaveText("Quick Play vs Elektronik");
-        await expect(page.locator("#quickPlayBtn")).toHaveClass(/btn-primary/);
+        await expect(page.locator("#quickPlayBtn")).toHaveAccessibleName("Quick Play vs Elektronik");
+        await expect(page.locator("#quickPlayBtn")).toHaveClass(/\bbtn-quick\b/);
+        await expect(page.locator("#quickPlayBtn")).not.toHaveClass(/\bbtn-primary\b/);
         // Create room and Join share the first row; Quick Play is the row below.
         const quickBox = await page.locator("#quickPlayBtn").boundingBox();
         const createBox = await page.locator("#createBtn").boundingBox();

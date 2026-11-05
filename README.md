@@ -30,6 +30,8 @@ The browser UI in [`src/main/resources/static`](src/main/resources/static) is pl
 
 **Card images.** The card faces and back in `cards/` are WebP files made from the original PNGs by [`scripts/convert-cards-webp.mjs`](scripts/convert-cards-webp.mjs) with Playwright's Chromium, at the original size. Cards are lossy (quality 0.9) where that is pixel-identical or at most half the lossless size (court cards, black pip cards) and lossless elsewhere; `--compare` prints sizes and 1x/2x screenshot differences for the alternatives. The script's header explains how to restore the PNGs from git history to re-run it. The old `/cards/<code>.png` URLs answer with a 302 to the WebP file ([`LegacyCardImageController`](src/main/java/com/example/durakgame/controller/LegacyCardImageController.java)), because a tab opened before a deploy keeps running its old script and still asks for PNGs when it draws new cards.
 
+**Landing and rules typography.** `css/editorial.css` shares the light palette and typography between the home page and rules guide. The game table keeps the original monospace styling. DM Sans (400–700) and DM Serif Display (400) are bundled as Latin WOFF2 subsets in `fonts/` (about 53 KB combined), with their SIL Open Font License in `fonts/OFL.txt`. They use `font-display: swap` and system fallbacks, so rendering never depends on a third-party font host or a broader CSP. These are Google Fonts v17 builds; replace the versioned filenames if the binaries change.
+
 ## Testing
 
 Four layers run in CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and locally:

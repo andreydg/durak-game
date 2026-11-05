@@ -218,7 +218,7 @@ export async function runAction(name, fn, trigger = null, {scope = "seat"} = {})
     state.lastPlayedCard = null;
     clearError();
     const key = sessionKey();
-    const previousText = trigger ? trigger.textContent : "";
+    const previousChildren = trigger ? [...trigger.childNodes] : [];
     if (trigger) {
         trigger.setAttribute("aria-busy", "true");
         trigger.textContent = `${name}…`;
@@ -235,7 +235,7 @@ export async function runAction(name, fn, trigger = null, {scope = "seat"} = {})
     state.actionInFlight = null;
     if (trigger) {
         trigger.removeAttribute("aria-busy");
-        trigger.textContent = previousText;
+        trigger.replaceChildren(...previousChildren);
     }
 
     if (error) {

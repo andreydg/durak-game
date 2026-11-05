@@ -766,6 +766,7 @@ export function lobbyRowsHtml(rows, interactive, currentCode) {
                 : `<span class="muted" style="font-size:0.88rem;">In lobby</span>`);
         return `
         <li class="${rowClass}">
+            ${interactive ? `<span class="lobby-list-avatar" aria-hidden="true" hidden>${escapeHtml(Array.from(String(r.playerNames?.[0] || "").trim())[0]?.toUpperCase() || "♠")}</span>` : ""}
             <div class="lobby-list-meta">
                 <span class="lobby-list-code">${escapeHtml(r.code)}</span>
                 <span class="muted">${(r.playerNames || []).map(escapeHtml).join(", ")} · ${escapeHtml(r.playerCount)}/${escapeHtml(r.maxPlayers)} players</span>
