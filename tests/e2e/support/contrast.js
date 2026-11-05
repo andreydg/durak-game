@@ -2,18 +2,19 @@ import {expect} from "@playwright/test";
 
 /**
  * Asserts WCAG AA text contrast on solid fills and returns the measured ratio.
- * Background-image gradients are not sampled: callers must use an opaque solid action
- * or a solid ancestor surface that covers them. No minimum font size is assumed.
+ * Background-image gradients are not sampled: callers must use an opaque solid surface
+ * or provide a conservative backdrop and guard the gradient that justifies that bound.
+ * White remains the default canvas. No minimum font size is assumed.
  */
-export async function expectReadableAction(locator) {
+export async function expectReadableAction(locator, {backdrop = "white"} = {}) {
     await expect(locator).toBeVisible();
-    const ratio = await locator.evaluate(element => {
+    const ratio = await locator.evaluate((element, backdrop) => {
         // Composite transparent action rows and translucent ancestor surfaces over the
-        // browser's white canvas. Canvas also normalizes CSS color syntaxes for us.
+        // supplied canvas. Canvas also normalizes CSS color syntaxes for us.
         const canvas = document.createElement("canvas");
         canvas.width = canvas.height = 1;
         const context = canvas.getContext("2d", {willReadFrequently: true});
-        context.fillStyle = "white";
+        context.fillStyle = backdrop;
         context.fillRect(0, 0, 1, 1);
         const ancestors = [];
         for (let node = element; node; node = node.parentElement) ancestors.unshift(node);
@@ -32,7 +33,7 @@ export async function expectReadableAction(locator) {
         const light = Math.max(luminance(background), luminance(foreground));
         const dark = Math.min(luminance(background), luminance(foreground));
         return (light + 0.05) / (dark + 0.05);
-    });
+    }, backdrop);
     expect(ratio, `${await locator.innerText()}: text/background contrast`).toBeGreaterThanOrEqual(4.5);
     return ratio;
 }

@@ -245,12 +245,14 @@ test.describe("Editorial landing", () => {
 test.describe("Editorial contrast and enlarged text regressions", () => {
     for (const width of [390, 1024]) {
         test(`small text meets AA contrast in normal and hover states at ${width}px`, async ({page}) => {
+            await page.emulateMedia({reducedMotion: "reduce"});
             await page.setViewportSize({width, height: 900});
             await mockLobbies(page);
             await ready(page, "/");
             await expect(page.locator("#lobbyGameList .lobby-list-item")).toHaveCount(tables.length);
             await page.locator(".seo-collapsible > summary").click();
-            for (const target of [page.locator("#quickPlayBtn"),
+            for (const target of [page.getByRole("link", {name: "How to play", exact: true}),
+                page.locator("#quickPlayBtn"),
                 ...await page.locator("#lobbyOpenTables .lobby-list-join").all(),
                 page.locator(".content-link-row a")]) {
                 await page.mouse.move(0, 0);
@@ -262,7 +264,8 @@ test.describe("Editorial contrast and enlarged text regressions", () => {
             for (const eyebrow of await page.locator(".content-eyebrow").all()) {
                 await expectReadableAction(eyebrow);
             }
-            for (const target of await page.locator(".rules-toc a").all()) {
+            for (const target of [page.getByRole("link", {name: "Back to game", exact: true}),
+                ...await page.locator(".rules-toc a").all()]) {
                 await page.mouse.move(0, 0);
                 await expectReadableAction(target);
                 await target.hover();

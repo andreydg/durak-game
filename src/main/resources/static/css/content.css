@@ -68,6 +68,12 @@
 }
 
 /* Shared fonts and colors with the landing page, with a narrower reading measure. */
+/* Cached pages do not load editorial.css. Keep navigation legible on their body gradient,
+   including hover/focus, without changing the current pages' pill layout or backgrounds. */
+.site-nav a,
+.content-nav a {
+    color: var(--text);
+}
 body.content-page {
     width: 100%;
     max-width: none;

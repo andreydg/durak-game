@@ -74,7 +74,36 @@ async function expectCachedLobby(page) {
 }
 
 test.describe("Editorial pages across releases", () => {
+    test.beforeEach(async ({page}) => {
+        // theme.css reduces transitions to 0.001ms, so hover/focus checks see the final colour.
+        await page.emulateMedia({reducedMotion: "reduce"});
+    });
+
     for (const width of [390, 1024]) {
+        for (const [path, name] of [["/", "How to play"], ["/rules.html", "Play now"]]) {
+            for (const state of ["normal", "hover", "focus"]) {
+                test(`cached ${name} navigation contrast: ${state} at ${width}px`, async ({page}) => {
+                    await page.setViewportSize({width, height: 900});
+                    await servePreviousPages(page);
+                    await ready(page, path);
+                    // These cached pages lack editorial.css's solid body background. Use the
+                    // fixed gradient's darkest viewport pixel, not a fictitious white canvas.
+                    await expect(page.locator("body")).toHaveCSS("background-image",
+                        "linear-gradient(to top, rgb(255, 255, 255) 0%, rgb(17, 17, 17) 900%)");
+                    await expect(page.locator("body")).toHaveCSS("background-attachment", "fixed");
+                    const link = page.getByRole("navigation", {name: "Site navigation"})
+                        .getByRole("link", {name, exact: true});
+                    await page.mouse.move(0, 0);
+                    if (state === "hover") await link.hover();
+                    if (state === "focus") {
+                        await link.focus();
+                        await expect(link).toBeFocused();
+                    }
+                    await expectReadableAction(link, {backdrop: "rgb(228, 228, 228)"});
+                });
+            }
+        }
+
         test(`cached home with current CSS has readable actions, gold suits and working create/join at ${width}px`, async ({page, browser, baseURL}) => {
             await page.setViewportSize({width, height: 900});
             await servePreviousPages(page);
