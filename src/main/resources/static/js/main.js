@@ -168,14 +168,16 @@ el.battleCards.addEventListener("drop", async (e) => {
  * The whole centre seat counts as the table, a little more forgiving than a mouse needs; over an
  * attack card, that pair is the target, exactly as for a mouse drop.
  */
+const touchTable = el.battleCards.closest(".seat.center") || el.battleCards;
 installTouchDrag({
     hand: el.myHand,
     canDrag: button => button.draggable && !isBusy() && !state.seatInvalid,
     targetAt(x, y) {
-        const table = el.battleCards.closest(".seat.center") || el.battleCards;
         const hit = document.elementFromPoint(x, y);
-        return hit && table.contains(hit) ? {pair: hit.closest(".battle-pair")} : null;
+        return hit && touchTable.contains(hit) ? {pair: hit.closest(".battle-pair")} : null;
     },
+    // A snapshot that arrives while a card is held re-renders these; the outline follows.
+    watch: [touchTable, el.myHand],
     preview(code, target) {
         if (target) previewDrop(code, target.pair);
         else clearBattleDropUi();

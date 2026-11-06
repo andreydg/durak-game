@@ -29,10 +29,11 @@ export function sixesGame(overrides = {}) {
 /**
  * Serves `current()` and records the table moves the page posts. `hold(action)` may return a
  * promise to keep that move's response pending (for example to test a request in flight).
+ * `sockets` collects the game's realtime sockets, to push a GAME_UPDATED that makes it read again.
  */
-export async function routeMoves(page, current = sixesGame, {hold = () => null} = {}) {
+export async function routeMoves(page, current = sixesGame, {hold = () => null, sockets = []} = {}) {
     const moves = [];
-    await page.routeWebSocket("**/ws/games/**", () => {});
+    await page.routeWebSocket("**/ws/games/**", socket => { sockets.push(socket); });
     await page.route(`**/api/games/${CODE}**`, async route => {
         const request = route.request();
         const action = new URL(request.url()).pathname.slice(`/api/games/${CODE}`.length);

@@ -569,6 +569,16 @@ export function touchDragIntent(dx, dy, slop = TOUCH_DRAG_SLOP, handScrolls = tr
 }
 
 /**
+ * Whether a click came from a pointer (a finger, pen or mouse) rather than from the keyboard or
+ * an assistive tool. Pointer clicks count their presses in `detail` (1 for a tap), and browsers
+ * that send clicks as pointer events also name the `pointerType`; Enter, Space and a programmatic
+ * click() have neither. Only a pointer click can be the stray one after a dragged card is lifted.
+ */
+export function isPointerClick({detail, pointerType} = {}) {
+    return Number(detail) > 0 || Boolean(pointerType);
+}
+
+/**
  * How far to scroll the page this frame while a dragged card is held near the top or bottom of
  * the visible area (between `top` and `bottom`, e.g. under a sticky header and above a sticky
  * action strip): negative near the top, positive near the bottom, faster the deeper into the

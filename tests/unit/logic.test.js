@@ -1190,7 +1190,7 @@ describe("touchDragIntent", () => {
         expect(L.touchDragIntent(0, -L.TOUCH_DRAG_SLOP)).toBe("drag");
         expect(L.touchDragIntent(3, -12)).toBe("drag");
         expect(L.touchDragIntent(-4, 20)).toBe("drag");
-        // A perfect diagonal counts as a drag: the browser only scrolls sideways moves here.
+        // A perfect diagonal counts as a drag; once a card is lifted, touchdrag.js keeps the browser from panning.
         expect(L.touchDragIntent(10, -10)).toBe("drag");
     });
 
@@ -1208,6 +1208,25 @@ describe("touchDragIntent", () => {
         expect(L.touchDragIntent(12, -3, L.TOUCH_DRAG_SLOP, false)).toBe("drag");
         expect(L.touchDragIntent(-30, 0, L.TOUCH_DRAG_SLOP, false)).toBe("drag");
         expect(L.touchDragIntent(3, 3, L.TOUCH_DRAG_SLOP, false)).toBe("wait");
+    });
+});
+
+describe("isPointerClick", () => {
+    it("counts taps, pen presses and mouse clicks as pointer clicks", () => {
+        // As Chromium reports them: a CDP touch tap, and a touch click from Safari (a MouseEvent).
+        expect(L.isPointerClick({detail: 1, pointerType: "touch"})).toBe(true);
+        expect(L.isPointerClick({detail: 1})).toBe(true);
+        expect(L.isPointerClick({detail: 2, pointerType: "mouse"})).toBe(true);
+        expect(L.isPointerClick({detail: 0, pointerType: "pen"})).toBe(true);
+    });
+
+    it("never counts keyboard, assistive or programmatic activation", () => {
+        // Enter or Space on a button: a PointerEvent with pointerType "" and detail 0.
+        expect(L.isPointerClick({detail: 0, pointerType: ""})).toBe(false);
+        // element.click() and a plain MouseEvent have no pointerType at all.
+        expect(L.isPointerClick({detail: 0})).toBe(false);
+        expect(L.isPointerClick({})).toBe(false);
+        expect(L.isPointerClick()).toBe(false);
     });
 });
 
