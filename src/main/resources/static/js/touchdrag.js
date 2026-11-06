@@ -31,6 +31,8 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
     let suppressClickUntil = 0;
 
     hand.addEventListener("pointerdown", (e) => {
+        // A real tap starts with a press; a browser's stray click after a drag never does.
+        suppressClickUntil = 0;
         if (e.pointerType === "mouse" || !e.isPrimary || e.button !== 0 || gesture) return;
         const button = e.target.closest?.(".hand-card-btn");
         if (!button || !hand.contains(button) || !canDrag(button)) return;

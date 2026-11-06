@@ -133,11 +133,27 @@ test.describe("Dragging a card with a finger", () => {
         // Some browsers follow the lifted finger with a click on the card: that is not a selection.
         await card.dispatchEvent("click");
         await expect(card).toHaveAttribute("aria-pressed", "false");
-        // A moment later a tap selects as usual.
-        await page.waitForTimeout(700);
+        // A real tap right away still selects: it starts with a fresh press.
         await touch.tap(await centre(card));
         await expect(card).toHaveAttribute("aria-pressed", "true");
         expect(moves).toEqual([]);
+    });
+
+    test("a tap right after a drop selects the next card at once", async ({page}) => {
+        const moves = await routeMoves(page);
+        await page.goto("/");
+        const pair = page.locator('#battleCards .battle-pair[data-attack-card="6D"]');
+        await expect(pair).toBeVisible();
+
+        const touch = await touchscreen(page);
+        await touch.drag(await centre(page.locator('#myHand [data-card-code="6H"]')), await centre(pair));
+        await expect.poll(() => moves.map(move => move.action)).toEqual(["/defend"]);
+        // The move answers at once; tap as soon as the hand is free again, well within a second.
+        const next = page.locator('#myHand [data-card-code="KD"]');
+        await expect(next).not.toHaveAttribute("aria-disabled", "true");
+        await touch.tap(await centre(next));
+
+        await expect(next).toHaveAttribute("aria-pressed", "true");
     });
 
     test("a card the table cannot take is neither outlined nor played", async ({page}) => {
