@@ -218,6 +218,9 @@ test.describe("Leaving a room", () => {
         test(`${label} from leave keeps the seat`, async ({ page }) => {
             await serveWithLeave(page, syntheticGame({status: "LOBBY"}), answer);
             await page.goto("/");
+            const icon = page.locator("#leaveBtn svg");
+            const iconMarkup = await icon.evaluate(node => node.outerHTML);
+            const phoneNav = await page.evaluate(() => matchMedia("(max-width: 560px)").matches);
 
             await page.click("#leaveBtn");
 
@@ -225,7 +228,11 @@ test.describe("Leaving a room", () => {
             await expect(page.locator("#gameView")).toBeVisible();
             await expect(page.locator("#leaveBtn")).toBeEnabled();
             await expect(page.locator("#leaveBtn")).toHaveAccessibleName("Leave");
-            await expect(page.locator("#leaveBtn svg")).toBeVisible();
+            // Phone navigation omits decorative icons, but a failed Leave must still retain
+            // the SVG (not flatten the button to text) so it returns at wider breakpoints.
+            await expect(icon).toHaveCount(1);
+            expect(await icon.evaluate(node => node.outerHTML)).toBe(iconMarkup);
+            await expect(icon).toBeVisible({visible: !phoneNav});
             expect(await page.evaluate(() => sessionStorage.getItem("durak_game_code"))).toBe(CODE);
         });
     }
