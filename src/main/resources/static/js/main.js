@@ -6,12 +6,14 @@
  *   dom.js      page elements                     api.js     requests, errors, the saved seat
  *   socket.js   reconnecting WebSocket helper     view.js    rendering and focus
  *   lobby.js    Open tables                        sync.js    game refreshes, heartbeat, socket
- *   actions.js  user actions and seat lifecycle    main.js    this wiring
+ *   actions.js  user actions and seat lifecycle    touchdrag.js  dragging cards with a finger
+ *   main.js     this wiring
  */
 import {chooseDropAction, roomCodeFromSearch} from "./logic.js";
 import {seat} from "./api.js";
-import {state} from "./state.js";
+import {isBusy, state} from "./state.js";
 import {el} from "./dom.js";
+import {installTouchDrag} from "./touchdrag.js";
 import {
     clearBattleDropUi,
     log,
@@ -126,6 +128,16 @@ function draggedHandCard(dataTransfer) {
     const type = Array.from(dataTransfer?.types || []).find(t => t.startsWith(HAND_CARD_TYPE));
     return type ? type.slice(HAND_CARD_TYPE.length).toUpperCase() : "";
 }
+/** Outlines what dropping hand card `card` would do over `pair` (null: the open felt). */
+function previewDrop(card, pair) {
+    const attackCard = pair?.dataset?.attackCard?.trim() || "";
+    const move = chooseDropAction(state.game?.legalMoves, card, [attackCard, el.defendTargetSelect.value], attackCard);
+    const defended = move?.kind === "defend"
+        ? [...el.battleCards.querySelectorAll(".battle-pair")].find(p => p.dataset.attackCard === move.target) || null
+        : null;
+    setBattlePairDropHover(defended);
+    el.battleCards.classList.toggle("battle-drop-target", Boolean(move) && !defended);
+}
 el.battleCards.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -136,13 +148,7 @@ el.battleCards.addEventListener("dragover", (e) => {
         el.battleCards.classList.toggle("battle-drop-target", !pair);
         return;
     }
-    const attackCard = pair?.dataset?.attackCard?.trim() || "";
-    const move = chooseDropAction(state.game?.legalMoves, card, [attackCard, el.defendTargetSelect.value], attackCard);
-    const defended = move?.kind === "defend"
-        ? [...el.battleCards.querySelectorAll(".battle-pair")].find(p => p.dataset.attackCard === move.target) || null
-        : null;
-    setBattlePairDropHover(defended);
-    el.battleCards.classList.toggle("battle-drop-target", Boolean(move) && !defended);
+    previewDrop(card, pair);
 });
 el.battleCards.addEventListener("dragleave", (e) => {
     if (e.relatedTarget && el.battleCards.contains(e.relatedTarget)) return;
@@ -155,6 +161,35 @@ el.battleCards.addEventListener("drop", async (e) => {
     clearBattleDropUi();
     const code = (e.dataTransfer.getData("text/plain") || "").trim();
     if (code) await playCardToTable(code, preferred || undefined);
+});
+
+/*
+ * Phones and tablets drag with a finger (touchdrag.js) to the same targets with the same rules.
+ * The whole centre seat counts as the table, a little more forgiving than a mouse needs; over an
+ * attack card, that pair is the target, exactly as for a mouse drop.
+ */
+installTouchDrag({
+    hand: el.myHand,
+    canDrag: button => button.draggable && !isBusy() && !state.seatInvalid,
+    targetAt(x, y) {
+        const table = el.battleCards.closest(".seat.center") || el.battleCards;
+        const hit = document.elementFromPoint(x, y);
+        return hit && table.contains(hit) ? {pair: hit.closest(".battle-pair")} : null;
+    },
+    preview(code, target) {
+        if (target) previewDrop(code, target.pair);
+        else clearBattleDropUi();
+    },
+    drop(code, target) {
+        playCardToTable(code, target.pair?.dataset?.attackCard?.trim() || undefined);
+    },
+    visibleBand() {
+        // The table is always above the hand, so a drag only ever needs the page to scroll up:
+        // near the sticky room header (or the top of the window) it reveals the table again.
+        const header = el.battleCards.closest("#gameView")?.querySelector(".room-header");
+        const sticky = header && getComputedStyle(header).position === "sticky" && header.getClientRects().length > 0;
+        return {top: sticky ? Math.max(0, header.getBoundingClientRect().bottom) : 0, bottom: Infinity};
+    }
 });
 
 /* ---- hidden tabs pause everything; visible again reconnects and catches up ---- */

@@ -133,10 +133,11 @@ test.describe("Game table layout", () => {
         });
     }
 
-    test("swipes that start on a hand card can still scroll", async ({ page }) => {
+    test("sideways swipes that start on a hand card can still scroll the hand", async ({ page }) => {
         await openTable(page, {width: 375, players: 2, handSize: 18});
+        // Vertical slides drag the card (touchdrag.js); sideways ones and pinches stay the browser's.
         const touchAction = await page.locator("#myHand .hand-card-btn").first()
             .evaluate(el => getComputedStyle(el).touchAction);
-        expect(touchAction).not.toBe("none");
+        expect(touchAction).toBe("pan-x pinch-zoom");
     });
 });

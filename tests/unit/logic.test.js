@@ -1178,3 +1178,61 @@ describe("lobbyInvalidation", () => {
         expect(L.lobbyInvalidation(null, start)).toBeNull();
     });
 });
+
+describe("touchDragIntent", () => {
+    it("waits until the touch has moved past the slop", () => {
+        expect(L.touchDragIntent(0, 0)).toBe("wait");
+        expect(L.touchDragIntent(5, -5)).toBe("wait"); // about 7px
+        expect(L.touchDragIntent(0, -L.TOUCH_DRAG_SLOP + 0.5)).toBe("wait");
+    });
+
+    it("drags when the move is mostly up or down, in either direction", () => {
+        expect(L.touchDragIntent(0, -L.TOUCH_DRAG_SLOP)).toBe("drag");
+        expect(L.touchDragIntent(3, -12)).toBe("drag");
+        expect(L.touchDragIntent(-4, 20)).toBe("drag");
+        // A perfect diagonal counts as a drag: the browser only scrolls sideways moves here.
+        expect(L.touchDragIntent(10, -10)).toBe("drag");
+    });
+
+    it("leaves sideways swipes to the browser, which scrolls the hand", () => {
+        expect(L.touchDragIntent(12, -3)).toBe("swipe");
+        expect(L.touchDragIntent(-30, 10)).toBe("swipe");
+    });
+
+    it("honours a custom slop", () => {
+        expect(L.touchDragIntent(0, -12, 16)).toBe("wait");
+        expect(L.touchDragIntent(0, -16, 16)).toBe("drag");
+    });
+
+    it("drags in any direction when the hand fits and has nothing to scroll", () => {
+        expect(L.touchDragIntent(12, -3, L.TOUCH_DRAG_SLOP, false)).toBe("drag");
+        expect(L.touchDragIntent(-30, 0, L.TOUCH_DRAG_SLOP, false)).toBe("drag");
+        expect(L.touchDragIntent(3, 3, L.TOUCH_DRAG_SLOP, false)).toBe("wait");
+    });
+});
+
+describe("dragEdgeScroll", () => {
+    it("does not scroll away from the edges", () => {
+        expect(L.dragEdgeScroll(400, 100, 700)).toBe(0);
+        expect(L.dragEdgeScroll(148, 100, 700)).toBe(0); // exactly one band below the top
+        expect(L.dragEdgeScroll(652, 100, 700)).toBe(0); // exactly one band above the bottom
+    });
+
+    it("scrolls up near the top, faster deeper into the band, capped at the maximum", () => {
+        expect(L.dragEdgeScroll(140, 100, 700)).toBe(-3);
+        expect(L.dragEdgeScroll(110, 100, 700)).toBe(-12);
+        expect(L.dragEdgeScroll(100, 100, 700)).toBe(-14);
+        expect(L.dragEdgeScroll(20, 100, 700)).toBe(-14); // above the visible area (over the sticky header)
+    });
+
+    it("scrolls down near the bottom, and never with an open bottom", () => {
+        expect(L.dragEdgeScroll(690, 100, 700)).toBe(12);
+        expect(L.dragEdgeScroll(800, 100, 700)).toBe(14);
+        expect(L.dragEdgeScroll(5000, 0, Infinity)).toBe(0);
+    });
+
+    it("takes a custom band and step", () => {
+        expect(L.dragEdgeScroll(110, 100, 700, 20, 10)).toBe(-5);
+        expect(L.dragEdgeScroll(130, 100, 700, 20, 10)).toBe(0);
+    });
+});
