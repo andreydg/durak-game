@@ -224,6 +224,8 @@ test.describe("Leaving a room", () => {
             await expect(page.locator("#appAlert")).toContainText(`You are still in room ${CODE}.`);
             await expect(page.locator("#gameView")).toBeVisible();
             await expect(page.locator("#leaveBtn")).toBeEnabled();
+            await expect(page.locator("#leaveBtn")).toHaveAccessibleName("Leave");
+            await expect(page.locator("#leaveBtn svg")).toBeVisible();
             expect(await page.evaluate(() => sessionStorage.getItem("durak_game_code"))).toBe(CODE);
         });
     }

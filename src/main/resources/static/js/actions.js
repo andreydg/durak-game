@@ -368,10 +368,11 @@ async function leaveRoom() {
     }
     const key = sessionKey();
     const leaveBtn = el.leaveBtn;
-    const previousText = leaveBtn.textContent;
+    const leaveLabel = leaveBtn.querySelector(".leave-label") || leaveBtn;
+    const previousText = leaveLabel.textContent;
     state.leaveInFlight = true;
     leaveBtn.setAttribute("aria-busy", "true");
-    leaveBtn.textContent = "Leaving…";
+    leaveLabel.textContent = "Leaving…";
     clearError();
     render();
     try {
@@ -390,7 +391,7 @@ async function leaveRoom() {
     } finally {
         state.leaveInFlight = false;
         leaveBtn.removeAttribute("aria-busy");
-        leaveBtn.textContent = previousText;
+        leaveLabel.textContent = previousText;
         render();
     }
 }
@@ -404,6 +405,50 @@ export async function requestLeave() {
 
 /* ---- sharing ---- */
 
+async function copyText(text) {
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+    const active = document.activeElement;
+    const copyInput = document.createElement("textarea");
+    copyInput.value = text;
+    copyInput.setAttribute("readonly", "");
+    copyInput.style.position = "fixed";
+    copyInput.style.opacity = "0";
+    document.body.appendChild(copyInput);
+    try {
+        copyInput.select();
+        if (!document.execCommand("copy")) throw new Error("Copy failed");
+    } finally {
+        copyInput.remove();
+        active?.focus({preventScroll: true});
+    }
+}
+
+let copyCodeFeedbackTimer;
+
+/** Copy only the public room code, never the seat token or an invite URL. */
+export async function copyRoomCode() {
+    const code = seat.gameCode;
+    const button = el.copyCodeBtn;
+    if (!code || !button) return;
+    try {
+        await copyText(code);
+        if (seat.gameCode !== code) return;
+        announce("Room code copied.");
+        button.dataset.copied = "true";
+        button.title = "Room code copied";
+        window.clearTimeout(copyCodeFeedbackTimer);
+        copyCodeFeedbackTimer = window.setTimeout(() => {
+            delete button.dataset.copied;
+            button.title = "Copy room code";
+        }, 1800);
+    } catch (err) {
+        if (seat.gameCode === code) showError("Could not copy. Select and copy the room code instead.");
+    }
+}
+
 /** Copies the room's invite link (clipboard API, else a hidden textarea and execCommand). */
 export async function copyInvite() {
     const shareBtn = el.shareBtn;
@@ -411,22 +456,8 @@ export async function copyInvite() {
     if (!inviteUrl) return;
     clearError();
     try {
-        if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(inviteUrl);
-            shareBtn.textContent = "Invite copied";
-        } else {
-            const copyInput = document.createElement("textarea");
-            copyInput.value = inviteUrl;
-            copyInput.setAttribute("readonly", "");
-            copyInput.style.position = "fixed";
-            copyInput.style.opacity = "0";
-            document.body.appendChild(copyInput);
-            copyInput.select();
-            const copied = document.execCommand("copy");
-            copyInput.remove();
-            if (!copied) throw new Error("Copy failed");
-            shareBtn.textContent = "Invite copied";
-        }
+        await copyText(inviteUrl);
+        shareBtn.textContent = "Invite copied";
         window.setTimeout(() => { shareBtn.textContent = "Copy invite"; }, 1800);
     } catch (err) {
         showError("Could not copy the invite. Copy the room code instead.");

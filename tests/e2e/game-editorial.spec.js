@@ -87,6 +87,8 @@ test.describe("Editorial game presentation", () => {
                 await expect(page.locator("#leaveBtn")).toBeVisible();
                 await page.locator("#roomHeading").focus();
                 await page.keyboard.press("Tab");
+                await expect(page.locator("#copyCodeBtn")).toBeFocused();
+                await page.keyboard.press("Tab");
                 await expect(page.locator(".game-rules-link")).toBeFocused();
                 await page.keyboard.press("Tab");
                 await expect(page.locator("#leaveBtn")).toBeFocused();
@@ -97,12 +99,30 @@ test.describe("Editorial game presentation", () => {
     }
 
     for (const [width, height, players] of [[1024, 768, 2], [1440, 789, 2], [1280, 800, 3], [375, 667, 3], [375, 667, 4]]) {
-        test(`in-play header preserves table space at ${width}x${height} with ${players} players`, async ({page}) => {
+        test(`approved two-row header at ${width}x${height} with ${players} players`, async ({page}) => {
             await openGame(page, syntheticGame({players}), width, height);
             const metrics = await gameHeaderMetrics(page);
-            expect(metrics.headerHeight).toBeLessThanOrEqual(width > 700 ? 90 : 123.375);
-            if (width > 700) expect(metrics.actionBottom).toBeLessThanOrEqual(metrics.viewportHeight);
+            expect(metrics.overlap).toBe(0);
+            expect(metrics.summaryOverlap).toBe(0);
+            expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+            const brand = await page.locator(".game-brand").boundingBox();
+            const actions = await page.locator(".room-actions").boundingBox();
+            const summary = await page.locator(".room-summary").boundingBox();
+            expect(summary.y).toBeGreaterThanOrEqual(Math.max(brand.y + brand.height, actions.y + actions.height));
+            await expect(page.locator(".room-summary")).toHaveCSS("border-top-width", "1px");
+            if (width > 700) {
+                await expect(page.locator(".game-brand .brand-suits")).toBeVisible();
+                await expect(page.locator(".game-brand .brand-suits")).toHaveCSS("color", "rgb(185, 134, 58)");
+                const fontSize = await page.locator(".game-brand .brand-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+                expect(fontSize).toBeGreaterThanOrEqual(width >= 1280 ? 32 : 25.5);
+                const names = await page.locator("#roleLabel").boundingBox();
+                expect(Math.abs(names.x + names.width - summary.x - summary.width)).toBeLessThanOrEqual(1);
+            }
             await expect(page.locator("#roleLabel")).toContainText("(host)");
+            // The taller approved masthead may require scrolling on short screens. Do not
+            // collapse the design to make an arbitrary initial-fold height assertion pass.
+            await page.locator(".action-strip").scrollIntoViewIfNeeded();
+            await expect(page.locator(".action-strip")).toBeInViewport();
         });
     }
 
@@ -149,10 +169,9 @@ test.describe("Editorial game presentation", () => {
             await expectReadableAction(link);
             const linkBox = await link.boundingBox();
             const leaveBox = await page.locator("#leaveBtn").boundingBox();
-            const brandBox = await page.locator(".game-brand").boundingBox();
             expect(linkBox.x + linkBox.width).toBeLessThanOrEqual(leaveBox.x);
             expect(Math.abs(linkBox.y - leaveBox.y)).toBeLessThanOrEqual(1);
-            expect(brandBox.x + brandBox.width).toBeLessThanOrEqual(linkBox.x);
+            expect((await gameHeaderMetrics(page)).overlap).toBe(0);
             const url = page.url();
             const originalSession = await page.evaluate(() => JSON.stringify(sessionStorage));
             const newPage = context.waitForEvent("page");
@@ -192,6 +211,8 @@ test.describe("Editorial game presentation", () => {
                 await expect(page.locator("#leaveBtn")).toBeVisible();
                 await page.locator("#roomHeading").focus();
                 await page.keyboard.press("Tab");
+                await expect(page.locator("#copyCodeBtn")).toBeFocused();
+                await page.keyboard.press("Tab");
                 await expect(page.locator(host ? "#startBtn" : "#shareBtn")).toBeFocused();
                 const {scrollWidth, clientWidth} = await horizontalOverflow(page);
                 expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
@@ -210,6 +231,94 @@ test.describe("Editorial game presentation", () => {
             await expectReadableAction(page.locator("#rematchBtn"));
         });
     }
+
+    for (const publicRoom of [true, false]) {
+        test(`header details match the mock without changing ${publicRoom ? "public" : "private"} room meaning`, async ({page}) => {
+            await openGame(page, syntheticGame({publicRoom}), 1440);
+            await expect(page.locator("#roomHeading")).toHaveAccessibleName("Game SYNTH2");
+            await expect(page.locator("#roomHeading > :not(.visually-hidden)")).toHaveText("SYNTH2");
+            await expect(page.locator("#roomHeading .visually-hidden")).toHaveCSS("clip-path", "inset(50%)");
+            await expect(page.getByRole("button", {name: "Copy room code"})).toBeVisible();
+            await expect(page.locator("#visibilityLabel")).toHaveText(publicRoom ? "Public room" : "Invite only");
+            await expect(page.locator("#visibilityLabel svg")).toHaveCount(publicRoom ? 0 : 1);
+            if (!publicRoom) await expect(page.locator("#visibilityLabel svg")).toHaveAttribute("aria-hidden", "true");
+            await expect(page.locator("#leaveBtn")).toHaveAccessibleName("Leave");
+            await expect(page.locator("#leaveBtn svg")).toBeVisible();
+            expect((await page.locator("#roleLabel > :not(.visually-hidden)").allTextContents()).join("")).not.toContain("Players:");
+            await expect(page.locator("#roleLabel")).toContainText("Players:");
+            await expect(page.locator(".room-player-separator")).toHaveText("·");
+            await expectReadableAction(page.locator("#copyCodeBtn"));
+        });
+    }
+
+    test("copy code works by keyboard, copies only the code, and leaves the seat unchanged", async ({page}) => {
+        await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", {
+            value: {writeText: async text => { window.copiedText = text; }}
+        }));
+        await openGame(page, syntheticGame());
+        const session = await page.evaluate(() => JSON.stringify(sessionStorage));
+        await page.locator("#roomHeading").focus();
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Enter");
+        await expect.poll(() => page.evaluate(() => window.copiedText)).toBe("SYNTH2");
+        await expect(page.locator("#liveAnnouncer")).toContainText("Room code copied.");
+        await expect(page.locator("#copyCodeBtn")).toHaveAttribute("data-copied", "true");
+        await expect(page.locator("#copyCodeBtn")).toBeFocused();
+        expect(await page.evaluate(() => JSON.stringify(sessionStorage))).toBe(session);
+        await expect(page.locator("#copyCodeBtn")).not.toHaveAttribute("data-copied", "true");
+        await expect(page.locator("#copyCodeBtn")).toHaveAttribute("title", "Copy room code");
+    });
+
+    for (const success of [true, false]) {
+        test(`legacy clipboard ${success ? "success" : "failure"} removes the temporary field and keeps focus`, async ({page}) => {
+            await page.addInitScript(success => {
+                Object.defineProperty(navigator, "clipboard", {value: undefined});
+                document.execCommand = command => {
+                    window.copyAttempt = {command, text: document.activeElement.value};
+                    return success;
+                };
+            }, success);
+            await openGame(page, syntheticGame());
+            await page.getByRole("button", {name: "Copy room code"}).click();
+            expect(await page.evaluate(() => window.copyAttempt)).toEqual({command: "copy", text: "SYNTH2"});
+            await expect(page.locator("textarea")).toHaveCount(0);
+            await expect(page.locator("#copyCodeBtn")).toBeFocused();
+            if (success) await expect(page.locator("#liveAnnouncer")).toContainText("Room code copied.");
+            else await expect(page.locator("#appAlert")).toContainText("Select and copy the room code");
+        });
+    }
+
+    test("clipboard rejection reports failure without claiming a copy", async ({page}) => {
+        await page.addInitScript(() => Object.defineProperty(navigator, "clipboard", {
+            value: {writeText: async () => { throw new Error("Permission denied"); }}
+        }));
+        await openGame(page, syntheticGame());
+        await page.getByRole("button", {name: "Copy room code"}).click();
+        await expect(page.locator("#appAlert")).toContainText("Could not copy");
+        await expect(page.locator("#copyCodeBtn")).not.toHaveAttribute("data-copied", "true");
+        await expect(page.locator("#liveAnnouncer")).not.toContainText("Room code copied.");
+    });
+
+    test("player names in the editorial roster remain literal text", async ({page}) => {
+        const name = '<img src=x onerror="window.injected=true">';
+        await openGame(page, syntheticGame({names: [name, "Bot & <friend>"]}));
+        await expect(page.locator("#roleLabel")).toContainText(`${name} (host)`);
+        await expect(page.locator("#roleLabel img")).toHaveCount(0);
+        expect(await page.evaluate(() => window.injected)).toBeUndefined();
+    });
+
+    test("current HTML with older entry modules does not offer an unwired copy-code button", async ({page}) => {
+        for (const file of ["main.js", "actions.js", "dom.js"]) {
+            const body = readFileSync(new URL(`./fixtures/release-0b96163/${file}`, import.meta.url));
+            await page.route(url => url.pathname === `/js/${file}`, route => route.fulfill({contentType: "text/javascript", body}));
+        }
+        const errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        await openGame(page, syntheticGame());
+        await expect(page.locator("#copyCodeBtn")).toBeHidden();
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
+        expect(errors).toEqual([]);
+    });
 
     test("current icons retain explicit dimensions when an older page lacks the game stylesheet", async ({page}) => {
         const previous = readFileSync(new URL("./fixtures/release-21eb2c2/index.html", import.meta.url));

@@ -28,9 +28,9 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
     <link rel="stylesheet" href="/css/editorial.css?v=537c6565661e">
-    <link rel="stylesheet" href="/css/app.css?v=e4c0b9cbe3c3">
+    <link rel="stylesheet" href="/css/app.css?v=bf2929078b14">
     <link rel="stylesheet" href="/css/content.css?v=c9ed8dc32a4e">
-    <link rel="stylesheet" href="/css/game-editorial.css?v=d05871bd8f6a">
+    <link rel="stylesheet" href="/css/game-editorial.css?v=582c31b2b9eb">
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -130,7 +130,10 @@
         </div>
         <div class="room-summary">
             <div class="room-title-row">
-                <h2 id="roomHeading" class="room-title" tabindex="-1">Game <span id="gameCodeLabel" class="room-code"></span></h2>
+                <div class="room-code-group">
+                    <h2 id="roomHeading" class="room-title" tabindex="-1"><span class="visually-hidden">Game </span><span id="gameCodeLabel" class="room-code"></span></h2>
+                    <button id="copyCodeBtn" type="button" class="room-copy-btn hidden" aria-label="Copy room code" title="Copy room code"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg></button>
+                </div>
                 <span id="statusLabel" class="status-pill"></span>
                 <span id="visibilityLabel" class="visibility-pill"></span>
             </div>
@@ -141,7 +144,7 @@
             <button id="addBotBtn" class="btn btn-secondary">Add bot</button>
             <button id="shareBtn" class="btn btn-secondary" aria-live="polite">Copy invite</button>
             <a class="btn game-rules-link" href="/rules.html" target="_blank" rel="noopener" aria-label="How to play (opens in a new tab)"><svg class="game-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 7v14M3 3h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5v14h-5a4 4 0 0 0-4 4 4 4 0 0 0-4-4H3Z"/></svg><span>How to play</span></a>
-            <button id="leaveBtn" class="btn btn-danger">Leave</button>
+            <button id="leaveBtn" class="btn btn-danger"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9"/></svg><span class="leave-label">Leave</span></button>
         </div>
         <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. The game starts automatically when 4 players are seated.</div>
         <div id="gameOpenTablesWrap" class="game-open-tables panel hidden">
@@ -237,28 +240,28 @@
 <script type="importmap">
 {
   "imports": {
-    "/js/actions.js": "/js/actions.js?v=a88f4e8217bd",
+    "/js/actions.js": "/js/actions.js?v=c9ff9903d87c",
     "/js/api.js": "/js/api.js?v=1e52de4122f5",
-    "/js/dom.js": "/js/dom.js?v=99f5722c40f3",
+    "/js/dom.js": "/js/dom.js?v=0ce3b8e696fa",
     "/js/lobby.js": "/js/lobby.js?v=a88884aae4c4",
     "/js/logic.js": "/js/logic.js?v=103b554a3527",
     "/js/socket.js": "/js/socket.js?v=4824dd8b5f8e",
     "/js/state.js": "/js/state.js?v=503977d50881",
     "/js/sync.js": "/js/sync.js?v=5e859860c397",
-    "/js/view.js": "/js/view.js?v=2e8f8afaaa72"
+    "/js/view.js": "/js/view.js?v=10ef7da68f60"
   }
 }
 </script>
-<link rel="modulepreload" href="/js/actions.js?v=a88f4e8217bd">
+<link rel="modulepreload" href="/js/actions.js?v=c9ff9903d87c">
 <link rel="modulepreload" href="/js/api.js?v=1e52de4122f5">
-<link rel="modulepreload" href="/js/dom.js?v=99f5722c40f3">
+<link rel="modulepreload" href="/js/dom.js?v=0ce3b8e696fa">
 <link rel="modulepreload" href="/js/lobby.js?v=a88884aae4c4">
 <link rel="modulepreload" href="/js/logic.js?v=103b554a3527">
 <link rel="modulepreload" href="/js/socket.js?v=4824dd8b5f8e">
 <link rel="modulepreload" href="/js/state.js?v=503977d50881">
 <link rel="modulepreload" href="/js/sync.js?v=5e859860c397">
-<link rel="modulepreload" href="/js/view.js?v=2e8f8afaaa72">
-<script type="module" src="/js/main.js?v=ca2d8bc684c8"></script>
+<link rel="modulepreload" href="/js/view.js?v=10ef7da68f60">
+<script type="module" src="/js/main.js?v=e96b4cec4d94"></script>
 <!-- /ES modules -->
 </body>
 </html>
