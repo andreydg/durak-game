@@ -1,10 +1,12 @@
 import {test, expect} from "@playwright/test";
 import {readFileSync} from "node:fs";
 import {expectReadableAction} from "./support/contrast.js";
+import {setDefaultFont} from "./support/editorial-layout.js";
+import {gameHeaderMetrics} from "./support/game-header-layout.js";
 import {horizontalOverflow, seedSession, serveGame, syntheticGame} from "./support/synthetic.js";
 
-async function openGame(page, game, width = 1024) {
-    await page.setViewportSize({width, height: 900});
+async function openGame(page, game, width = 1024, height = 900) {
+    await page.setViewportSize({width, height});
     await seedSession(page);
     await serveGame(page, game);
     await page.route("**/api/lobbies", route => route.fulfill({json: []}));
@@ -15,6 +17,36 @@ async function openGame(page, game, width = 1024) {
 }
 
 test.describe("Editorial game presentation", () => {
+    const headerStates = [
+        ["two-player", {players: 2}],
+        ["four-player", {players: 4}],
+        ["host waiting", {status: "LOBBY"}],
+        ["guest waiting", {status: "LOBBY", hostPlayerId: "p2"}],
+        ["finished", {status: "FINISHED", loserPlayerId: "p2", hand: []}]
+    ];
+    for (const font of [20, 24]) {
+        for (const [state, options] of headerStates) {
+            const widths = [320, 375, 390, 541, 700, 768, 1024];
+            if (state === "host waiting") widths.push(710, 770, 840);
+            for (const width of widths) {
+                test(`header wraps without collision: ${state}, ${font}px text at ${width}px`, async ({page}) => {
+                    // Must precede navigation; full-page screenshots reset this preference.
+                    await setDefaultFont(page, font);
+                    const game = syntheticGame(options);
+                    // The busiest host header includes Add bot as well as Start and Copy invite.
+                    if (game.status === "LOBBY") game.players[1].bot = false;
+                    await openGame(page, game, width);
+                    if (state === "host waiting") await expect(page.locator("#addBotBtn")).toBeVisible();
+                    const metrics = await gameHeaderMetrics(page);
+                    expect(metrics.overlap).toBe(0);
+                    expect(metrics.summaryOverlap).toBe(0);
+                    expect(metrics.actionsOnScreen).toBe(true);
+                    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+                });
+            }
+        }
+    }
+
     for (const width of [320, 390, 1024]) {
         for (const players of [2, 3, 4]) {
             test(`${players} seats at ${width}px keep the existing information and controls`, async ({page}) => {
@@ -62,6 +94,16 @@ test.describe("Editorial game presentation", () => {
                 expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
             });
         }
+    }
+
+    for (const [width, height, players] of [[1024, 768, 2], [1440, 789, 2], [1280, 800, 3], [375, 667, 3], [375, 667, 4]]) {
+        test(`in-play header preserves table space at ${width}x${height} with ${players} players`, async ({page}) => {
+            await openGame(page, syntheticGame({players}), width, height);
+            const metrics = await gameHeaderMetrics(page);
+            expect(metrics.headerHeight).toBeLessThanOrEqual(width > 700 ? 90 : 123.375);
+            if (width > 700) expect(metrics.actionBottom).toBeLessThanOrEqual(metrics.viewportHeight);
+            await expect(page.locator("#roleLabel")).toContainText("(host)");
+        });
     }
 
     test("taking, team roles and bot thinking retain their full meaning", async ({page}) => {
@@ -186,4 +228,18 @@ test.describe("Editorial game presentation", () => {
         const {scrollWidth, clientWidth} = await horizontalOverflow(page);
         expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
     });
+
+    for (const [width, players] of [[390, 2], [1024, 2], [320, 4], [390, 4]]) {
+        test(`missing companion stylesheet keeps a usable header: ${players} players at ${width}px`, async ({page}) => {
+            await page.route("**/css/game-editorial.css*", route => route.fulfill({status: 404, body: ""}));
+            await openGame(page, syntheticGame({players}), width);
+            const metrics = await gameHeaderMetrics(page);
+            // A zero-width overflowing grid item can look hidden to Playwright while its text paints.
+            expect.soft(metrics.brandDisplay).toBe("none");
+            if (players === 2) expect.soft(metrics.headerHeight).toBeLessThanOrEqual(90);
+            expect(metrics.summaryOverlap).toBe(0);
+            expect(metrics.actionsOnScreen).toBe(true);
+            expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+        });
+    }
 });
