@@ -433,6 +433,7 @@ export async function copyRoomCode() {
     const code = seat.gameCode;
     const button = el.copyCodeBtn;
     if (!code || !button) return;
+    clearError("copy");
     try {
         await copyText(code);
         if (seat.gameCode !== code) return;
@@ -445,7 +446,7 @@ export async function copyRoomCode() {
             button.title = "Copy room code";
         }, 1800);
     } catch (err) {
-        if (seat.gameCode === code) showError("Could not copy. Select and copy the room code instead.");
+        if (seat.gameCode === code) showError("Could not copy. Select and copy the room code instead.", "copy");
     }
 }
 

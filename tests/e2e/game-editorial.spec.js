@@ -113,8 +113,9 @@ test.describe("Editorial game presentation", () => {
             if (width > 700) {
                 await expect(page.locator(".game-brand .brand-suits")).toBeVisible();
                 await expect(page.locator(".game-brand .brand-suits")).toHaveCSS("color", "rgb(185, 134, 58)");
+                await expect(page.locator(".game-brand .brand-suits")).toHaveCSS("opacity", "1");
                 const fontSize = await page.locator(".game-brand .brand-title").evaluate(el => parseFloat(getComputedStyle(el).fontSize));
-                expect(fontSize).toBeGreaterThanOrEqual(width >= 1280 ? 32 : 25.5);
+                expect(fontSize).toBe(32);
                 const names = await page.locator("#roleLabel").boundingBox();
                 expect(Math.abs(names.x + names.width - summary.x - summary.width)).toBeLessThanOrEqual(1);
             }
@@ -338,17 +339,22 @@ test.describe("Editorial game presentation", () => {
         expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
     });
 
-    for (const [width, players] of [[390, 2], [1024, 2], [320, 4], [390, 4]]) {
-        test(`missing companion stylesheet keeps a usable header: ${players} players at ${width}px`, async ({page}) => {
-            await page.route("**/css/game-editorial.css*", route => route.fulfill({status: 404, body: ""}));
-            await openGame(page, syntheticGame({players}), width);
-            const metrics = await gameHeaderMetrics(page);
-            // A zero-width overflowing grid item can look hidden to Playwright while its text paints.
-            expect.soft(metrics.brandDisplay).toBe("none");
-            if (players === 2) expect.soft(metrics.headerHeight).toBeLessThanOrEqual(90);
-            expect(metrics.summaryOverlap).toBe(0);
-            expect(metrics.actionsOnScreen).toBe(true);
-            expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+    for (const touch of [false, true]) {
+        test.describe(`stylesheet fallback with ${touch ? "touch" : "mouse"}`, () => {
+            test.use({hasTouch: touch, isMobile: touch});
+            for (const [width, players] of [[390, 2], [1024, 2], [320, 4], [390, 4]]) {
+                test(`missing companion stylesheet keeps a usable header: ${players} players at ${width}px`, async ({page}) => {
+                    await page.route("**/css/game-editorial.css*", route => route.fulfill({status: 404, body: ""}));
+                    await openGame(page, syntheticGame({players}), width);
+                    const metrics = await gameHeaderMetrics(page);
+                    // A zero-width overflowing grid item can look hidden to Playwright while its text paints.
+                    expect.soft(metrics.brandDisplay).toBe("none");
+                    if (players === 2) expect.soft(metrics.headerHeight).toBeLessThanOrEqual(90);
+                    expect(metrics.summaryOverlap).toBe(0);
+                    expect(metrics.actionsOnScreen).toBe(true);
+                    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+                });
+            }
         });
     }
 });

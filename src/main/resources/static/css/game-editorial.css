@@ -40,7 +40,7 @@ body:has(#gameView:not(.hidden)) {
 }
 .game-brand .brand-title {
     margin: 0;
-    font-size: clamp(1.5rem, 2.5vw, 2rem);
+    font-size: 2rem;
     overflow-wrap: anywhere;
 }
 .game-brand .brand-title span {
@@ -51,6 +51,7 @@ body:has(#gameView:not(.hidden)) {
     margin: 0;
     gap: 1.125rem;
     font: 0.875rem/1 Georgia, serif;
+    opacity: 1;
 }
 #gameView .room-summary {
     order: 2;
@@ -61,7 +62,7 @@ body:has(#gameView:not(.hidden)) {
     flex-wrap: wrap;
     gap: 0.5rem 1.25rem;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--editorial-border);
+    border-top: 1px solid #eceae7;
     min-width: 0;
 }
 #gameView .room-title-row {
@@ -115,8 +116,7 @@ body:has(#gameView:not(.hidden)) {
     overflow-wrap: anywhere;
 }
 #gameView .room-player-name { color: var(--text); font-weight: 500; }
-#gameView .room-player-separator { padding-inline: 0.5rem; }
-#gameView .visibility-pill { gap: 0.3125rem; }
+#gameView .room-player-separator { color: #aaa298; }
 #gameView .visibility-pill .game-icon { width: 0.75rem; height: 0.75rem; }
 #gameView .room-waiting {
     font-size: 0.85rem;
@@ -343,10 +343,15 @@ body:has(#gameView:not(.hidden)) {
     outline-offset: 3px;
 }
 @media (min-width: 701px) {
+    /* Account for the approved two-row masthead when the browser scrolls keyboard focus. */
+    html:has(#gameView.game-view--active) { scroll-padding-top: 10rem; }
     #gameView .action-strip button {
         min-height: 38px;
         padding: 0.5rem 0.85rem;
     }
+}
+@media (min-width: 701px) and (max-width: 800px) {
+    .game-brand .brand-title { font-size: 1.75rem; }
 }
 @media (max-width: 700px) {
     #gameView .room-header,
@@ -399,6 +404,10 @@ body:has(#gameView:not(.hidden)) {
         box-shadow: 0 -3px 12px #20382612;
         backdrop-filter: none;
     }
+}
+@media (max-width: 560px) {
+    /* As in the approved mock, retain action labels while omitting phone nav decoration. */
+    #gameView .room-actions .btn svg { display: none; }
 }
 @media (max-width: 480px) {
     #gameView .hud { column-gap: 0.4rem; }
