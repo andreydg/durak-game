@@ -22,7 +22,7 @@
     --editorial-green-hover: #2c7042;
     --editorial-green-text: #2c7042;
 }
-/* The game keeps its existing background and monospace controls. */
+/* The game opts into its own companion stylesheet, game-editorial.css. */
 body:has(#lobbyView:not(.hidden)),
 body.content-page {
     background: var(--bg);
