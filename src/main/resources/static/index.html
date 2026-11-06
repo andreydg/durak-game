@@ -27,9 +27,10 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="stylesheet" href="/css/theme.css?v=ba9dfc40120a">
-    <link rel="stylesheet" href="/css/editorial.css?v=501820a972c4">
-    <link rel="stylesheet" href="/css/app.css?v=d8be10028838">
+    <link rel="stylesheet" href="/css/editorial.css?v=537c6565661e">
+    <link rel="stylesheet" href="/css/app.css?v=e4c0b9cbe3c3">
     <link rel="stylesheet" href="/css/content.css?v=c9ed8dc32a4e">
+    <link rel="stylesheet" href="/css/game-editorial.css?v=d05871bd8f6a">
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -123,7 +124,11 @@
 
 <section id="gameView" class="stack hidden">
     <div class="panel room-header">
-        <div>
+        <div class="game-brand">
+            <p class="brand-title">Durak <span>Дурак</span></p>
+            <div class="brand-suits" aria-hidden="true"><span>♠︎</span><span>♥︎</span><span>♦︎</span><span>♣︎</span></div>
+        </div>
+        <div class="room-summary">
             <div class="room-title-row">
                 <h2 id="roomHeading" class="room-title" tabindex="-1">Game <span id="gameCodeLabel" class="room-code"></span></h2>
                 <span id="statusLabel" class="status-pill"></span>
@@ -135,6 +140,7 @@
             <button id="startBtn" class="btn btn-accent">Start</button>
             <button id="addBotBtn" class="btn btn-secondary">Add bot</button>
             <button id="shareBtn" class="btn btn-secondary" aria-live="polite">Copy invite</button>
+            <a class="btn game-rules-link" href="/rules.html" target="_blank" rel="noopener" aria-label="How to play (opens in a new tab)"><svg class="game-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 7v14M3 3h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5v14h-5a4 4 0 0 0-4 4 4 4 0 0 0-4-4H3Z"/></svg><span>How to play</span></a>
             <button id="leaveBtn" class="btn btn-danger">Leave</button>
         </div>
         <div id="roomWaitingLine" class="room-waiting muted hidden">You’re in the room. Share the code so friends can join. The game starts automatically when 4 players are seated.</div>
@@ -165,9 +171,9 @@
 
     <div id="playingArea" class="table-shell">
         <div class="hud">
-            <span class="pill" title="Attacker"><span class="visually-hidden">Attacker: </span><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">⚔️</span></span>
-            <span class="pill" title="Defender"><span class="visually-hidden">Defender: </span><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true">🛡️</span></span>
-            <span id="trumpSuitHud" class="pill hidden" title="Trump suit"></span>
+            <span class="pill" title="Attacker"><span class="visually-hidden">Attacker: </span><strong id="tableAttackerLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true"><svg class="game-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6m-3 3 4 4m-1 1 2-2M14.5 6.5 18 3h3v3l-3.5 3.5M5 14l4 4m-2-1-3 3m-1-1 2 2"/></svg></span></span>
+            <span class="pill" title="Defender"><span class="visually-hidden">Defender: </span><strong id="tableDefenderLabel"></strong><span class="pill-role pill-role-after" aria-hidden="true"><svg class="game-icon game-icon--defender" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3 20 6v6c0 5-8 9-8 9s-8-4-8-9V6Z"/></svg></span></span>
+            <span id="trumpSuitHud" class="pill hidden"></span>
         </div>
         <div id="openingLeadHud" class="opening-lead-hud hidden"></div>
         <div class="table-felt-wrap">
@@ -239,7 +245,7 @@
     "/js/socket.js": "/js/socket.js?v=4824dd8b5f8e",
     "/js/state.js": "/js/state.js?v=503977d50881",
     "/js/sync.js": "/js/sync.js?v=5e859860c397",
-    "/js/view.js": "/js/view.js?v=473a1963a6a4"
+    "/js/view.js": "/js/view.js?v=2e8f8afaaa72"
   }
 }
 </script>
@@ -251,7 +257,7 @@
 <link rel="modulepreload" href="/js/socket.js?v=4824dd8b5f8e">
 <link rel="modulepreload" href="/js/state.js?v=503977d50881">
 <link rel="modulepreload" href="/js/sync.js?v=5e859860c397">
-<link rel="modulepreload" href="/js/view.js?v=473a1963a6a4">
+<link rel="modulepreload" href="/js/view.js?v=2e8f8afaaa72">
 <script type="module" src="/js/main.js?v=ca2d8bc684c8"></script>
 <!-- /ES modules -->
 </body>

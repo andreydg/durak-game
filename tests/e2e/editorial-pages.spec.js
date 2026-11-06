@@ -495,13 +495,16 @@ test.describe("Editorial font isolation", () => {
     }
 
     for (const width of [390, 1024]) {
-        test(`editorial styles do not change gameplay typography at ${width}px`, async ({page}) => {
+        test(`landing-only styles leave fallback gameplay typography intact at ${width}px`, async ({page}) => {
             await page.setViewportSize({width, height: 900});
             await seedSession(page);
             await serveGame(page, syntheticGame({table: [{attackCard: "9H"}], legalMoves: {canTake: true}}));
             await ready(page, "/");
             await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(6);
             await expect(page.locator(editorialStylesheet)).toHaveCount(1);
+            // The game now opts into its own companion stylesheet. Without that layer,
+            // the shared landing stylesheet must still leave the original table alone.
+            await page.locator('link[href^="/css/game-editorial.css"]').evaluate(link => { link.sheet.disabled = true; });
 
             // Compare against the existing theme/app styles in the same browser. No OS-specific
             // font names or screenshot baselines, but global font/heading/control leaks fail.

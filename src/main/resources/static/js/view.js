@@ -136,17 +136,31 @@ function renderSeat(seatEl, player, game) {
     syncSeatThinking(seatEl);
 }
 
+/* Fixed, decorative line icons; the existing spoken roles remain separate below. */
+function gameIcon(name) {
+    const shapes = {
+        bot: '<path d="M12 8V4H9M4 12H2m20 0h-2"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M9 12v4m6-4v4"/>',
+        attacker: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6m-3 3 4 4m-1 1 2-2M14.5 6.5 18 3h3v3l-3.5 3.5M5 14l4 4m-2-1-3 3m-1-1 2 2"/>',
+        defender: '<path d="M12 3 20 6v6c0 5-8 9-8 9s-8-4-8-9V6Z"/>',
+        taking: '<path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/>'
+    };
+    const className = name === "defender" ? "game-icon game-icon--defender" : "game-icon";
+    return `<svg class="${className}" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${shapes[name]}</svg>`;
+}
+
 function botBadgeHtml(player) {
     return player.bot
-        ? `<span class="ai-badge" title="Bot" aria-hidden="true">🤖</span><span class="visually-hidden"> (bot)</span>`
+        ? `<span class="ai-badge" title="Bot" aria-hidden="true">${gameIcon("bot")}</span><span class="visually-hidden"> (bot)</span>`
         : "";
 }
 
-/** Emoji role tags for the eye, the same roles in words for screen readers. */
+/** Same role tags and team text, with line icons replacing the three in-play emoji. */
 function roleTagsHtml(player, game) {
     const tags = roleTags(player, game);
     if (!tags) return "";
-    return `<span class="seat-role-inline" aria-hidden="true">${escapeHtml(tags)}</span>`
+    const icons = escapeHtml(tags).replaceAll("⚔️", gameIcon("attacker"))
+        .replaceAll("🛡️", gameIcon("defender")).replaceAll("⇩", gameIcon("taking"));
+    return `<span class="seat-role-inline" aria-hidden="true">${icons}</span>`
         + `<span class="visually-hidden">, ${escapeHtml(roleDescription(player, game))}</span>`;
 }
 
@@ -205,7 +219,7 @@ function updateBattleTableBanner(game) {
         ? "Throw in matching ranks (first come), then all attackers press End round."
         : "No more throw-ins. All attackers must press End round.";
     banner.innerHTML =
-        `<span class="taking-lead-icon" aria-hidden="true">⇩</span><strong>${escapeHtml(takingName)}</strong> is taking cards. ${sub}`;
+        `<span class="taking-lead-icon" aria-hidden="true">${gameIcon("taking")}</span><strong>${escapeHtml(takingName)}</strong> is taking cards. ${sub}`;
     banner.classList.remove("hidden");
 }
 
@@ -534,7 +548,8 @@ function renderView() {
         spoken.className = "visually-hidden";
         spoken.textContent = `Trump: ${suitName(game.trumpSuit) || sym}`;
         el.trumpSuitHud.replaceChildren(glyph, spoken);
-        el.trumpSuitHud.title = `Trump ${sym}`;
+        // Symbol only on screen, without a hover label. Keep the existing spoken description.
+        el.trumpSuitHud.removeAttribute("title");
         el.trumpSuitHud.classList.remove("hidden");
     } else if (el.trumpSuitHud) {
         el.trumpSuitHud.replaceChildren();
@@ -562,7 +577,7 @@ function renderView() {
         el.tableAttackerLabel.textContent = attacker ? attacker.name : "-";
         if (defender) {
             el.tableDefenderLabel.innerHTML =
-                `${escapeHtml(defender.name)}<span class="pill-take" title="Taking cards" aria-hidden="true">⇩</span>`
+                `${escapeHtml(defender.name)}<span class="pill-take" title="Taking cards" aria-hidden="true">${gameIcon("taking")}</span>`
                 + `<span class="visually-hidden">, taking the cards</span>`;
         } else {
             el.tableDefenderLabel.textContent = "-";
