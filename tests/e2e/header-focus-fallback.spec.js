@@ -2,6 +2,32 @@ import {test, expect} from "@playwright/test";
 import {setDefaultFont} from "./support/editorial-layout.js";
 import {seedSession, serveGame, syntheticGame} from "./support/synthetic.js";
 
+const LONG_NAMES = ["Alexandra Konstantinovna", "Maximilian Wojciechowski",
+    "Christopher Montgomery", "Konstantin Alexandrovich"];
+
+async function assertHandClearsHeader(page) {
+    await page.evaluate(() => document.fonts.ready);
+    // Let layout and its ResizeObserver settle before exercising native focus scrolling.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.evaluate(() => {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        document.querySelector("#myHand .hand-card-btn:last-child").focus();
+    });
+    for (let i = 0; i < 6; i++) {
+        if (i) await page.keyboard.press("Shift+Tab");
+        const metrics = await page.evaluate(() => ({
+            isCard: document.activeElement.matches(".hand-card-btn"),
+            card: document.activeElement.getBoundingClientRect().top,
+            bottom: document.activeElement.getBoundingClientRect().bottom,
+            header: document.querySelector(".room-header").getBoundingClientRect().bottom,
+            viewport: window.innerHeight
+        }));
+        expect(metrics.isCard).toBe(true);
+        expect(metrics.card).toBeGreaterThanOrEqual(metrics.header);
+        expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewport);
+    }
+}
+
 async function openGame(page, options, width, height = 900) {
     await page.setViewportSize({width, height});
     const game = syntheticGame(options);
@@ -76,6 +102,57 @@ test.describe("Header focus does not scroll the table", () => {
             });
         }
     }
+
+    test("programmatic focus on How to play keeps the table in place", async ({page}) => {
+        await openGame(page, {table: [{attackCard: "9H"}]}, 1280, 720);
+        const before = await page.evaluate(() => {
+            window.scrollTo(0, document.documentElement.scrollHeight);
+            return window.scrollY;
+        });
+        expect(before).toBeGreaterThan(0);
+        await page.evaluate(() => document.querySelector("#gameView .game-rules-link").focus());
+        await expect(page.locator("#gameView .game-rules-link")).toBeFocused();
+        expect(await page.evaluate(() => window.scrollY)).toBe(before);
+    });
+});
+
+test.describe("Card focus follows the measured header", () => {
+    for (const [width, height] of [[701, 360], [701, 390], [740, 360], [740, 390],
+        [768, 360], [768, 390], [834, 390]]) {
+        test(`long four-player names clear at ${width}x${height}`, async ({page}) => {
+            await openGame(page, {players: 4, names: LONG_NAMES, table: [{attackCard: "9H"}]}, width, height);
+            await assertHandClearsHeader(page);
+        });
+    }
+
+    for (const players of [2, 4]) {
+        for (const height of [360, 390]) {
+            test(`20px text with ${players} players clears at 701x${height}`, async ({page}) => {
+                await setDefaultFont(page, 20);
+                await openGame(page, {players, table: [{attackCard: "9H"}]}, 701, height);
+                await assertHandClearsHeader(page);
+            });
+        }
+    }
+
+    test("clearance follows a taller roster received during play", async ({page}) => {
+        await page.setViewportSize({width: 701, height: 390});
+        let game = syntheticGame({players: 4, table: [{attackCard: "9H"}]});
+        await seedSession(page);
+        const {sockets} = await serveGame(page, () => game);
+        await page.route("**/api/lobbies", route => route.fulfill({json: []}));
+        await page.routeWebSocket("**/ws/lobbies", () => {});
+        await page.goto("/");
+        await expect(page.locator("#gameView")).toBeVisible();
+        await assertHandClearsHeader(page);
+        const before = await page.locator(".room-header").evaluate(node => node.getBoundingClientRect().height);
+        await expect.poll(() => sockets.length).toBeGreaterThan(0);
+        game = syntheticGame({players: 4, names: LONG_NAMES, version: game.version + 1, table: [{attackCard: "9H"}]});
+        sockets.at(-1).send(JSON.stringify({type: "GAME_UPDATED", version: game.version}));
+        await expect(page.locator("#roleLabel")).toContainText(LONG_NAMES[3]);
+        expect(await page.locator(".room-header").evaluate(node => node.getBoundingClientRect().height)).toBeGreaterThan(before);
+        await assertHandClearsHeader(page);
+    });
 });
 
 const fallbackCases = [
