@@ -810,13 +810,57 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     box-shadow: 0 2px 8px rgba(0,0,0,0.22);
     flex: 0 0 auto;
     line-height: 0;
-    /* Cards use HTML5 drag and drop only; a swipe that starts on a card must still scroll. */
+    /*
+      Without touchdrag.js (an older script), and on a card that can't be dragged right now, a
+      swipe that starts on a card must still scroll.
+    */
     touch-action: manipulation;
 }
 .hand-card-btn:active { cursor: grabbing; }
 .hand-card-btn.dragging {
     opacity: 0.55;
     outline: 2px dashed var(--accent);
+}
+/*
+  Touch dragging (touchdrag.js marks <html> with .touch-drag). The browser reads touch-action as a
+  touch starts: on a hand that fits its rail every slide drags a card to the table; on a hand
+  wider than its rail (touchdrag.js keeps .hand-scrolls-x current) a sideways swipe scrolls it
+  instead. A pinch still zooms. Only a card that can be dragged now ([draggable="true"]; view.js
+  clears it while a move is pending or the seat is lost) gives up the page's pan: a touch the
+  script won't drag must stay an ordinary scroll, or Chromium turns its blocked pan into an
+  invisible fling that swallows the player's next tap. No long-press image menu or text selection
+  on the cards while they are handled.
+*/
+.touch-drag .hand-card-btn {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.touch-drag .hand-card-btn[draggable="true"] {
+    touch-action: pinch-zoom;
+}
+.touch-drag .hand-scrolls-x .hand-card-btn[draggable="true"] {
+    touch-action: pan-x pinch-zoom;
+}
+.touch-drag-ghost {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 1000;
+    pointer-events: none;
+    padding: 3px;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+    line-height: 0;
+    will-change: transform;
+}
+.touch-drag-ghost img {
+    aspect-ratio: 63 / 88;
+    object-fit: cover;
+    border-radius: 7px;
+    border: 1px solid #8a7a68;
+    background-color: #fff;
 }
 .hand-card-btn.selected {
     outline: 3px solid var(--accent);

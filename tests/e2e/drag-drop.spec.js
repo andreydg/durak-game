@@ -1,50 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { seedSession, syntheticGame } from "./support/synthetic.js";
-
-const CODE = "SYNTH2";
-
-/*
- * The bot led 6D and hearts are trump, so 6H can either transfer (same rank, nothing beaten yet)
- * or beat the 6D. Dropping it on the 6D defends; dropping it on the open felt transfers.
- */
-function sixesGame() {
-    return syntheticGame({
-        version: 7,
-        attackerPlayerId: "p2",
-        defenderPlayerId: "me",
-        trumpSuit: "H",
-        trumpCard: "9H",
-        hand: ["6H", "7H", "JH", "QC", "KD"],
-        table: [{attackCard: "6D", attackerId: "p2"}],
-        legalMoves: {
-            canDefend: true,
-            canTransfer: true,
-            canTake: true,
-            transferableCardCodes: ["6H"],
-            defensesByAttackCard: {"6D": ["6H", "7H", "JH", "KD"]}
-        }
-    });
-}
-
-/** Serves `current()` and records the table moves the page posts. */
-async function routeMoves(page, current = sixesGame) {
-    const moves = [];
-    await page.routeWebSocket("**/ws/games/**", () => {});
-    await page.route(`**/api/games/${CODE}**`, async route => {
-        const request = route.request();
-        const action = new URL(request.url()).pathname.slice(`/api/games/${CODE}`.length);
-        if (request.method() === "POST" && ["/attack", "/defend", "/transfer"].includes(action)) {
-            moves.push({action, body: request.postDataJSON()});
-        }
-        await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify(current())});
-    });
-    return moves;
-}
-
-async function centre(locator) {
-    const box = await locator.boundingBox();
-    return {x: box.x + box.width / 2, y: box.y + box.height / 2};
-}
+import { seedSession } from "./support/synthetic.js";
+import { centre, routeMoves, sixesGame } from "./support/table-moves.js";
 
 test.describe("Dragging a card to the table", () => {
     test.beforeEach(async ({page}) => {
