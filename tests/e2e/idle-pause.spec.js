@@ -44,9 +44,30 @@ async function watchGame(page, current) {
 
 const finishedGame = (version = 7) => syntheticGame({status: "FINISHED", loserPlayerId: "p2", hand: [], version});
 
+/*
+ * Input the page receives counts as use and starts the 15 minutes again. A test expecting a pause
+ * first checks that none arrived since it last cleared the log (inputSeen), so a stray event (a
+ * window focus, say) is named in the failure instead of surfacing as a socket that never closed.
+ */
+async function recordInput(page) {
+    await page.addInitScript(() => {
+        window.inputSeen = [];
+        const note = event => window.inputSeen.push(`${event.type} trusted=${event.isTrusted} at ${new Date().toISOString()}`);
+        for (const type of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) {
+            window.addEventListener(type, note, {capture: true, passive: true});
+        }
+        window.addEventListener("focus", note);
+    });
+}
+const clearInput = page => page.evaluate(() => { window.inputSeen = []; });
+async function expectNoInput(page) {
+    expect(await page.evaluate(() => window.inputSeen), "no input reached the page while it idled").toEqual([]);
+}
+
 test.describe("An idle page lets go of the server", () => {
     test.beforeEach(async ({page}) => {
         await page.clock.install();
+        await recordInput(page);
     });
 
     test("the home page closes Open tables after 15 idle minutes and reopens it on the next input", async ({page}) => {
@@ -54,10 +75,12 @@ test.describe("An idle page lets go of the server", () => {
         await page.goto("/");
         await expect.poll(() => lobby.opened).toBe(1);
         await expect.poll(() => lobby.reads).toBeGreaterThan(0);
+        await clearInput(page);
 
         await page.clock.fastForward("14:00");
         expect(lobby.closed).toBe(0);
         await page.clock.fastForward("01:30");
+        await expectNoInput(page);
         await expect.poll(() => lobby.closed).toBe(1);
 
         // However long the tab stays open, nothing reconnects or polls while nobody is there.
@@ -81,9 +104,11 @@ test.describe("An idle page lets go of the server", () => {
 
         await page.clock.fastForward("10:00");
         await page.keyboard.press("Shift");
+        await clearInput(page);
         await page.clock.fastForward("10:00");
         expect(lobby.closed).toBe(0);
         await page.clock.fastForward("05:30");
+        await expectNoInput(page);
         await expect.poll(() => lobby.closed).toBe(1);
     });
 
@@ -92,8 +117,10 @@ test.describe("An idle page lets go of the server", () => {
         await page.goto("/");
         await expect(page.locator("#gameView")).toBeVisible();
         await expect.poll(() => game.opened).toBe(1);
+        await clearInput(page);
 
         await page.clock.fastForward("15:30");
+        await expectNoInput(page);
         await expect.poll(() => game.closed).toBe(1);
         const reads = game.reads;
         await page.clock.fastForward("01:00:00");
@@ -123,9 +150,11 @@ test.describe("An idle page lets go of the server", () => {
         await page.goto("/");
         await expect(page.locator("#gameView")).toBeVisible();
         await expect.poll(() => game.opened).toBe(1);
+        await clearInput(page);
 
         await page.clock.fastForward("16:00");
         expect(game.closed).toBe(0);
+        await expectNoInput(page);
         finished = true;
         game.sockets.at(-1).send(JSON.stringify({type: "GAME_UPDATED", version: 99}));
         await expect.poll(() => game.closed).toBe(1);
