@@ -344,7 +344,7 @@ body:has(#gameView:not(.hidden)) {
 }
 @media (min-width: 701px) {
     /* Reveal focused cards below the masthead without scrolling controls already in it. */
-    #gameView.game-view--active .hand-card-btn { scroll-margin-top: 10rem; }
+    #gameView.game-view--active .hand-card-btn { scroll-margin-top: 11rem; }
     #gameView .action-strip button {
         min-height: 38px;
         padding: 0.5rem 0.85rem;

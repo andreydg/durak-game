@@ -51,23 +51,30 @@ test.describe("Header focus does not scroll the table", () => {
     }
 
     for (const width of [701, 768, 820, 834]) {
-        test(`four-player hand clears the wrapped header at ${width}px`, async ({page}) => {
-            await openGame(page, {players: 4, table: [{attackCard: "9H"}]}, width, 600);
-            await page.evaluate(() => {
-                window.scrollTo(0, document.documentElement.scrollHeight);
-                document.querySelector("#myHand .hand-card-btn:last-child").focus();
+        for (const height of [360, 390]) {
+            test(`four-player hand clears the wrapped header at ${width}x${height}`, async ({page}) => {
+                // Tall viewports already expose the whole hand, even without a scroll margin.
+                // Landscape heights force native focus scrolling past the wrapped roster.
+                await openGame(page, {players: 4, table: [{attackCard: "9H"}]}, width, height);
+                await page.evaluate(() => {
+                    window.scrollTo(0, document.documentElement.scrollHeight);
+                    document.querySelector("#myHand .hand-card-btn:last-child").focus();
+                });
+                for (let i = 0; i < 6; i++) {
+                    if (i) await page.keyboard.press("Shift+Tab");
+                    const metrics = await page.evaluate(() => ({
+                        isCard: document.activeElement.matches(".hand-card-btn"),
+                        card: document.activeElement.getBoundingClientRect().top,
+                        bottom: document.activeElement.getBoundingClientRect().bottom,
+                        header: document.querySelector(".room-header").getBoundingClientRect().bottom,
+                        viewport: window.innerHeight
+                    }));
+                    expect(metrics.isCard).toBe(true);
+                    expect(metrics.card).toBeGreaterThanOrEqual(metrics.header);
+                    expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewport);
+                }
             });
-            for (let i = 0; i < 6; i++) {
-                if (i) await page.keyboard.press("Shift+Tab");
-                const metrics = await page.evaluate(() => ({
-                    isCard: document.activeElement.matches(".hand-card-btn"),
-                    card: document.activeElement.getBoundingClientRect().top,
-                    header: document.querySelector(".room-header").getBoundingClientRect().bottom
-                }));
-                expect(metrics.isCard).toBe(true);
-                expect(metrics.card).toBeGreaterThanOrEqual(metrics.header);
-            }
-        });
+        }
     }
 });
 
