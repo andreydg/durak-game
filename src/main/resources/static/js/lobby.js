@@ -23,7 +23,7 @@ const lobby = {
 
 const socket = createReconnectingSocket({
     url: () => socketUrl("/ws/lobbies"),
-    canConnect: () => lobby.active && document.visibilityState !== "hidden",
+    canConnect: () => lobby.active && document.visibilityState !== "hidden" && !state.idlePaused,
     onOpen: () => log("Open tables realtime transport connected."),
     onMessage: event => {
         try {
@@ -138,9 +138,12 @@ function shouldPollOpenTables() {
     return state.game.status === "LOBBY" && state.game.publicRoom !== false;
 }
 
-/** Starts or stops the list updates to match the current view (called after every render). */
+/**
+ * Starts or stops the list updates to match the current view (called after every render). A hidden
+ * tab, or a visible one left idle (state.idlePaused), keeps no socket open and polls nothing.
+ */
 export function syncLobbyListPolling() {
-    const shouldRun = shouldPollOpenTables() && document.visibilityState !== "hidden";
+    const shouldRun = shouldPollOpenTables() && document.visibilityState !== "hidden" && !state.idlePaused;
     if (shouldRun) {
         const becameActive = !lobby.active;
         lobby.active = true;

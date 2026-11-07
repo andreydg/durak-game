@@ -9,7 +9,7 @@
  *   actions.js  user actions and seat lifecycle    touchdrag.js  dragging cards with a finger
  *   main.js     this wiring
  */
-import {chooseDropAction, roomCodeFromSearch} from "./logic.js";
+import {chooseDropAction, msUntilIdle, roomCodeFromSearch} from "./logic.js";
 import {seat} from "./api.js";
 import {isBusy, state} from "./state.js";
 import {el} from "./dom.js";
@@ -29,6 +29,7 @@ import {
     beginPolling,
     configureSync,
     connectGameSocket,
+    gameUpdatesIdlePaused,
     pauseGameUpdates,
     refreshGame,
     sendHeartbeat,
@@ -58,6 +59,7 @@ import {
 
 configureSync({applySnapshot: applyGameSnapshot, handleSessionError});
 onRendered(syncLobbyListPolling);
+onRendered(syncIdlePause);
 showDebugPanel();
 
 /* ---- lobby ---- */
@@ -206,6 +208,17 @@ document.addEventListener("visibilitychange", () => {
         pauseGameUpdates();
         return;
     }
+    // Coming back to the tab is a use of it, even after idling.
+    lastActivityAt = Date.now();
+    if (state.idlePaused) {
+        state.idlePaused = false;
+        armIdleTimer();
+    }
+    resumeLiveUpdates();
+});
+
+/** A page shown again, or used again after idling, restarts its lists, reads and sockets. */
+function resumeLiveUpdates() {
     syncLobbyListPolling();
     if (seat.gameCode && !state.seatInvalid) {
         beginPolling();
@@ -213,7 +226,56 @@ document.addEventListener("visibilitychange", () => {
         connectGameSocket();
         refreshGame();
     }
-});
+}
+
+/*
+ * ---- an idle page pauses what nobody is watching ----
+ * A visible tab left alone would hold the Open tables socket open on the server around the clock
+ * (the client reconnects whenever the server's request timeout ends it). After IDLE_PAUSE_MS with
+ * no input, Open tables (home page and waiting room) and a finished game's updates stop, as for a
+ * hidden tab; the next interaction picks them up again. A waiting room's or a running game's own
+ * updates keep going, since its player may be waiting on someone else.
+ */
+let lastActivityAt = Date.now();
+let idleTimer = 0;
+
+function armIdleTimer() {
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(checkIdle, msUntilIdle(lastActivityAt, Date.now()));
+}
+
+function checkIdle() {
+    if (msUntilIdle(lastActivityAt, Date.now()) > 0) {
+        armIdleTimer();
+        return;
+    }
+    state.idlePaused = true;
+    log("No recent activity: Open tables and a finished game's updates are paused until the next interaction.");
+    stopLobbyListPolling();
+    syncIdlePause();
+}
+
+/** While idle, a game that is (or has just become) finished stops its updates too. Runs after every render. */
+function syncIdlePause() {
+    if (gameUpdatesIdlePaused()) pauseGameUpdates();
+}
+
+/** Any input counts as use; once idle, the first one picks everything up again. */
+function noteActivity() {
+    lastActivityAt = Date.now();
+    if (!state.idlePaused) return;
+    state.idlePaused = false;
+    armIdleTimer();
+    log("Activity again: live updates resumed.");
+    resumeLiveUpdates();
+}
+
+for (const type of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) {
+    window.addEventListener(type, noteActivity, {capture: true, passive: true});
+}
+// The window itself gaining focus (not a focus moved inside the page, which can be the app's own).
+window.addEventListener("focus", noteActivity);
+armIdleTimer();
 
 /*
  * Test hooks: the Playwright specs (tests/e2e) drive these internals directly, e.g. to force a

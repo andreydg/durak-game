@@ -2,7 +2,7 @@
  * Keeping the seat's game current: invalidations from the game socket, HTTP refreshes (a fast
  * fallback while the socket is down, a slow health check while it is up) and the heartbeat.
  */
-import {gameRefreshDelayMs, isGameSnapshot, refreshFailureMessage, shouldReplaceRefreshTimer} from "./logic.js";
+import {gameRefreshDelayMs, idlePausesGame, isGameSnapshot, refreshFailureMessage, shouldReplaceRefreshTimer} from "./logic.js";
 import {ApiError, api, gamePath, isCurrentSession, seat, sessionKey} from "./api.js";
 import {state} from "./state.js";
 import {createReconnectingSocket, socketUrl} from "./socket.js";
@@ -33,9 +33,15 @@ const sync = {
 
 const gameSocketUrl = code => socketUrl(`/ws/games/${encodeURIComponent(code)}`);
 
+/** A finished game left open by an idle player needs no updates until the next interaction. */
+export function gameUpdatesIdlePaused() {
+    return state.idlePaused && idlePausesGame(state.game);
+}
+
 const socket = createReconnectingSocket({
     url: () => gameSocketUrl(seat.gameCode),
-    canConnect: () => Boolean(seat.gameCode) && !state.seatInvalid && document.visibilityState !== "hidden",
+    canConnect: () => Boolean(seat.gameCode) && !state.seatInvalid && document.visibilityState !== "hidden"
+        && !gameUpdatesIdlePaused(),
     onOpen: url => {
         if (url !== gameSocketUrl(seat.gameCode)) return;
         sync.socketConnected = true;
@@ -147,7 +153,7 @@ export async function refreshGame() {
         if (sync.refreshInFlight === request) {
             sync.refreshInFlight = null;
         }
-        if (sync.refreshQueued && seat.gameCode && document.visibilityState !== "hidden") {
+        if (sync.refreshQueued && seat.gameCode && document.visibilityState !== "hidden" && !gameUpdatesIdlePaused()) {
             sync.refreshQueued = false;
             window.setTimeout(() => refreshGame(), 0);
         } else {
@@ -176,7 +182,7 @@ export function beginPolling() {
 }
 
 export function scheduleGameRefresh(delayOverride = null, replaceExisting = false) {
-    if (!seat.gameCode || !seat.playerId || state.seatInvalid) {
+    if (!seat.gameCode || !seat.playerId || state.seatInvalid || gameUpdatesIdlePaused()) {
         cancelGameRefreshTimer();
         return;
     }
@@ -229,7 +235,7 @@ function beginHeartbeat() {
     sync.heartbeatTimer = setInterval(sendHeartbeat, 5 * 60 * 1000);
 }
 
-/** Hidden tab: no reads, no heartbeat, no socket until it is visible again. */
+/** Hidden tab (or an idle finished game): no reads, no heartbeat, no socket until it is back. */
 export function pauseGameUpdates() {
     stopPolling();
     closeGameSocket();

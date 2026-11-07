@@ -971,6 +971,31 @@ describe("realtime fallback timing", () => {
     });
 });
 
+describe("idle pause", () => {
+    it("waits 15 minutes from the last input", () => {
+        expect(L.IDLE_PAUSE_MS).toBe(15 * 60 * 1000);
+        expect(L.msUntilIdle(1_000, 1_000)).toBe(L.IDLE_PAUSE_MS);
+        expect(L.msUntilIdle(1_000, 1_000 + 10 * 60 * 1000)).toBe(5 * 60 * 1000);
+    });
+
+    it("is idle from the threshold on, never negative", () => {
+        expect(L.msUntilIdle(0, L.IDLE_PAUSE_MS)).toBe(0);
+        expect(L.msUntilIdle(0, L.IDLE_PAUSE_MS * 4)).toBe(0);
+    });
+
+    it("takes another threshold and treats bad times as a fresh start", () => {
+        expect(L.msUntilIdle(0, 400, 1_000)).toBe(600);
+        expect(L.msUntilIdle(Number.NaN, 5)).toBe(L.IDLE_PAUSE_MS);
+        expect(L.msUntilIdle(5, undefined)).toBe(L.IDLE_PAUSE_MS);
+    });
+
+    it("pauses a game's own updates only once it is over", () => {
+        expect(L.idlePausesGame({status: "FINISHED"})).toBe(true);
+        for (const status of ["LOBBY", "IN_PROGRESS"]) expect(L.idlePausesGame({status})).toBe(false);
+        expect(L.idlePausesGame(null)).toBe(false);
+    });
+});
+
 describe("defence targets", () => {
     const defs = { "7H": ["9H", "6S"], "8C": ["6S"], "9D": ["JD"] };
 
