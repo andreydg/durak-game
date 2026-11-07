@@ -787,7 +787,10 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     box-shadow: 0 2px 8px rgba(0,0,0,0.22);
     flex: 0 0 auto;
     line-height: 0;
-    /* Without touchdrag.js (an older script) a swipe that starts on a card must still scroll. */
+    /*
+      Without touchdrag.js (an older script), and on a card that can't be dragged right now, a
+      swipe that starts on a card must still scroll.
+    */
     touch-action: manipulation;
 }
 .hand-card-btn:active { cursor: grabbing; }
@@ -799,16 +802,21 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
   Touch dragging (touchdrag.js marks <html> with .touch-drag). The browser reads touch-action as a
   touch starts: on a hand that fits its rail every slide drags a card to the table; on a hand
   wider than its rail (touchdrag.js keeps .hand-scrolls-x current) a sideways swipe scrolls it
-  instead. A pinch still zooms. No long-press image menu or text selection on the cards while they
-  are handled.
+  instead. A pinch still zooms. Only a card that can be dragged now ([draggable="true"]; view.js
+  clears it while a move is pending or the seat is lost) gives up the page's pan: a touch the
+  script won't drag must stay an ordinary scroll, or Chromium turns its blocked pan into an
+  invisible fling that swallows the player's next tap. No long-press image menu or text selection
+  on the cards while they are handled.
 */
 .touch-drag .hand-card-btn {
-    touch-action: pinch-zoom;
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
 }
-.touch-drag .hand-scrolls-x .hand-card-btn {
+.touch-drag .hand-card-btn[draggable="true"] {
+    touch-action: pinch-zoom;
+}
+.touch-drag .hand-scrolls-x .hand-card-btn[draggable="true"] {
     touch-action: pan-x pinch-zoom;
 }
 .touch-drag-ghost {

@@ -7,6 +7,57 @@ import { lands, reveal, touchscreen } from "./support/touch.js";
 const PHONE = {width: 390, height: 844};
 const TABLET = {width: 820, height: 1180}; // an iPad in portrait
 
+/**
+ * Counts the frames the page asks for (window.framesAsked), the mutation observers watching the
+ * game view (window.liveObservers), and the live pointer and touchmove listeners the app's own
+ * modules added (window.liveListeners; Playwright adds some of its own), so a test can tell that
+ * a drag left nothing running behind it.
+ */
+async function watchDragLifetime(page) {
+    await page.addInitScript(() => {
+        window.framesAsked = 0;
+        const raf = window.requestAnimationFrame.bind(window);
+        window.requestAnimationFrame = callback => { window.framesAsked++; return raf(callback); };
+        const live = window.liveObservers = new Set();
+        const {observe, disconnect} = MutationObserver.prototype;
+        MutationObserver.prototype.observe = function (target, options) {
+            if (target instanceof Node && document.getElementById("gameView")?.contains(target)) live.add(this);
+            return observe.call(this, target, options);
+        };
+        MutationObserver.prototype.disconnect = function () { live.delete(this); return disconnect.call(this); };
+        const listeners = window.liveListeners = [];
+        const types = new Set(["pointermove", "pointerup", "pointercancel", "pointerdown", "touchmove"]);
+        const {addEventListener: add, removeEventListener: remove} = EventTarget.prototype;
+        const capture = options => Boolean(typeof options === "object" ? options?.capture : options);
+        // A test's own probe listeners are not the page's.
+        window.untracked = {add: (target, type, listener) => add.call(target, type, listener)};
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+            const fromApp = types.has(type) && /\/js\/[\w-]+\.js/.test(new Error().stack);
+            if (fromApp && !listeners.some(l => l.target === this && l.type === type && l.listener === listener && l.capture === capture(options))) {
+                listeners.push({target: this, type, listener, capture: capture(options)});
+            }
+            return add.call(this, type, listener, options);
+        };
+        EventTarget.prototype.removeEventListener = function (type, listener, options) {
+            const at = listeners.findIndex(l => l.target === this && l.type === type && l.listener === listener && l.capture === capture(options));
+            if (at >= 0) listeners.splice(at, 1);
+            return remove.call(this, type, listener, options);
+        };
+    });
+}
+
+/** The frame count once the page has stopped asking for frames: two reads 150ms apart agree. */
+async function framesOnceIdle(page) {
+    let last = -1;
+    await expect.poll(async () => {
+        const now = await page.evaluate(() => window.framesAsked);
+        const idle = now === last;
+        last = now;
+        return idle;
+    }, {intervals: [150]}).toBe(true);
+    return last;
+}
+
 /*
  * Phones and tablets drag cards with a finger (touchdrag.js) to the same targets, with the same
  * rules, as a mouse does with HTML5 drag and drop (drag-drop.spec.js). These tests send real
@@ -251,19 +302,7 @@ test.describe("Dragging a card with a finger", () => {
     });
 
     test("a card held still keeps its outline when a new snapshot redraws the table, and a cancelled drag lets go", async ({page}) => {
-        await page.addInitScript(() => {
-            // Count the frames the page asks for, and the mutation observers watching the game view.
-            window.framesAsked = 0;
-            const raf = window.requestAnimationFrame.bind(window);
-            window.requestAnimationFrame = callback => { window.framesAsked++; return raf(callback); };
-            const live = window.liveObservers = new Set();
-            const {observe, disconnect} = MutationObserver.prototype;
-            MutationObserver.prototype.observe = function (target, options) {
-                if (target instanceof Node && document.getElementById("gameView")?.contains(target)) live.add(this);
-                return observe.call(this, target, options);
-            };
-            MutationObserver.prototype.disconnect = function () { live.delete(this); return disconnect.call(this); };
-        });
+        await watchDragLifetime(page);
         let version = 7;
         const sockets = [];
         const moves = await routeMoves(page, () => sixesGame({version}), {sockets});
@@ -272,17 +311,6 @@ test.describe("Dragging a card with a finger", () => {
         await expect(pairs).toBeVisible();
         await expect.poll(() => sockets.length).toBeGreaterThan(0);
         const observers = await page.evaluate(() => window.liveObservers.size);
-        // The page asks for no frames once two reads 150ms apart agree.
-        const framesOnceIdle = async () => {
-            let last = -1;
-            await expect.poll(async () => {
-                const now = await page.evaluate(() => window.framesAsked);
-                const idle = now === last;
-                last = now;
-                return idle;
-            }, {intervals: [150]}).toBe(true);
-            return last;
-        };
         // A newer snapshot with the same table: the pair under the finger is drawn anew.
         const redraw = async mark => {
             await pairs.evaluate((node, value) => { node.dataset.drawn = value; }, mark);
@@ -297,12 +325,12 @@ test.describe("Dragging a card with a finger", () => {
         await touch.move({x: from.x, y: from.y - 40}, {steps: 4});
         await touch.move(await centre(pairs));
         await expect(pairs).toHaveClass(/battle-pair-drop-target/);
-        await framesOnceIdle();
+        await framesOnceIdle(page);
 
         // Held still while the table is redrawn: the new pair is outlined, with no frame loop left.
         await redraw("before");
         await expect(pairs).toHaveClass(/battle-pair-drop-target/);
-        const idle = await framesOnceIdle();
+        const idle = await framesOnceIdle(page);
         await page.waitForTimeout(300);
         expect(await page.evaluate(() => window.framesAsked)).toBe(idle);
         expect(await page.evaluate(() => window.liveObservers.size)).toBe(observers + 1);
@@ -312,7 +340,7 @@ test.describe("Dragging a card with a finger", () => {
         await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
         await expect(page.locator("#battleCards .battle-pair-drop-target, #battleCards.battle-drop-target")).toHaveCount(0);
         expect(await page.evaluate(() => window.liveObservers.size)).toBe(observers);
-        const afterCancel = await framesOnceIdle();
+        const afterCancel = await framesOnceIdle(page);
         await redraw("again");
         await expect(page.locator("#battleCards .battle-pair-drop-target, #battleCards.battle-drop-target")).toHaveCount(0);
         expect(await page.evaluate(() => window.framesAsked)).toBe(afterCancel);
@@ -452,6 +480,179 @@ test.describe("Dragging a card with a finger", () => {
         release();
         await page.waitForTimeout(300);
         expect(moves.map(move => move.action)).toEqual(["/defend"]);
+    });
+
+    test("while a move is pending, a flick on another card scrolls the page, and a tap right after selects", async ({page}) => {
+        await page.setViewportSize({width: 390, height: 640});
+        let release;
+        const pending = new Promise(resolve => { release = resolve; });
+        let current = sixesGame();
+        const moves = await routeMoves(page, () => current, {hold: action => action === "/defend" ? pending : null});
+        await page.goto("/");
+        const card = page.locator('#myHand [data-card-code="6H"]');
+        await expect(card).toBeVisible();
+        // Defend the 6D with the 7H through the buttons; the answer is held.
+        await page.locator('#myHand [data-card-code="7H"]').tap();
+        await page.locator("#defendBtn").tap();
+        await expect.poll(() => moves.map(move => move.action)).toEqual(["/defend"]);
+        await expect(card).toHaveAttribute("aria-disabled", "true");
+
+        // A card that can't be dragged keeps the browser's own gestures, as without touch dragging:
+        // a flick that starts on it scrolls the page.
+        await expect(card).toHaveCSS("touch-action", "manipulation");
+        const touch = await touchscreen(page);
+        const before = await page.evaluate(() => window.scrollY);
+        const from = await centre(card);
+        await touch.down(from);
+        await touch.move({x: from.x + 90, y: from.y - 120}, {steps: 12});
+        await touch.up();
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before);
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+
+        // The defence is accepted: the 7H is on the table and the hand is free again. A tap right
+        // away selects: no invisible fling is left for Chromium (Linux, Android) to cancel with it.
+        current = sixesGame({
+            version: 8, hand: ["6H", "JH", "QC", "KD"], legalMoves: {},
+            table: [{attackCard: "6D", defenseCard: "7H", attackerId: "p2"}]
+        });
+        release();
+        await expect(card).not.toHaveAttribute("aria-disabled", "true");
+        await reveal(card);
+        await touch.tap(await centre(card));
+        await expect(card).toHaveAttribute("aria-pressed", "true");
+        expect(moves.map(move => move.action)).toEqual(["/defend"]);
+    });
+
+    test("a card that can't be dragged any more once the slide starts lets the slide go without a fling", async ({page}) => {
+        let release;
+        const pending = new Promise(resolve => { release = resolve; });
+        let current = sixesGame();
+        const moves = await routeMoves(page, () => current, {hold: action => action === "/defend" ? pending : null});
+        await page.goto("/");
+        const card = page.locator('#myHand [data-card-code="6H"]');
+        await expect(card).toBeVisible();
+        // Select the 7H with the keyboard, so Defend is ready for it.
+        await page.locator('#myHand [data-card-code="7H"]').focus();
+        await page.keyboard.press("Enter");
+        await expect(page.locator('#myHand [data-card-code="7H"]')).toHaveAttribute("aria-pressed", "true");
+
+        // A finger lands on the 6H while it can still be dragged, so the touch can't pan the page.
+        const touch = await touchscreen(page);
+        const from = await centre(card);
+        await touch.down(from);
+        // A probe at the end of the moves' path (the card is still in the hand, so they bubble to
+        // the window) sees whether anything took each one once the card became undraggable.
+        await card.evaluate(button => {
+            window.movesAfterBusy = [];
+            window.addEventListener("touchmove", event => {
+                if (button.getAttribute("aria-disabled") === "true") window.movesAfterBusy.push(event.defaultPrevented);
+            });
+        });
+        // Defend starts (another input) before the finger moves: the hand can't be dragged now.
+        await page.locator("#defendBtn").evaluate(button => button.click());
+        await expect(card).toHaveAttribute("aria-disabled", "true");
+        // The slide doesn't lift the card, and its moves are still taken: no pan, no fling.
+        await touch.move({x: from.x, y: from.y - 40}, {steps: 4});
+        await touch.move({x: from.x + 100, y: from.y - 95}, {steps: 10});
+        await touch.up();
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        // Chromium holds back a move still inside its touch slop, so count only what arrived.
+        const busyMoves = await page.evaluate(() => window.movesAfterBusy);
+        expect(busyMoves.length).toBeGreaterThan(5);
+        expect(busyMoves).not.toContain(false);
+
+        current = sixesGame({
+            version: 8, hand: ["6H", "JH", "QC", "KD"], legalMoves: {},
+            table: [{attackCard: "6D", defenseCard: "7H", attackerId: "p2"}]
+        });
+        release();
+        await expect(card).not.toHaveAttribute("aria-disabled", "true");
+        await touch.tap(await centre(card));
+        await expect(card).toHaveAttribute("aria-pressed", "true");
+        expect(moves.map(move => move.action)).toEqual(["/defend"]);
+    });
+
+    test("a card a refresh takes from the hand mid-drag lets go at once, and its touch can't swallow the next tap", async ({page}) => {
+        await watchDragLifetime(page);
+        let played = false;
+        const sockets = [];
+        // The same seat plays the 6H from another tab: the next snapshot has it on the table.
+        const moves = await routeMoves(page, () => (played
+            ? sixesGame({version: 8, hand: ["7H", "JH", "QC", "KD"], legalMoves: {},
+                table: [{attackCard: "6D", defenseCard: "6H", attackerId: "p2"}]})
+            : sixesGame()), {sockets});
+        await page.goto("/");
+        const card = page.locator('#myHand [data-card-code="6H"]');
+        await expect(card).toBeVisible();
+        await expect.poll(() => sockets.length).toBeGreaterThan(0);
+        const observers = await page.evaluate(() => window.liveObservers.size);
+        const listeners = await page.evaluate(() => window.liveListeners.length);
+
+        const touch = await touchscreen(page);
+        const from = await centre(card);
+        await touch.down(from);
+        await touch.move({x: from.x, y: from.y - 40}, {steps: 4});
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(1);
+        // A probe on the card itself, added after the page's own listeners, sees whether each move
+        // was taken once the card is out of the page (its touches no longer reach #myHand).
+        await card.evaluate(button => {
+            window.movesAfterRemoval = [];
+            window.untracked.add(button, "touchmove", event => {
+                if (!button.isConnected) window.movesAfterRemoval.push(event.defaultPrevented);
+            });
+        });
+        played = true;
+        sockets.at(-1).send(JSON.stringify({type: "GAME_UPDATED", version: 8}));
+        await expect(card).toHaveCount(0);
+
+        // With the finger still down, the drag lets go at once: no ghost, outline, observer or frames.
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        await expect(page.locator("html.touch-dragging, .dragging")).toHaveCount(0);
+        await expect(page.locator("#battleCards .battle-pair-drop-target, #battleCards.battle-drop-target")).toHaveCount(0);
+        expect(await page.evaluate(() => window.liveObservers.size)).toBe(observers);
+        const idle = await framesOnceIdle(page);
+
+        // The finger keeps sliding and flicks off. Those moves still belong to the drag: the browser
+        // neither pans nor flings with them, so the next tap selects at once.
+        await touch.move({x: from.x + 110, y: from.y - 95}, {steps: 10});
+        await touch.up();
+        const removedMoves = await page.evaluate(() => window.movesAfterRemoval);
+        expect(removedMoves.length).toBeGreaterThan(5);
+        expect(removedMoves).not.toContain(false);
+        expect(await page.evaluate(() => window.framesAsked)).toBe(idle);
+        const next = page.locator('#myHand [data-card-code="7H"]');
+        await touch.tap(await centre(next));
+        await expect(next).toHaveAttribute("aria-pressed", "true");
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        expect(await page.evaluate(() => window.liveListeners.length)).toBe(listeners);
+        expect(moves).toEqual([]);
+    });
+
+    test("a second finger lets go of the card, and the two fingers pinch the page", async ({page}) => {
+        const moves = await routeMoves(page);
+        await page.goto("/");
+        const card = page.locator('#myHand [data-card-code="6H"]');
+        await expect(card).toBeVisible();
+        const cdp = await page.context().newCDPSession(page);
+        const send = (type, touchPoints) => cdp.send("Input.dispatchTouchEvent", {type, touchPoints});
+        const from = await centre(card);
+        let first = {x: from.x, y: from.y, id: 1};
+        await send("touchStart", [first]);
+        for (let i = 1; i <= 4; i++) await send("touchMove", [{...first, y: from.y - 10 * i}]);
+        first = {...first, y: from.y - 40};
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(1);
+
+        const second = {x: Math.min(first.x + 100, PHONE.width - 20), y: first.y, id: 2};
+        await send("touchStart", [first, second]);
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        await expect(card).not.toHaveClass(/dragging/);
+        const scale = await page.evaluate(() => window.visualViewport.scale);
+        for (let i = 1; i <= 10; i++) {
+            await send("touchMove", [{...first, x: first.x - 3 * i}, {...second, x: second.x + 5 * i}]);
+        }
+        await send("touchEnd", []);
+        await expect.poll(() => page.evaluate(() => window.visualViewport.scale)).toBeGreaterThan(scale);
+        expect(moves).toEqual([]);
     });
 
     test("a page from an earlier release drags with this script as well", async ({page}) => {

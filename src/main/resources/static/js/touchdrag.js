@@ -6,9 +6,12 @@
  * Gestures on a card: a tap still selects; a sideways swipe scrolls a hand wider than its rail;
  * any other slide drags. The browser decides when a touch starts whether it may pan, from the
  * card's touch-action (app.css): only a hand marked .hand-scrolls-x here, one wider than its rail,
- * lets a sideways swipe pan, so on a hand that fits every slide is a drag. Once a card is lifted,
- * its touchmoves are consumed: the browser then neither pans under it nor starts an invisible
- * fling, which would make Chromium drop the player's next tap as the tap that stopped a fling.
+ * lets a sideways swipe pan, so on a hand that fits every slide is a drag. A card that can't be
+ * dragged right now keeps the browser's own gestures. Once a card is lifted, its touchmoves are
+ * consumed: the browser then neither pans under it nor starts an invisible fling, which would
+ * make Chromium drop the player's next tap as the tap that stopped a fling. So are the rest of a
+ * touch whose drag is called off (the card can't be dragged any more, or a refresh took it out of
+ * the hand): its pan was ruled out when it began, so unconsumed it could only become that fling.
  * Nothing here depends on new markup, so a page from an earlier release that loads this module
  * drags the same way, and a stale stylesheet only costs the drag, not the tap.
  */
@@ -43,24 +46,31 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
         if (e.pointerType === "mouse" || !e.isPrimary || e.button !== 0 || gesture) return;
         const button = e.target.closest?.(".hand-card-btn");
         if (!button || !hand.contains(button) || !canDrag(button)) return;
+        // "pending" until the slide decides; "dragging" once lifted; "cancelled" once the drag is
+        // called off while the finger is still down (its moves stay ours until it lifts).
         gesture = {
             pointerId: e.pointerId, button, code: button.dataset.cardCode,
             startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
-            dragging: false, ghost: null, lift: 0, frame: 0, target: null, redraws: null
+            phase: "pending", lifted: false, ghost: null, lift: 0, frame: 0, target: null, redraws: null
         };
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
         window.addEventListener("pointercancel", onCancel);
         // A second finger (a pinch) ends the gesture rather than dragging two cards.
         window.addEventListener("pointerdown", onOtherPointer, true);
+        // The touch keeps targeting this card even if a refresh takes it out of the hand, and then
+        // its moves no longer bubble to the hand: take them here too, for as long as the touch lasts.
+        button.addEventListener("touchmove", takeMove, {passive: false});
     });
 
     // A lifted card's slide is ours. The pointermove that lifts it comes first, so the touchmove
     // that would let the browser pan (or later fling) is already consumed. Registered up front:
     // the browser only lets touchmoves be cancelled if a listener was there when the touch began.
-    hand.addEventListener("touchmove", (e) => {
-        if (gesture?.dragging && e.cancelable) e.preventDefault();
-    }, {passive: false});
+    hand.addEventListener("touchmove", takeMove, {passive: false});
+
+    function takeMove(e) {
+        if (gesture && gesture.phase !== "pending" && e.cancelable) e.preventDefault();
+    }
 
     // Long-pressing a card must not open the image menu (Android) while it is being dragged.
     hand.addEventListener("contextmenu", (e) => {
@@ -84,13 +94,19 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
         if (!gesture || e.pointerId !== gesture.pointerId) return;
         gesture.x = e.clientX;
         gesture.y = e.clientY;
-        if (!gesture.dragging) {
+        if (gesture.phase === "pending") {
             const intent = touchDragIntent(e.clientX - gesture.startX, e.clientY - gesture.startY,
                 undefined, scrollsSideways(hand));
             if (intent === "wait") return;
-            // Sideways: the browser scrolls the hand. A card that became undraggable stays put.
-            if (intent === "swipe" || !gesture.button.isConnected || !canDrag(gesture.button)) {
-                end(false);
+            // Sideways: the browser scrolls the hand.
+            if (intent === "swipe") {
+                end();
+                return;
+            }
+            // A card that became undraggable (a move started, or it left the hand) stays put; its
+            // touch could not pan from the start, so its moves are still taken until it lifts.
+            if (!gesture.button.isConnected || !canDrag(gesture.button)) {
+                gesture.phase = "cancelled";
                 return;
             }
             begin();
@@ -136,19 +152,16 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
 
     function onUp(e) {
         if (!gesture || e.pointerId !== gesture.pointerId) return;
-        if (!gesture.dragging) {
-            end(false); // a tap: the click that follows selects the card as before
-            return;
-        }
-        const {code, button} = gesture;
-        const target = targetAt(e.clientX, e.clientY);
-        end(true);
-        // A card a refresh took out of the hand mid-drag is not played.
-        if (target && button.isConnected) drop(code, target);
+        // A tap ends here, and the click that follows selects the card as before. A card a
+        // refresh took out of the hand mid-drag is not played.
+        const {code, button, phase} = gesture;
+        const target = phase === "dragging" && button.isConnected ? targetAt(e.clientX, e.clientY) : null;
+        end();
+        if (target) drop(code, target);
     }
 
     function onCancel() {
-        if (gesture) end(gesture.dragging);
+        if (gesture) end();
     }
 
     function onOtherPointer(e) {
@@ -156,25 +169,38 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
     }
 
     function begin() {
-        const {button} = gesture;
-        gesture.dragging = true;
+        const current = gesture;
+        const {button} = current;
+        current.phase = "dragging";
+        current.lifted = true;
         try {
-            button.setPointerCapture(gesture.pointerId);
+            button.setPointerCapture(current.pointerId);
         } catch {
             // Already released by the browser; moves still reach the window listeners.
         }
         button.classList.add("dragging");
         document.documentElement.classList.add("touch-dragging");
-        gesture.ghost = createGhost(button);
+        current.ghost = createGhost(button);
         place();
         // A new snapshot may re-render the table (or the hand) under a finger held still: outline
-        // again for what is there now. One frame per change, and only while a card is lifted.
+        // again for what is there now. One frame per change, and only while a card is lifted. If
+        // the snapshot took the card itself out of the hand, the drag lets go at once.
         if (watch.length && typeof MutationObserver === "function") {
-            gesture.redraws = new MutationObserver(() => schedule());
+            current.redraws = new MutationObserver(() => {
+                if (gesture !== current || current.phase !== "dragging") return;
+                if (current.button.isConnected) schedule();
+                else letGo();
+            });
             for (const node of watch) {
-                if (node) gesture.redraws.observe(node, {childList: true, subtree: true});
+                if (node) current.redraws.observe(node, {childList: true, subtree: true});
             }
         }
+    }
+
+    /** The lifted card left the hand: drop the drag now, but keep its touch until the finger lifts. */
+    function letGo() {
+        stopDragging(gesture);
+        gesture.phase = "cancelled";
     }
 
     /** Keeps the ghost centred above the fingertip. */
@@ -207,12 +233,16 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
     }
 
     function schedule() {
-        if (gesture?.dragging && !gesture.frame) gesture.frame = requestAnimationFrame(frame);
+        if (gesture?.phase === "dragging" && !gesture.frame) gesture.frame = requestAnimationFrame(frame);
     }
 
     function frame() {
-        if (!gesture?.dragging) return;
+        if (gesture?.phase !== "dragging") return;
         gesture.frame = 0;
+        if (!gesture.button.isConnected) {
+            letGo();
+            return;
+        }
         const {x, y} = gesture;
         place();
         // Held near a sticky bar, the page scrolls as a desktop drag does near the window edge.
@@ -220,27 +250,36 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
         const step = dragEdgeScroll(y, band.top, band.bottom);
         const before = window.scrollY;
         if (step) window.scrollBy(0, step);
-        // A card a refresh took out of the hand outlines nothing (and lifting it plays nothing).
-        gesture.target = gesture.button.isConnected ? targetAt(x, y) : null;
+        gesture.target = targetAt(x, y);
         preview(gesture.code, gesture.target);
         if (step && window.scrollY !== before) schedule();
     }
 
-    /** Ends the gesture; `dragged` tears down the drag's ghost, outline and click. */
-    function end(dragged) {
+    /** Takes down a drag's ghost, outline, observer and frame; once, whatever ends it. */
+    function stopDragging(current) {
+        if (!current.ghost) return;
+        current.redraws?.disconnect();
+        current.redraws = null;
+        if (current.frame) cancelAnimationFrame(current.frame);
+        current.frame = 0;
+        current.ghost.remove();
+        current.ghost = null;
+        current.button.classList.remove("dragging");
+        document.documentElement.classList.remove("touch-dragging");
+        preview(current.code, null);
+    }
+
+    /** Ends the touch: its listeners go, and a drag also takes down its ghost and outline and blocks its click. */
+    function end() {
         const current = gesture;
         gesture = null;
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onCancel);
         window.removeEventListener("pointerdown", onOtherPointer, true);
-        if (!current || !dragged) return;
-        current.redraws?.disconnect();
-        if (current.frame) cancelAnimationFrame(current.frame);
-        current.ghost?.remove();
-        current.button.classList.remove("dragging");
-        document.documentElement.classList.remove("touch-dragging");
-        preview(current.code, null);
-        suppressClickUntil = performance.now() + CLICK_SUPPRESS_MS;
+        if (!current) return;
+        current.button.removeEventListener("touchmove", takeMove);
+        stopDragging(current);
+        if (current.lifted) suppressClickUntil = performance.now() + CLICK_SUPPRESS_MS;
     }
 }
