@@ -6,12 +6,14 @@
  * Gestures on a card: a tap still selects; a sideways swipe scrolls a hand wider than its rail;
  * any other slide drags. The browser decides when a touch starts whether it may pan, from the
  * card's touch-action (app.css): only a hand marked .hand-scrolls-x here, one wider than its rail,
- * lets a sideways swipe pan, so on a hand that fits every slide is a drag. A card that can't be
- * dragged right now keeps the browser's own gestures. Once a card is lifted, its touchmoves are
- * consumed: the browser then neither pans under it nor starts an invisible fling, which would
- * make Chromium drop the player's next tap as the tap that stopped a fling. So are the rest of a
- * touch whose drag is called off (the card can't be dragged any more, or a refresh took it out of
- * the hand): its pan was ruled out when it began, so unconsumed it could only become that fling.
+ * lets a sideways swipe pan, so on a hand that fits every slide is a drag. A touch keeps the
+ * policy it began with, even if a snapshot grows or shrinks the hand before the slide decides.
+ * A card that can't be dragged right now keeps the browser's own gestures. Once a card is
+ * lifted, its touchmoves are consumed: the browser then neither pans under it nor starts an
+ * invisible fling, which would make Chromium drop the player's next tap as the tap that stopped
+ * a fling. So are the rest of a touch whose drag is called off (the card can't be dragged any
+ * more, or a refresh took it out of the hand): its pan was ruled out when it began, so
+ * unconsumed it could only become that fling.
  * Nothing here depends on new markup, so a page from an earlier release that loads this module
  * drags the same way, and a stale stylesheet only costs the drag, not the tap.
  */
@@ -51,6 +53,9 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
         gesture = {
             pointerId: e.pointerId, button, code: button.dataset.cardCode,
             startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
+            // What the browser may pan was fixed as this touch began, by the card's touch-action.
+            // A hand that grows or shrinks before the slide decides can't change it.
+            pansSideways: allowsSidewaysPan(button),
             phase: "pending", lifted: false, ghost: null, lift: 0, frame: 0, target: null, redraws: null
         };
         window.addEventListener("pointermove", onMove);
@@ -96,9 +101,9 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
         gesture.y = e.clientY;
         if (gesture.phase === "pending") {
             const intent = touchDragIntent(e.clientX - gesture.startX, e.clientY - gesture.startY,
-                undefined, scrollsSideways(hand));
+                undefined, gesture.pansSideways);
             if (intent === "wait") return;
-            // Sideways: the browser scrolls the hand.
+            // Sideways, on a touch that could pan sideways from the start: the browser scrolls the hand.
             if (intent === "swipe") {
                 end();
                 return;
@@ -112,6 +117,12 @@ export function installTouchDrag({hand, canDrag, targetAt, preview, drop, visibl
             begin();
         }
         schedule();
+    }
+
+    /** Whether a touch on `button` may pan sideways: its touch-action (app.css) as the touch begins. */
+    function allowsSidewaysPan(button) {
+        const action = getComputedStyle(button).touchAction;
+        return !action || action === "auto" || action === "manipulation" || action.split(" ").includes("pan-x");
     }
 
     /** Whether a sideways swipe from `node` would scroll something (a hand wider than its rail). */

@@ -628,6 +628,110 @@ test.describe("Dragging a card with a finger", () => {
         expect(moves).toEqual([]);
     });
 
+    test("a hand that grows past its rail under a held finger keeps the touch it began with: a sideways slide still drags", async ({page}) => {
+        // A defender holds a card while the bout ends and the table's cards come back: five become nine.
+        let hand = ["6H", "7H", "JH", "QC", "KD"];
+        let version = 7;
+        const sockets = [];
+        const moves = await routeMoves(page, () => sixesGame({version, hand}), {sockets});
+        await page.goto("/");
+        const card = page.locator('#myHand [data-card-code="6H"]');
+        const rail = page.locator(".hand-scroll-x");
+        await expect(card).toBeVisible();
+        await expect.poll(() => sockets.length).toBeGreaterThan(0);
+        // The hand fits, so the browser may not pan this touch: every slide is the page's to handle.
+        await expect(card).toHaveCSS("touch-action", "pinch-zoom");
+
+        const touch = await touchscreen(page);
+        const from = await centre(card);
+        await touch.down(from);
+        await card.evaluate(button => {
+            window.heldCard = button;
+            window.movesWhileLifted = [];
+            window.addEventListener("touchmove", event => {
+                if (document.querySelector(".touch-drag-ghost")) window.movesWhileLifted.push(event.defaultPrevented);
+            });
+        });
+        hand = [...hand, "8C", "9C", "10C", "AC"];
+        version = 8;
+        sockets.at(-1).send(JSON.stringify({type: "GAME_UPDATED", version}));
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(9);
+        // A new touch on this overflowing hand could pan sideways; the one already down still can't.
+        await expect(card).toHaveCSS("touch-action", "pan-x pinch-zoom");
+        expect(await card.evaluate(button => button === window.heldCard)).toBe(true);
+
+        const left = await rail.evaluate(node => node.scrollLeft);
+        await touch.move({x: from.x + 100, y: from.y}, {steps: 12});
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(1);
+        expect(await rail.evaluate(node => node.scrollLeft)).toBe(left);
+        const lifted = await page.evaluate(() => window.movesWhileLifted);
+        expect(lifted.length).toBeGreaterThan(5);
+        expect(lifted).not.toContain(false);
+
+        // Lifted over the hand: nothing is played. The next tap and drag work at once.
+        await touch.up();
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        const next = page.locator('#myHand [data-card-code="7H"]');
+        await reveal(next);
+        await touch.tap(await centre(next));
+        await expect(next).toHaveAttribute("aria-pressed", "true");
+        const again = await centre(next);
+        await touch.down(again);
+        await touch.move({x: again.x, y: again.y - 40}, {steps: 4});
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(1);
+        await touch.cancel();
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        expect(moves).toEqual([]);
+    });
+
+    test("a hand that shrinks to fit under a held finger leaves its sideways swipe to the browser", async ({page}) => {
+        let hand = ["6H", "7H", "8C", "9C", "10C", "JH", "QC", "KD", "AC"];
+        let version = 7;
+        const sockets = [];
+        const moves = await routeMoves(page, () => sixesGame({version, hand}), {sockets});
+        await page.goto("/");
+        const card = page.locator('#myHand [data-card-code="6H"]');
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(9);
+        await expect.poll(() => sockets.length).toBeGreaterThan(0);
+        // The hand overflows, so this touch may pan sideways: a sideways swipe belongs to the browser.
+        await expect(card).toHaveCSS("touch-action", "pan-x pinch-zoom");
+
+        const touch = await touchscreen(page);
+        const from = await centre(card);
+        await touch.down(from);
+        await card.evaluate(button => {
+            window.heldCard = button;
+            window.movesAfterShrink = [];
+            window.addEventListener("touchmove", event => window.movesAfterShrink.push(event.defaultPrevented));
+        });
+        hand = ["6H", "7H", "JH", "QC", "KD"];
+        version = 8;
+        sockets.at(-1).send(JSON.stringify({type: "GAME_UPDATED", version}));
+        await expect(page.locator("#myHand .hand-card-btn")).toHaveCount(5);
+        await expect(card).toHaveCSS("touch-action", "pinch-zoom");
+        expect(await card.evaluate(button => button === window.heldCard)).toBe(true);
+
+        // Still the browser's swipe, though nothing is left to scroll: no card lifts, no move is taken.
+        await touch.move({x: from.x + 100, y: from.y}, {steps: 12});
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        const taken = await page.evaluate(() => window.movesAfterShrink);
+        expect(taken.length).toBeGreaterThan(5);
+        expect(taken).not.toContain(true);
+        await touch.up();
+
+        // With nothing to scroll there's no fling to stop: the next tap and drag work at once.
+        const next = page.locator('#myHand [data-card-code="7H"]');
+        await touch.tap(await centre(next));
+        await expect(next).toHaveAttribute("aria-pressed", "true");
+        const again = await centre(next);
+        await touch.down(again);
+        await touch.move({x: again.x, y: again.y - 40}, {steps: 4});
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(1);
+        await touch.cancel();
+        await expect(page.locator(".touch-drag-ghost")).toHaveCount(0);
+        expect(moves).toEqual([]);
+    });
+
     test("a second finger lets go of the card, and the two fingers pinch the page", async ({page}) => {
         const moves = await routeMoves(page);
         await page.goto("/");
