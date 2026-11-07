@@ -111,25 +111,30 @@ test.describe("Game table layout", () => {
         };
     }
 
-    for (const players of [2, 4]) {
-        test(`a fresh ${players}-player hand is fully visible above the action strip at 375x812`, async ({ page }) => {
-            await openFreshDeal(page, {width: 375, height: 812, players});
-            const {top, bottom, stripTop} = await handAndChrome(page);
-            expect(top).toBeGreaterThan(0);
-            expect(bottom).toBeLessThanOrEqual(stripTop + 0.5);
-        });
-    }
+    for (const touch of [false, true]) {
+        test.describe(`fresh deals with ${touch ? "touch" : "mouse"}`, () => {
+            test.use({hasTouch: touch, isMobile: touch});
+            for (const players of [2, 4]) {
+                test(`a fresh ${players}-player hand is fully visible above the action strip at 375x812`, async ({ page }) => {
+                    await openFreshDeal(page, {width: 375, height: 812, players});
+                    const {top, bottom, stripTop} = await handAndChrome(page);
+                    expect(top).toBeGreaterThan(0);
+                    expect(bottom).toBeLessThanOrEqual(stripTop + 0.5);
+                });
+            }
 
-    for (const players of [2, 3, 4]) {
-        test(`at 375x667 a ${players}-player hand is at least half visible, and fully visible at max scroll`, async ({ page }) => {
-            await openFreshDeal(page, {width: 375, height: 667, players});
-            const atTop = await handAndChrome(page);
-            expect(atTop.stripTop - atTop.top).toBeGreaterThanOrEqual((atTop.bottom - atTop.top) / 2);
+            for (const players of [2, 3, 4]) {
+                test(`at 375x667 a ${players}-player hand is at least half visible, and fully visible at max scroll`, async ({ page }) => {
+                    await openFreshDeal(page, {width: 375, height: 667, players});
+                    const atTop = await handAndChrome(page);
+                    expect(atTop.stripTop - atTop.top).toBeGreaterThanOrEqual((atTop.bottom - atTop.top) / 2);
 
-            await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-            const atEnd = await handAndChrome(page);
-            expect(atEnd.top).toBeGreaterThanOrEqual(atEnd.headerBottom - 0.5);
-            expect(atEnd.bottom).toBeLessThanOrEqual(atEnd.stripTop + 0.5);
+                    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+                    const atEnd = await handAndChrome(page);
+                    expect(atEnd.top).toBeGreaterThanOrEqual(atEnd.headerBottom - 0.5);
+                    expect(atEnd.bottom).toBeLessThanOrEqual(atEnd.stripTop + 0.5);
+                });
+            }
         });
     }
 

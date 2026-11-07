@@ -40,6 +40,7 @@ import {
     applyGameSnapshot,
     attack,
     copyInvite,
+    copyRoomCode,
     createRoom,
     defend,
     endRound,
@@ -91,6 +92,9 @@ el.lobbyGameList?.addEventListener("click", (e) => {
 /* ---- room and table ---- */
 
 el.shareBtn?.addEventListener("click", copyInvite);
+el.copyCodeBtn?.addEventListener("click", copyRoomCode);
+// Older cached scripts leave this new control hidden rather than offering a dead button.
+el.copyCodeBtn?.classList.remove("hidden");
 el.leaveBtn.addEventListener("click", requestLeave);
 el.seatNoticeLobbyBtn?.addEventListener("click", () => abandonInvalidSeat());
 el.helpToggleBtn?.addEventListener("click", () => {

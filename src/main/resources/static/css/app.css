@@ -168,6 +168,29 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     padding: 0.25rem 0.35rem;
 }
 .room-header .game-rules-link svg { width: 1em; height: 1em; }
+.room-code-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.room-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 6px;
+    border: 0;
+    background: transparent;
+    color: var(--text-soft);
+}
+.room-actions #leaveBtn { display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
+.room-copy-btn .room-copy-check,
+.room-copy-btn[data-copied="true"] .room-copy-glyph { display: none; }
+.room-copy-btn[data-copied="true"] .room-copy-check { display: block; }
+.room-player-separator { padding-inline: 0.5rem; }
+.visibility-pill { gap: 0.3125rem; }
+@media (pointer: coarse) {
+    /* Keep the 28px layout box; the 44px touch target must not grow the sticky header. */
+    .room-copy-btn { position: relative; }
+    .room-copy-btn::before { content: ""; position: absolute; inset: -8px; }
+}
 .room-title-row {
     display: flex;
     flex-wrap: wrap;

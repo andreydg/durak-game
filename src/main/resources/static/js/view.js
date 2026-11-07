@@ -142,7 +142,8 @@ function gameIcon(name) {
         bot: '<path d="M12 8V4H9M4 12H2m20 0h-2"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M9 12v4m6-4v4"/>',
         attacker: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6m-3 3 4 4m-1 1 2-2M14.5 6.5 18 3h3v3l-3.5 3.5M5 14l4 4m-2-1-3 3m-1-1 2 2"/>',
         defender: '<path d="M12 3 20 6v6c0 5-8 9-8 9s-8-4-8-9V6Z"/>',
-        taking: '<path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/>'
+        taking: '<path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/>',
+        lock: '<rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4m-5 4v2"/>'
     };
     const className = name === "defender" ? "game-icon game-icon--defender" : "game-icon";
     return `<svg class="${className}" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${shapes[name]}</svg>`;
@@ -532,7 +533,7 @@ function renderView() {
     el.statusLabel.textContent = displayStatus(game.status);
     if (el.visibilityLabel) {
         const isPublic = game.publicRoom !== false;
-        el.visibilityLabel.textContent = isPublic ? "Public room" : "Invite only";
+        el.visibilityLabel.innerHTML = isPublic ? "Public room" : `${gameIcon("lock")}Invite only`;
         el.visibilityLabel.title = isPublic
             ? "This waiting room appears in Open tables."
             : "Only people with the room code can join.";
@@ -556,9 +557,9 @@ function renderView() {
         el.trumpSuitHud.classList.add("hidden");
     }
     const playersList = game.players
-        .map(p => p.id === game.hostPlayerId ? `${p.name} (host)` : p.name)
-        .join(", ");
-    el.roleLabel.textContent = `Players: ${playersList || "-"}`;
+        .map(p => `<span class="room-player"><span class="room-player-name">${escapeHtml(p.name)}</span>${p.id === game.hostPlayerId ? " (host)" : ""}</span>`)
+        .join('<span class="room-player-separator" aria-hidden="true">·</span><span class="visually-hidden">, </span>');
+    el.roleLabel.innerHTML = `<span class="visually-hidden">Players: </span>${playersList || "-"}`;
     const isHostLobby = Boolean(me && game.status === "LOBBY" && game.hostPlayerId === seat.playerId);
     if (el.startBtn) {
         el.startBtn.classList.toggle("hidden", !isHostLobby);

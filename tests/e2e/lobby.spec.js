@@ -10,7 +10,7 @@ test.describe("Lobby & room creation", () => {
         await expect(page.locator("#joinBtn")).toHaveClass(/btn-primary/);
         await expect(page.getByLabel("Playing as")).toBeVisible();
         await expect(page.locator("#hostName")).toHaveAttribute("placeholder", "(optional)");
-        await expect(page.getByLabel("Room code")).toHaveAttribute("placeholder", "Room code");
+        await expect(page.getByLabel("Room code", {exact: true})).toHaveAttribute("placeholder", "Room code");
         await expect(page.locator("#playerName")).toBeHidden();
         await expect(page.locator("#joinHint")).toBeHidden();
         await expect(page.locator("#quickPlayBtn")).toHaveAccessibleName("Quick Play vs Elektronik");
