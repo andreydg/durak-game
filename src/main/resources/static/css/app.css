@@ -168,7 +168,7 @@ button[aria-disabled="true"]:not(.hand-card-btn) { opacity: 0.45; cursor: not-al
     padding: 0.25rem 0.35rem;
 }
 .room-header .game-rules-link svg { width: 1em; height: 1em; }
-.room-code-group { display: flex; align-items: center; gap: 0.5rem; }
+.room-code-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .room-copy-btn {
     display: inline-flex;
     align-items: center;

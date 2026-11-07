@@ -343,8 +343,8 @@ body:has(#gameView:not(.hidden)) {
     outline-offset: 3px;
 }
 @media (min-width: 701px) {
-    /* Account for the approved two-row masthead when the browser scrolls keyboard focus. */
-    html:has(#gameView.game-view--active) { scroll-padding-top: 10rem; }
+    /* Reveal focused cards below the masthead without scrolling controls already in it. */
+    #gameView.game-view--active .hand-card-btn { scroll-margin-top: 10rem; }
     #gameView .action-strip button {
         min-height: 38px;
         padding: 0.5rem 0.85rem;
