@@ -15,6 +15,11 @@ export const state = {
     leaveInFlight: false,
     /* True while a saved seat is being restored after a reload (its first refresh is pending). */
     reconnecting: false,
+    /*
+     * True once a visible page has gone IDLE_PAUSE_MS without input: Open tables, and a finished
+     * game's updates, stop as for a hidden tab until the next interaction (main.js).
+     */
+    idlePaused: false,
     /* Current screen (see viewKey); null until the first render. */
     view: null,
     /* Card used by the last play action, so focus can land on its neighbour afterwards. */

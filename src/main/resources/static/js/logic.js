@@ -258,6 +258,28 @@ export function lobbyRefreshDelayMs(webSocketConnected, failureCount = 0, visibi
     return Math.min(30_000, 4_000 * (2 ** failures));
 }
 
+/**
+ * After this long with no input on a visible page, the live updates nobody is watching pause until
+ * the next interaction. A forgotten tab would otherwise hold a socket open on the server for good.
+ */
+export const IDLE_PAUSE_MS = 15 * 60 * 1000;
+
+/** Milliseconds until a page last used at `lastActivityAt` counts as idle; 0 once it does. */
+export function msUntilIdle(lastActivityAt, now, idleMs = IDLE_PAUSE_MS) {
+    const last = Number(lastActivityAt);
+    const at = Number(now);
+    if (!Number.isFinite(last) || !Number.isFinite(at)) return idleMs;
+    return Math.max(0, last + idleMs - at);
+}
+
+/**
+ * Whether a game's own updates pause while its player is idle: only once it is over. A waiting
+ * room or a game in progress keeps them, since its player may be waiting on someone else.
+ */
+export function idlePausesGame(game) {
+    return game?.status === "FINISHED";
+}
+
 const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
 
 /** Safe for element text and for quoted attribute values alike. */
