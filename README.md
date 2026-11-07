@@ -24,6 +24,10 @@ The browser UI in [`src/main/resources/static`](src/main/resources/static) is pl
 - `state.js` and `dom.js`: shared UI state and element lookups.
 - `api.js`: the saved seat and authenticated JSON requests. `socket.js`: one reconnecting WebSocket helper used by both channels.
 - `sync.js`: game socket, fallback reads and heartbeats. `lobby.js`: the Open tables list and its socket.
+  - **Pauses:** a hidden tab pauses both. After 15 minutes without input, a visible page pauses Open tables and a finished game's updates too.
+  - **Why:** an open socket keeps the Cloud Run instance billed, so one forgotten tab would cost money around the clock.
+  - **Resume:** the next input picks everything up again.
+  - **Still live:** a waiting room's or a running game's own updates, since its player may be waiting on someone else.
 - `actions.js`: player actions and session changes. `view.js`: rendering, focus, alerts and announcements.
 
 **Asset versions.** Every CSS and JS URL carries `?v=` plus the first 12 hex digits of the file's SHA-256, and static files are served `no-cache`, so browsers revalidate and pick up changes at once. Modules import each other with relative specifiers (`./logic.js`); an inline `<script type="importmap">` at the end of `index.html` maps each module to its versioned URL, followed by `modulepreload` links and the versioned entry script. After changing any CSS or JS file, run `node scripts/update-asset-versions.mjs` to recompute the hashes and regenerate that block; the unit tests fail while a hash is stale. The Content-Security-Policy allows the import map by the SHA-256 of the exact text between `<script type="importmap">` and `</script>` (see [`tests/support/csp.js`](tests/support/csp.js)), so keep that tag exactly as written and add no other inline script.
