@@ -21,8 +21,8 @@ body:has(#gameView:not(.hidden)) {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.9rem 1.25rem;
-    padding: 1.15rem 1.3rem;
+    gap: 1.05rem 1.25rem;
+    padding: 1.25rem 1.375rem;
     border-color: var(--editorial-border);
     border-radius: 14px;
     background: var(--editorial-paper);
@@ -40,35 +40,37 @@ body:has(#gameView:not(.hidden)) {
 }
 .game-brand .brand-title {
     margin: 0;
-    font-size: clamp(1.5rem, 2.5vw, 2rem);
+    font-size: 2rem;
     overflow-wrap: anywhere;
 }
 .game-brand .brand-title span {
-    margin-left: 0.3rem;
+    margin-left: 0.5625rem;
+    letter-spacing: -0.045em;
 }
 .game-brand .brand-suits {
     margin: 0;
-    gap: 1.1rem;
-    font-size: 0.8rem;
+    gap: 1.125rem;
+    font: 0.875rem/1 Georgia, serif;
+    opacity: 1;
 }
 #gameView .room-summary {
     order: 2;
     flex: 1 1 100%;
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     flex-wrap: wrap;
     gap: 0.5rem 1.25rem;
-    padding-top: 0.85rem;
-    border-top: 1px solid var(--editorial-border);
+    padding-top: 0.75rem;
+    border-top: 1px solid #eceae7;
     min-width: 0;
 }
 #gameView .room-title-row {
-    gap: 0.7rem;
+    gap: 0.75rem;
     min-width: 0;
 }
 #gameView .room-title {
-    font-size: 0.9rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     line-height: 1.5;
     letter-spacing: 0;
@@ -76,8 +78,18 @@ body:has(#gameView:not(.hidden)) {
 #gameView .room-code {
     font-family: var(--font-editorial);
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
 }
+#gameView .room-code-group { gap: 0.5625rem; }
+#gameView .room-copy-btn {
+    color: var(--text-soft);
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    box-shadow: none;
+}
+#gameView .room-copy-btn:hover { background: #e8e7e4; }
+#gameView .room-copy-btn[data-copied="true"] { color: var(--editorial-green-text); }
 #gameView :is(.status-pill, .visibility-pill) {
     font-weight: 500;
     font-size: 0.75rem;
@@ -91,18 +103,21 @@ body:has(#gameView:not(.hidden)) {
 }
 #gameView .status-pill::before {
     content: "";
-    width: 5px;
-    height: 5px;
+    width: 6px;
+    height: 6px;
     margin-right: 0.4rem;
     border-radius: 50%;
     background: currentColor;
 }
 #gameView .room-meta {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: 0.8125rem;
     line-height: 1.5;
     overflow-wrap: anywhere;
 }
+#gameView .room-player-name { color: var(--text); font-weight: 500; }
+#gameView .room-player-separator { color: #aaa298; }
+#gameView .visibility-pill .game-icon { width: 0.75rem; height: 0.75rem; }
 #gameView .room-waiting {
     font-size: 0.85rem;
 }
@@ -122,22 +137,8 @@ body:has(#gameView:not(.hidden)) {
     flex: 1 1 100%;
     min-width: 0;
 }
-/* While playing, keep the table in view: one compact row when content fits.
- * Flex wrapping still respects enlarged text without changing DOM/tab order. */
-#gameView.game-view--active .room-header {
-    gap: 0.35rem 1rem;
-    padding: 0.55rem 0.85rem;
-}
-#gameView.game-view--active .game-brand .brand-title { font-size: 1.5rem; }
-#gameView.game-view--active .game-brand .brand-suits { display: none; }
-#gameView.game-view--active .room-summary {
-    order: 1;
-    flex: 1 1 14rem;
-    display: block;
-    padding: 0;
-    border: 0;
-}
-#gameView.game-view--active .room-actions { order: 2; }
+/* Keep the approved masthead and separate metadata row during play too.
+ * Content-driven wrapping handles large text without changing that hierarchy. */
 #gameView .btn,
 .leave-dialog .btn {
     border: 1px solid var(--editorial-border);
@@ -170,6 +171,7 @@ body:has(#gameView:not(.hidden)) {
 .leave-dialog .btn-danger {
     color: var(--danger-strong);
 }
+#gameView .room-actions #leaveBtn { color: #754a3d; }
 #gameView .game-rules-link {
     display: inline-flex;
     align-items: center;
@@ -341,16 +343,21 @@ body:has(#gameView:not(.hidden)) {
     outline-offset: 3px;
 }
 @media (min-width: 701px) {
+    /* Reveal focused cards below the masthead without scrolling controls already in it. */
+    #gameView.game-view--active .hand-card-btn { scroll-margin-top: 10rem; }
     #gameView .action-strip button {
         min-height: 38px;
         padding: 0.5rem 0.85rem;
     }
 }
+@media (min-width: 701px) and (max-width: 800px) {
+    .game-brand .brand-title { font-size: 1.75rem; }
+}
 @media (max-width: 700px) {
     #gameView .room-header,
     #gameView.game-view--active .room-header {
         gap: 0.35rem 0.75rem;
-        padding: 0.5rem 0.75rem;
+        padding: 0.45rem 0.75rem;
     }
     .game-brand .brand-suits { display: none; }
     .game-brand .brand-title { font-size: 1.5rem; }
@@ -358,8 +365,6 @@ body:has(#gameView:not(.hidden)) {
         padding-top: 0.35rem;
         gap: 0.25rem 0.6rem;
     }
-    #gameView.game-view--active .room-summary { order: 2; flex-basis: 100%; }
-    #gameView.game-view--active .room-actions { order: 1; }
     #gameView .room-title-row { gap: 0.6rem; }
     #gameView .room-title { font-size: 0.8rem; }
     #gameView.game-view--active .room-meta { font-size: 0.75rem; }
@@ -400,6 +405,10 @@ body:has(#gameView:not(.hidden)) {
         backdrop-filter: none;
     }
 }
+@media (max-width: 560px) {
+    /* As in the approved mock, retain action labels while omitting phone nav decoration. */
+    #gameView .room-actions .btn svg { display: none; }
+}
 @media (max-width: 480px) {
     #gameView .hud { column-gap: 0.4rem; }
     #gameView .room-actions { gap: 0.25rem; }
@@ -407,8 +416,7 @@ body:has(#gameView:not(.hidden)) {
     #gameView .game-rules-link { gap: 0.35rem; }
 }
 @media (max-width: 360px) {
-    .game-brand .brand-title,
-    #gameView.game-view--active .game-brand .brand-title { font-size: 1.2rem; }
+    .game-brand .brand-title { font-size: 1.2rem; }
     #gameView .room-header,
     #gameView.game-view--active .room-header { column-gap: 0.4rem; }
 }

@@ -29,6 +29,7 @@ export const el = {
 
     gameView: byId("gameView"),
     gameCodeLabel: byId("gameCodeLabel"),
+    copyCodeBtn: byId("copyCodeBtn"),
     statusLabel: byId("statusLabel"),
     visibilityLabel: byId("visibilityLabel"),
     roleLabel: byId("roleLabel"),
