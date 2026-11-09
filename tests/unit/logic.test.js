@@ -983,6 +983,12 @@ describe("idle pause", () => {
         expect(L.msUntilIdle(0, L.IDLE_PAUSE_MS * 4)).toBe(0);
     });
 
+    it("never waits longer than the threshold, even for a last input ahead of now", () => {
+        expect(L.msUntilIdle(60 * 60 * 1000, 0)).toBe(L.IDLE_PAUSE_MS);
+        expect(L.msUntilIdle(1_001, 1_000)).toBe(L.IDLE_PAUSE_MS);
+        expect(L.msUntilIdle(5_000, 1_000, 1_000)).toBe(1_000);
+    });
+
     it("takes another threshold and treats bad times as a fresh start", () => {
         expect(L.msUntilIdle(0, 400, 1_000)).toBe(600);
         expect(L.msUntilIdle(Number.NaN, 5)).toBe(L.IDLE_PAUSE_MS);

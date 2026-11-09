@@ -264,12 +264,16 @@ export function lobbyRefreshDelayMs(webSocketConnected, failureCount = 0, visibi
  */
 export const IDLE_PAUSE_MS = 15 * 60 * 1000;
 
-/** Milliseconds until a page last used at `lastActivityAt` counts as idle; 0 once it does. */
+/**
+ * Milliseconds until a page last used at `lastActivityAt` counts as idle: 0 once it does, and never
+ * more than `idleMs`, even for a last use ahead of `now`, so a timer armed from it can't outlast the
+ * threshold. Both times come from one monotonic clock (performance.now()).
+ */
 export function msUntilIdle(lastActivityAt, now, idleMs = IDLE_PAUSE_MS) {
     const last = Number(lastActivityAt);
     const at = Number(now);
     if (!Number.isFinite(last) || !Number.isFinite(at)) return idleMs;
-    return Math.max(0, last + idleMs - at);
+    return Math.min(idleMs, Math.max(0, last + idleMs - at));
 }
 
 /**

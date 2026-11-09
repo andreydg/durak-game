@@ -209,7 +209,7 @@ document.addEventListener("visibilitychange", () => {
         return;
     }
     // Coming back to the tab is a use of it, even after idling.
-    lastActivityAt = Date.now();
+    lastActivityAt = performance.now();
     if (state.idlePaused) {
         state.idlePaused = false;
         armIdleTimer();
@@ -235,17 +235,24 @@ function resumeLiveUpdates() {
  * no input, Open tables (home page and waiting room) and a finished game's updates stop, as for a
  * hidden tab; the next interaction picks them up again. A waiting room's or a running game's own
  * updates keep going, since its player may be waiting on someone else.
+ *
+ * The 15 minutes are timed on the monotonic clock (performance.now()), so setting the system clock
+ * back or forward never moves them. The one timer is armed for at most the time left, and input only
+ * moves the deadline later, so the timer fires at or before the deadline and re-arms for the rest.
+ * Sleep: where the monotonic clock runs on while the computer sleeps, the timer is overdue on waking
+ * and the check pauses at once; where it stands still, the time left carries on after waking. Either
+ * way a visible page pauses within 15 awake minutes without input.
  */
-let lastActivityAt = Date.now();
+let lastActivityAt = performance.now();
 let idleTimer = 0;
 
 function armIdleTimer() {
     window.clearTimeout(idleTimer);
-    idleTimer = window.setTimeout(checkIdle, msUntilIdle(lastActivityAt, Date.now()));
+    idleTimer = window.setTimeout(checkIdle, msUntilIdle(lastActivityAt, performance.now()));
 }
 
 function checkIdle() {
-    if (msUntilIdle(lastActivityAt, Date.now()) > 0) {
+    if (msUntilIdle(lastActivityAt, performance.now()) > 0) {
         armIdleTimer();
         return;
     }
@@ -260,9 +267,12 @@ function syncIdlePause() {
     if (gameUpdatesIdlePaused()) pauseGameUpdates();
 }
 
-/** Any input counts as use; once idle, the first one picks everything up again. */
+/**
+ * Any input counts as use; once idle, the first one picks everything up again. That includes a click
+ * on its own, which is how screen readers and voice control activate a control.
+ */
 function noteActivity() {
-    lastActivityAt = Date.now();
+    lastActivityAt = performance.now();
     if (!state.idlePaused) return;
     state.idlePaused = false;
     armIdleTimer();
@@ -270,7 +280,7 @@ function noteActivity() {
     resumeLiveUpdates();
 }
 
-for (const type of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) {
+for (const type of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "click"]) {
     window.addEventListener(type, noteActivity, {capture: true, passive: true});
 }
 // The window itself gaining focus (not a focus moved inside the page, which can be the app's own).
