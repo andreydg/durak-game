@@ -101,6 +101,8 @@ test.describe("Header focus does not scroll the table", () => {
                 // Tall viewports already expose the whole hand, even without a scroll margin.
                 // Landscape heights force native focus scrolling past the wrapped roster.
                 await openGame(page, {players: 4, table: [{attackCard: "9H"}]}, width, height);
+                // Font loading can resize the header; let its ResizeObserver update the margin.
+                await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
                 await page.evaluate(() => {
                     window.scrollTo(0, document.documentElement.scrollHeight);
                     document.querySelector("#myHand .hand-card-btn:last-child").focus();
