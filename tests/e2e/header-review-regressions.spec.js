@@ -198,6 +198,8 @@ test.describe("R8: keyboard cards clear the sticky header", () => {
     for (const [width, height] of [[844, 390], [1024, 600]]) {
         test(`Shift+Tab keeps every rank and suit visible at ${width}x${height}`, async ({page}) => {
             await openGame(page, {table: [{attackCard: "9H"}]}, width, height);
+            // Font loading can resize the header; let its ResizeObserver update the margin.
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
             await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
             await page.locator("#myHand .hand-card-btn").last().focus();
             for (let i = 0; i < 6; i++) {

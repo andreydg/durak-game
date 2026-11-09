@@ -27,6 +27,19 @@ import {seat} from "./api.js";
 import {isBusy, state} from "./state.js";
 import {el} from "./dom.js";
 
+// A wrapped roster or larger text changes the sticky masthead's height. Keep clearance on
+// cards, not the scroll container: focusing a control already in the header must not scroll.
+const roomHeader = el.gameView?.querySelector(".room-header");
+if (roomHeader && typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+        if (!roomHeader.getClientRects().length) return;
+        const top = parseFloat(getComputedStyle(roomHeader).top) || 0;
+        const clearance = Math.max(0, top) + roomHeader.getBoundingClientRect().height + 4;
+        // CSSOM works under the CSP, unlike injecting a style attribute or stylesheet.
+        document.documentElement.style.setProperty("--masthead-clearance", `${clearance}px`);
+    }).observe(roomHeader);
+}
+
 /* ---- feedback: debug log, alert, screen reader announcements ---- */
 
 const debugUi = new URLSearchParams(window.location.search).get("debug") === "1";
