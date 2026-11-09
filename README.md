@@ -24,6 +24,10 @@ The browser UI in [`src/main/resources/static`](src/main/resources/static) is pl
 - `state.js` and `dom.js`: shared UI state and element lookups.
 - `api.js`: the saved seat and authenticated JSON requests. `socket.js`: one reconnecting WebSocket helper used by both channels.
 - `sync.js`: game socket, fallback reads and heartbeats. `lobby.js`: the Open tables list and its socket.
+  - **Pauses:** a hidden tab pauses both. After 15 minutes without input, a visible page pauses Open tables and a finished game's updates too. The 15 minutes are timed on the monotonic clock, so setting the system clock doesn't move them.
+  - **Why:** an open socket keeps the Cloud Run instance billed, so one forgotten tab would cost money around the clock.
+  - **Resume:** the next input picks everything up again: a pointer, key, wheel, touch or click (screen readers and voice control activate with a click alone), or the window regaining focus.
+  - **Still live:** a waiting room's or a running game's own updates, since its player may be waiting on someone else.
 - `actions.js`: player actions and session changes. `view.js`: rendering, focus, alerts and announcements.
 - `touchdrag.js`: dragging hand cards with a finger or pen on phones and tablets. A mouse uses HTML5 drag and drop; a finger slides a card up to the table, and the drop is decided and outlined exactly as a mouse drop. A sideways swipe still scrolls a hand wider than the screen (on a hand that fits, a slide in any direction drags), a card that can't be dragged right now (while a move is pending) scrolls like any other touch, and a tap still selects a card for the action buttons.
 
