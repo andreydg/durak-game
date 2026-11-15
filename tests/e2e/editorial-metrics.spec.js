@@ -17,10 +17,10 @@ for (const boxSizing of ["border-box", "content-box"]) {
 
 test("room-code metrics still detect a genuinely clipped six-character code", async ({page}) => {
     await page.setContent(`<input id="gameCode" value="WWWWWW" style="
-        box-sizing: border-box; width: 80px; font: 16px monospace; letter-spacing: 1px;
+        box-sizing: border-box; width: 60px; font: 16px monospace; letter-spacing: 1px;
         border: 2px solid black; padding: 7px 10px;">`);
     const metrics = await roomCodeMetrics(page);
-    expect(metrics.usableWidth).toBeCloseTo(56, 5);
+    expect(metrics.usableWidth).toBeCloseTo(36, 5);
     expect(metrics.textWidth).toBeGreaterThan(metrics.usableWidth);
     expect(metrics.scrollWidth).toBeGreaterThan(metrics.clientWidth);
 });
