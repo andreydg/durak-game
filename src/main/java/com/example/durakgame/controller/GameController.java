@@ -142,11 +142,7 @@ public class GameController {
                 Card.fromCode(request.attackCard()),
                 Card.fromCode(request.defenseCard())
         );
-        try {
-            webSocketHandler.broadcastGameUpdated(code, game.getVersion());
-        } finally {
-            gameService.resumeAutoPlayIfStalled(game);
-        }
+        webSocketHandler.broadcastGameUpdated(code, game.getVersion());
         return toResponse(game, request.playerId());
     }
 
@@ -178,9 +174,11 @@ public class GameController {
             @Valid @RequestBody EndRoundRequest request,
             @RequestHeader(value = TOKEN_HEADER, required = false) String token) {
         gameService.requireAuthorized(code, request.playerId(), token);
-        Game game = gameService.endRound(code, request.playerId(), request.boutId());
-        webSocketHandler.broadcastGameUpdated(code, game.getVersion());
-        return toResponse(game, request.playerId());
+        GameService.EndRoundResult result = gameService.endRound(code, request.playerId(), request.boutId());
+        if (result.applied()) {
+            webSocketHandler.broadcastGameUpdated(code, result.game().getVersion());
+        }
+        return toResponse(result.game(), request.playerId());
     }
 
     @PostMapping("/{code}/leave")

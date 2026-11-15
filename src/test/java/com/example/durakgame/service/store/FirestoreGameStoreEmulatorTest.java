@@ -3,17 +3,22 @@ package com.example.durakgame.service.store;
 import com.example.durakgame.health.GameStoreHealthIndicator;
 import com.example.durakgame.model.Game;
 import com.example.durakgame.model.Player;
+import com.google.cloud.firestore.FieldValue;
+import com.google.cloud.firestore.Firestore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.health.contributor.Status;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -31,6 +36,113 @@ class FirestoreGameStoreEmulatorTest {
 
     private String uniqueCode() {
         return "E" + UUID.randomUUID().toString().substring(0, 5).toUpperCase();
+    }
+
+    @Test
+    void receiptRetryAfterHeartbeatIsIdempotentWithoutRelaxingPlainSaveCas() {
+        String code = uniqueCode();
+        String receipt = UUID.randomUUID().toString();
+        try {
+            store.save(new Game(code, new Player("Host")));
+            Game attempt = store.findByCode(code).orElseThrow();
+            attempt.addPlayer("Guest", 4);
+            Game unacknowledged = Game.fromSnapshot(attempt.toSnapshot());
+            ReflectionTestUtils.setField(unacknowledged, "loadedVersion", attempt.getLoadedVersion());
+            store.saveWithReceipt(attempt, receipt);
+
+            Game heartbeat = store.findByCode(code).orElseThrow();
+            heartbeat.markActive();
+            store.save(heartbeat);
+            assertTrue(store.hasWriteReceipt(code, receipt));
+
+            store.saveWithReceipt(unacknowledged, receipt);
+            store.saveWithReceipt(unacknowledged, receipt);
+            assertEquals(unacknowledged.getVersion(), unacknowledged.getLoadedVersion());
+            assertEquals(heartbeat.toSnapshot(), store.findByCode(code).orElseThrow().toSnapshot());
+            assertThrows(StaleGameWriteException.class, () -> store.save(unacknowledged));
+        } finally {
+            store.deleteByCode(code);
+        }
+    }
+
+    @Test
+    void byteIdenticalCompetingWriteDoesNotAcquireTheWinnersReceipt() {
+        String code = uniqueCode();
+        String firstReceipt = UUID.randomUUID().toString();
+        String otherReceipt = UUID.randomUUID().toString();
+        try {
+            Game first = new Game(code, new Player("Host"));
+            store.save(first);
+            first.markActive();
+            Game identical = Game.fromSnapshot(first.toSnapshot());
+            ReflectionTestUtils.setField(identical, "loadedVersion", first.getLoadedVersion());
+            GameBinaryCodec codec = new GameBinaryCodec();
+            assertArrayEquals(codec.encode(first), codec.encode(identical));
+
+            store.saveWithReceipt(first, firstReceipt);
+
+            assertThrows(StaleGameWriteException.class, () -> store.saveWithReceipt(identical, otherReceipt));
+            assertTrue(store.hasWriteReceipt(code, firstReceipt));
+            assertFalse(store.hasWriteReceipt(code, otherReceipt));
+            assertEquals(first.toSnapshot(), store.findByCode(code).orElseThrow().toSnapshot());
+        } finally {
+            store.deleteByCode(code);
+        }
+    }
+
+    @Test
+    void deleteAndRecreateClearsThePreviousRoomsReceipts() {
+        String code = uniqueCode();
+        String receipt = UUID.randomUUID().toString();
+        try {
+            Game old = new Game(code, new Player("Old host"));
+            old.addPlayer("Guest", 4);
+            store.saveWithReceipt(old, receipt);
+            store.deleteByCode(code);
+            assertFalse(store.hasWriteReceipt(code, receipt));
+            assertThrows(StaleGameWriteException.class, () -> store.saveWithReceipt(old, receipt));
+
+            Game replacement = new Game(code, new Player("New host"));
+            store.save(replacement);
+            assertFalse(store.hasWriteReceipt(code, receipt));
+            assertThrows(StaleGameWriteException.class, () -> store.saveWithReceipt(old, receipt));
+            assertEquals(replacement.toSnapshot(), store.findByCode(code).orElseThrow().toSnapshot());
+        } finally {
+            store.deleteByCode(code);
+        }
+    }
+
+    @Test
+    void legacyDocumentsAndWriteTimeReceiptCleanupAreSupported() throws Exception {
+        String code = uniqueCode();
+        String receipt = UUID.randomUUID().toString();
+        try {
+            store.save(new Game(code, new Player("Host")));
+            Firestore firestore = (Firestore) ReflectionTestUtils.getField(store, "firestore");
+            var document = firestore.collection("games").document(code);
+            document.update("writeReceipts", FieldValue.delete()).get();
+            assertFalse(store.hasWriteReceipt(code, receipt));
+
+            Game attempt = store.findByCode(code).orElseThrow();
+            attempt.markActive();
+            store.saveWithReceipt(attempt, receipt);
+            assertTrue(store.hasWriteReceipt(code, receipt));
+
+            long now = System.currentTimeMillis();
+            String expired = UUID.randomUUID().toString();
+            document.update("writeReceipts", Map.of(
+                    receipt, now,
+                    expired, now - WriteReceipts.RETENTION_MS - 1)).get();
+            assertTrue(store.hasWriteReceipt(code, expired), "an unpruned receipt still proves ownership");
+
+            Game heartbeat = store.findByCode(code).orElseThrow();
+            heartbeat.markActive();
+            store.save(heartbeat);
+            assertTrue(store.hasWriteReceipt(code, receipt), "plain saves retain unexpired receipts");
+            assertFalse(store.hasWriteReceipt(code, expired), "plain saves also clean up old receipts");
+        } finally {
+            store.deleteByCode(code);
+        }
     }
 
     @Test

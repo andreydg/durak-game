@@ -16,28 +16,52 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Component
 public class InMemoryGameStore implements GameStore {
-    private final Map<String, Game> games = new ConcurrentHashMap<>();
+    private record StoredGame(Game game, Map<String, Long> receipts) {}
+
+    private final Map<String, StoredGame> games = new ConcurrentHashMap<>();
 
     @Override
     public void save(Game game) {
+        save(game, null);
+    }
+
+    @Override
+    public void saveWithReceipt(Game game, String receiptId) {
+        WriteReceipts.requireId(receiptId);
+        save(game, receiptId);
+    }
+
+    private void save(Game game, String receiptId) {
         // Taken from the caller's object: the copy below reports the version being written instead.
         long expectedVersion = game.getLoadedVersion();
         Game stored = copyOf(game);
         games.compute(stored.getCode(), (code, existing) -> {
+            Map<String, Long> receipts = existing == null ? Map.of() : existing.receipts();
+            if (receiptId != null && receipts.containsKey(receiptId)) {
+                return existing;
+            }
             boolean matches = expectedVersion == Game.NOT_PERSISTED
                     ? existing == null
-                    : existing != null && existing.getVersion() == expectedVersion;
+                    : existing != null && existing.game().getVersion() == expectedVersion;
             if (!matches) {
-                throw new StaleGameWriteException(code, expectedVersion, existing == null ? null : existing.getVersion());
+                throw new StaleGameWriteException(code, expectedVersion,
+                        existing == null ? null : existing.game().getVersion());
             }
-            return stored;
+            return new StoredGame(stored, WriteReceipts.merge(receipts, receiptId, System.currentTimeMillis()));
         });
         game.markPersisted();
     }
 
     @Override
+    public boolean hasWriteReceipt(String code, String receiptId) {
+        WriteReceipts.requireId(receiptId);
+        StoredGame stored = games.get(code);
+        return stored != null && stored.receipts().containsKey(receiptId);
+    }
+
+    @Override
     public Optional<Game> findByCode(String code) {
-        return Optional.ofNullable(games.get(code)).map(InMemoryGameStore::copyOf);
+        return Optional.ofNullable(games.get(code)).map(stored -> copyOf(stored.game()));
     }
 
     @Override
@@ -53,7 +77,7 @@ public class InMemoryGameStore implements GameStore {
     public boolean deleteIfVersion(String code, long version) {
         boolean[] removed = {false};
         games.computeIfPresent(code, (key, stored) -> {
-            if (stored.getVersion() != version) {
+            if (stored.game().getVersion() != version) {
                 return stored;
             }
             removed[0] = true;
@@ -69,7 +93,7 @@ public class InMemoryGameStore implements GameStore {
 
     @Override
     public Collection<Game> listAll() {
-        return games.values().stream().map(InMemoryGameStore::copyOf).toList();
+        return games.values().stream().map(stored -> copyOf(stored.game())).toList();
     }
 
     private static Game copyOf(Game game) {

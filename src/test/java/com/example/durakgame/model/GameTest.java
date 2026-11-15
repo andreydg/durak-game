@@ -723,6 +723,38 @@ class GameTest {
     }
 
     @Test
+    void botsHaveNoEndRoundMoveDuringTheAutomaticPause() {
+        for (List<Card> talon : List.of(List.<Card>of(), cards("8C", "9C"))) {
+            Game game = inProgress(List.of(
+                    new Game.PlayerSnapshot("a", "Bot", 0L, true, null, cards("6H", "KD"), ""),
+                    player("b", null, "7H")), Suit.SPADES, talon, 0, 1);
+            game.attack("a", Card.fromCode("6H"));
+            game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+            assertTrue(game.canAutoEndRound());
+            assertFalse(game.computeViewerLegalMoves("a").canEndRound());
+            assertFalse(com.example.durakgame.service.autoplay.AutoPlayLegality.isLegal(
+                    AutoPlayAction.endRound(), game.computeViewerLegalMoves("a")));
+        }
+    }
+
+    @Test
+    void dealIdentitySurvivesMovesAndSerializationButChangesOnRematch() {
+        Game game = inProgress(List.of(player("a", null, "6H", "KD"), player("b", null, "7H")),
+                Suit.SPADES, List.of(), 0, 1);
+        String deal = game.getDealId();
+        assertEquals(deal + "-0", game.getBoutId());
+        game.attack("a", Card.fromCode("6H"));
+        game.defend("b", Card.fromCode("6H"), Card.fromCode("7H"));
+        game.endRoundAutomatically();
+        assertEquals(deal, game.getDealId());
+        assertEquals(deal + "-1", game.getBoutId());
+        assertEquals(deal, Game.fromSnapshot(game.toSnapshot()).getDealId());
+        game.rematch("a");
+        assertNotEquals(deal, game.getDealId());
+        assertEquals(game.getDealId() + "-0", game.getBoutId());
+    }
+
+    @Test
     void emptyDefenderDoesNotNeedCoAttackerApprovalsEvenForManualEarlyEnd() {
         for (boolean manual : List.of(false, true)) {
             Game game = inProgress(List.of(player("a", null, "6H", "KD"), player("b", null, "7D"),

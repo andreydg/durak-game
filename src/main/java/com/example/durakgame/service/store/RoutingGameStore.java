@@ -61,6 +61,16 @@ public class RoutingGameStore implements GameStore {
     }
 
     @Override
+    public void saveWithReceipt(Game game, String receiptId) {
+        delegate.saveWithReceipt(game, receiptId);
+    }
+
+    @Override
+    public boolean hasWriteReceipt(String code, String receiptId) {
+        return delegate.hasWriteReceipt(code, receiptId);
+    }
+
+    @Override
     public Optional<Game> findByCode(String code) {
         return delegate.findByCode(code);
     }

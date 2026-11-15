@@ -1,5 +1,8 @@
 package com.example.durakgame.service;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.durakgame.controller.ApiExceptionHandler;
 import com.example.durakgame.controller.GameController;
 import com.example.durakgame.model.Card;
@@ -9,12 +12,14 @@ import com.example.durakgame.model.Suit;
 import com.example.durakgame.service.autoplay.AutoPlayAction;
 import com.example.durakgame.service.autoplay.HeuristicAutoPlayDecisionEngine;
 import com.example.durakgame.service.store.InMemoryGameStore;
+import com.example.durakgame.service.store.StaleGameWriteException;
 import com.example.durakgame.websocket.GameWebSocketHandler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.MediaType;
+import org.slf4j.LoggerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -29,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -128,6 +134,18 @@ class AutomaticRoundWebTest {
     }
 
     @Test
+    void serviceDefendArmsTheTimerWithoutAControllerOrReadRecovery() {
+        seed(true);
+        Game covered = service.defend("AUTO23", "b", card("6H"), card("7H"));
+        assertTrue(covered.canAutoEndRound());
+        assertEquals(1, timers.size());
+        verifyNoInteractions(sockets); // The caller retains responsibility for the defence broadcast.
+        timers.getFirst().run();
+        assertEquals(GameStatus.FINISHED, saved().getStatus());
+        verify(sockets).broadcastGameUpdated("AUTO23", 42L);
+    }
+
+    @Test
     void noTimerIfDefenderStillHoldsCardsEvenWithoutMatchingAttackRanks() {
         seed(List.of(player("a", cards("KD")), player("b", cards("7H", "8D"))), List.of(), 1);
         defend("b", card("6H"), card("7H"));
@@ -135,7 +153,7 @@ class AutomaticRoundWebTest {
         assertTrue(timers.isEmpty());
         assertFalse(saved().computeViewerLegalMoves("a").canAttack());
         assertTrue(saved().computeViewerLegalMoves("a").canEndRound());
-        service.endRound("AUTO23", "a");
+        service.endRound("AUTO23", "a", saved().getBoutId());
         assertEquals(1, saved().getBoutsCompleted());
     }
 
@@ -143,10 +161,14 @@ class AutomaticRoundWebTest {
     void manualEndDuringPauseWinsAndTimerDoesNothing() {
         seed(true);
         defend("b", card("6H"), card("7H"));
-        service.endRound("AUTO23", "a");
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
+        service.endRound("AUTO23", "a", saved().getBoutId());
         Game.Snapshot finished = saved().toSnapshot();
+        clearInvocations(store);
         timers.getFirst().run();
         timers.getFirst().run();
+        verifyNoInteractions(store);
         assertEquals(finished, saved().toSnapshot());
         assertEquals(1, saved().getBoutsCompleted());
         verify(sockets, never()).broadcastGameUpdated("AUTO23", 43L);
@@ -160,12 +182,18 @@ class AutomaticRoundWebTest {
         String oldBout = saved().getBoutId();
         timers.getFirst().run();
         Game.Snapshot afterTimer = saved().toSnapshot();
-        clearInvocations(store);
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
+        MockMvc mvc = mvc();
+        clearInvocations(store, sockets);
 
-        endRoundRequest(mvc(), "a", oldBout);
+        endRoundRequest(mvc, "a", oldBout);
 
         assertEquals(afterTimer, saved().toSnapshot());
         verify(store, never()).save(any());
+        verify(store, never()).saveWithReceipt(any(), anyString());
+        verify(sockets, never()).broadcastGameUpdated(anyString(), anyLong());
+        verifyNoInteractions(worker);
     }
 
     @Test
@@ -186,6 +214,7 @@ class AutomaticRoundWebTest {
         endRoundRequest(mvc, "b", oldBout);
         assertEquals(current.toSnapshot(), saved().toSnapshot());
         verify(store, never()).save(any());
+        verify(store, never()).saveWithReceipt(any(), anyString());
 
         endRoundRequest(mvc, "b", current.getBoutId());
         assertEquals(2, saved().getBoutsCompleted());
@@ -216,6 +245,7 @@ class AutomaticRoundWebTest {
         assertEquals(covered.toSnapshot(), saved().toSnapshot());
         assertEquals(covered.getVersion(), saved().getVersion());
         verify(store, never()).save(any());
+        verify(store, never()).saveWithReceipt(any(), anyString());
         verifyNoInteractions(sockets, worker);
         assertTrue(timers.isEmpty());
     }
@@ -229,12 +259,17 @@ class AutomaticRoundWebTest {
         assertFalse(covered.computeViewerLegalMoves("a").canEndRound());
         assertFalse(covered.computeViewerLegalMoves("b").canEndRound());
         MockMvc mvc = mvc();
-        clearInvocations(store);
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
+        clearInvocations(store, sockets);
 
         endRoundRequest(mvc, "a", covered.getBoutId()); // Last-card contributor.
         endRoundRequest(mvc, "b", covered.getBoutId()); // Already out before this bout.
         assertEquals(covered.toSnapshot(), saved().toSnapshot());
         verify(store, never()).save(any());
+        verify(store, never()).saveWithReceipt(any(), anyString());
+        verify(sockets, never()).broadcastGameUpdated(anyString(), anyLong());
+        verifyNoInteractions(worker);
         assertEquals(1, timers.size(), "passes neither settle nor reset the pause");
 
         timers.getFirst().run();
@@ -250,20 +285,153 @@ class AutomaticRoundWebTest {
         defend("c", card("6H"), card("7H"));
         String bout = saved().getBoutId();
         MockMvc mvc = mvc();
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
         endRoundRequest(mvc, "a", bout);
+        verify(sockets).broadcastGameUpdated("AUTO23", saved().getVersion());
+        verify(worker).execute(any());
         Game.Snapshot approved = saved().toSnapshot();
-        clearInvocations(store);
+        clearInvocations(store, sockets, worker);
         endRoundRequest(mvc, "a", bout);
         assertEquals(approved, saved().toSnapshot());
         verify(store, never()).save(any());
+        verify(store, never()).saveWithReceipt(any(), anyString());
+        verify(sockets, never()).broadcastGameUpdated(anyString(), anyLong());
+        verifyNoInteractions(worker);
 
         endRoundRequest(mvc, "b", bout);
         Game.Snapshot settled = saved().toSnapshot();
         assertEquals(1, settled.boutsCompleted());
-        clearInvocations(store);
+        clearInvocations(store, sockets, worker);
         endRoundRequest(mvc, "a", bout);
         assertEquals(settled, saved().toSnapshot());
         verify(store, never()).save(any());
+        verify(store, never()).saveWithReceipt(any(), anyString());
+        verify(sockets, never()).broadcastGameUpdated(anyString(), anyLong());
+        verifyNoInteractions(worker);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void ownCommittedManualPassIsNotMistakenForADuplicate(boolean settles) throws Exception {
+        if (settles) {
+            seed(true);
+        } else {
+            seed(List.of(player("a", cards("KD")), player("b", cards("8D")),
+                    player("c", cards("7H", "9D"))), List.of(), 2);
+        }
+        Game covered = saved();
+        covered.defend(settles ? "b" : "c", card("6H"), card("7H"));
+        store.save(covered);
+        if (settles) service.resumeAutoPlayIfStalled(covered);
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
+        MockMvc mvc = mvc();
+        doAnswer(invocation -> {
+            Game attempted = invocation.getArgument(0);
+            long loaded = attempted.getLoadedVersion();
+            invocation.callRealMethod();
+            ReflectionTestUtils.setField(attempted, "loadedVersion", loaded);
+            throw new StaleGameWriteException("AUTO23", loaded, attempted.getVersion());
+        }).when(store).saveWithReceipt(any(), anyString());
+        Logger logger = (Logger) LoggerFactory.getLogger(GameLifecycleLog.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            clearInvocations(store, sockets);
+            endRoundRequest(mvc, "a", covered.getBoutId());
+            assertEquals(42, saved().getVersion());
+            assertEquals(settles ? 1 : 0, saved().getBoutsCompleted());
+            verify(store, times(1)).saveWithReceipt(any(), anyString());
+            verify(sockets, times(1)).broadcastGameUpdated("AUTO23", 42L);
+            verify(worker, times(1)).execute(any());
+            synchronized (logs) {
+                List<String> ended = logs.list.stream().map(ILoggingEvent::getFormattedMessage)
+                        .filter(line -> line.startsWith("game_ended code=AUTO23 ")).toList();
+                assertEquals(settles ? 1 : 0, ended.size());
+                if (settles) assertTrue(ended.getFirst().contains("endedBy=player bouts=1"));
+            }
+            clearInvocations(store, sockets, worker);
+            if (settles) {
+                timers.getFirst().run();
+                verifyNoInteractions(store); // The recovered manual settle cancelled its timer.
+            }
+            endRoundRequest(mvc, "a", covered.getBoutId());
+            verify(store, never()).saveWithReceipt(any(), anyString());
+            verify(sockets, never()).broadcastGameUpdated(anyString(), anyLong());
+            verifyNoInteractions(worker);
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @Test
+    void committedApprovalIsNotReplayedAfterAnotherPlayerClearsTheApprovals() throws Exception {
+        seed(List.of(player("a", cards("KD")), player("b", cards("6D")),
+                player("c", cards("7H", "7D"))), List.of(), 2);
+        Game covered = saved();
+        covered.defend("c", card("6H"), card("7H"));
+        store.save(covered);
+        ExecutorService worker = mock(ExecutorService.class);
+        ReflectionTestUtils.setField(service, "autoPlayExecutor", worker);
+        MockMvc mvc = mvc();
+        AtomicBoolean first = new AtomicBoolean(true);
+        AtomicReference<Game.Snapshot> afterOtherPlayers = new AtomicReference<>();
+        doAnswer(invocation -> {
+            Game attempted = invocation.getArgument(0);
+            long loaded = attempted.getLoadedVersion();
+            Object result = invocation.callRealMethod();
+            if (first.getAndSet(false)) {
+                // Another instance moves after our approval commits but before its failed
+                // acknowledgement reaches us. The throw-in clears that approval.
+                Game advanced = saved();
+                advanced.attack("b", card("6D"));
+                advanced.defend("c", card("6D"), card("7D"));
+                store.save(advanced);
+                assertTrue(advanced.canAutoEndRound());
+                afterOtherPlayers.set(advanced.toSnapshot());
+                ReflectionTestUtils.setField(attempted, "loadedVersion", loaded);
+                throw new StaleGameWriteException("AUTO23", loaded, advanced.getVersion());
+            }
+            return result;
+        }).when(store).saveWithReceipt(any(), anyString());
+        Logger logger = (Logger) LoggerFactory.getLogger(GameLifecycleLog.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            mvc.perform(post("/api/games/AUTO23/end-round").header("X-Durak-Token", "a-secret")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"playerId\":\"a\",\"boutId\":\"" + covered.getBoutId() + "\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("IN_PROGRESS"))
+                    .andExpect(jsonPath("$.version").value(44))
+                    .andExpect(jsonPath("$.canAutoEndRound").value(true));
+            assertEquals(afterOtherPlayers.get(), saved().toSnapshot());
+            verify(store, times(1)).saveWithReceipt(any(), anyString());
+            verify(sockets).broadcastGameUpdated("AUTO23", 44L);
+            verifyNoInteractions(worker);
+            assertEquals(1, timers.size());
+            synchronized (logs) {
+                assertTrue(logs.list.stream().noneMatch(event ->
+                        event.getFormattedMessage().startsWith("game_ended code=AUTO23 ")));
+            }
+
+            timers.getFirst().run();
+            assertEquals(GameStatus.FINISHED, saved().getStatus());
+            assertEquals("a", saved().getLoserPlayerId());
+            synchronized (logs) {
+                List<String> ended = logs.list.stream().map(ILoggingEvent::getFormattedMessage)
+                        .filter(line -> line.startsWith("game_ended code=AUTO23 ")).toList();
+                assertEquals(1, ended.size());
+                assertTrue(ended.getFirst().contains("endedBy=automatic bouts=1"));
+            }
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
     }
 
     private void endRoundRequest(MockMvc mvc, String playerId, String boutId) throws Exception {
@@ -294,7 +462,7 @@ class AutomaticRoundWebTest {
         seed(List.of(player("a", List.of()), player("b", cards("7C", "KD")), player("c", cards("7H"))),
                 cards("8C"), 2);
         defend("c", card("6H"), card("7H"));
-        service.endRound("AUTO23", "b");
+        service.endRound("AUTO23", "b", saved().getBoutId());
         assertEquals("b", saved().getAttackerPlayerId());
         assertEquals("a", saved().getDefenderPlayerId());
         service.attack("AUTO23", "b", card("7C"));
@@ -401,7 +569,6 @@ class AutomaticRoundWebTest {
     private Game defend(String playerId, Card attack, Card defense) {
         Game game = service.defend("AUTO23", playerId, attack, defense);
         sockets.broadcastGameUpdated(game.getCode(), game.getVersion());
-        service.resumeAutoPlayIfStalled(game);
         return game;
     }
 
