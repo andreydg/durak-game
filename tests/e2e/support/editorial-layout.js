@@ -12,9 +12,15 @@ export async function roomCodeMetrics(page) {
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
         context.font = `${style.fontSize} ${style.fontFamily}`;
+        // Chromium 158 reports a text input's clientWidth without its padding;
+        // older versions include it. Derive the editing area from the unscaled
+        // border box so we subtract borders and padding exactly once on both.
+        const usableWidth = input.getBoundingClientRect().width
+            - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth)
+            - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
         return {
             fontSize: parseFloat(style.fontSize),
-            usableWidth: input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+            usableWidth,
             textWidth: context.measureText(input.value).width + parseFloat(style.letterSpacing) * input.value.length,
             scrollWidth: input.scrollWidth,
             clientWidth: input.clientWidth
