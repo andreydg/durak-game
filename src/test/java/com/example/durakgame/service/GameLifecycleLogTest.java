@@ -67,6 +67,8 @@ class GameLifecycleLogTest {
         return service((game, playerId, legalMoves) -> null);
     }
 
+    private Game saved() { return store.findByCode("TEST01").orElseThrow(); }
+
     private List<String> lines() {
         synchronized (logs) {
             return logs.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
@@ -84,7 +86,7 @@ class GameLifecycleLogTest {
         Game game = service().createQuickGame("Alice");
 
         String line = onlyLine();
-        assertTrue(line.startsWith("game_started code=" + game.getCode() + " deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_started code=" + game.getCode() + " deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("trigger=quick_play"), line);
         assertTrue(line.contains("players=2 humans=1 bots=1 publicRoom=false"), line);
     }
@@ -122,10 +124,10 @@ class GameLifecycleLogTest {
 
         service.attack("TEST01", "h", Card.fromCode("7H"));
         service.takeCards("TEST01", "g");
-        service.endRound("TEST01", "h");
+        service.endRound("TEST01", "h", saved().getBoutId());
 
         String line = onlyLine();
-        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("endedBy=player bouts=1 loser=human loserPlayerId=g"), line);
         assertTrue(line.contains("humans=2 bots=0"), line);
     }
@@ -145,7 +147,7 @@ class GameLifecycleLogTest {
         timers.getFirst().run();
         assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
         String line = onlyLine();
-        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("endedBy=automatic bouts=1 loser=human loserPlayerId=h"), line);
     }
 
@@ -175,7 +177,7 @@ class GameLifecycleLogTest {
         }
         String line = onlyLine();
         assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
-        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("endedBy=bot bouts=1 loser=human loserPlayerId=h"), line);
     }
 
@@ -192,7 +194,7 @@ class GameLifecycleLogTest {
         timers.getFirst().run();
         assertEquals(GameStatus.FINISHED, service.getGame("TEST01").getStatus());
         String line = onlyLine();
-        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("endedBy=automatic bouts=1 loser=human loserPlayerId=h"), line);
     }
 
@@ -237,7 +239,7 @@ class GameLifecycleLogTest {
         assertEquals("h2", finished.getLoserPlayerId());
         assertEquals(1, finished.getBoutsCompleted());
         String line = onlyLine();
-        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_ended code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("endedBy=bot bouts=1"), line);
         assertTrue(line.contains("loserPlayerId=h2"), line);
         if (taking) {
@@ -253,7 +255,7 @@ class GameLifecycleLogTest {
         GameService service = service();
         Game covered = service.defend("TEST01", "g", Card.fromCode("7H"), Card.fromCode("9H"));
         service.resumeAutoPlayIfStalled(covered);
-        service.endRound("TEST01", "h");
+        service.endRound("TEST01", "h", saved().getBoutId());
         timers.getFirst().run();
         assertTrue(onlyLine().contains("endedBy=player bouts=1"));
     }
@@ -285,9 +287,9 @@ class GameLifecycleLogTest {
         Game rematched = service().rematch("TEST01", "h");
 
         String line = onlyLine();
-        assertTrue(line.startsWith("game_started code=TEST01 deal=" + GameLifecycleLog.dealId(rematched) + " "), line);
+        assertTrue(line.startsWith("game_started code=TEST01 deal=" + rematched.getDealId() + " "), line);
         assertTrue(line.contains("trigger=rematch"), line);
-        assertNotEquals(GameLifecycleLog.dealId(finished), GameLifecycleLog.dealId(rematched));
+        assertNotEquals(finished.getDealId(), rematched.getDealId());
     }
 
     @Test
@@ -299,7 +301,7 @@ class GameLifecycleLogTest {
 
         assertFalse(closed);
         String line = onlyLine();
-        assertTrue(line.startsWith("game_interrupted code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_interrupted code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("reason=player_left bouts=0 players=1 humans=1 bots=0"), line);
     }
 
@@ -313,7 +315,7 @@ class GameLifecycleLogTest {
 
         assertTrue(closed);
         String line = onlyLine();
-        assertTrue(line.startsWith("game_interrupted code=TEST01 deal=" + GameLifecycleLog.dealId(game) + " "), line);
+        assertTrue(line.startsWith("game_interrupted code=TEST01 deal=" + game.getDealId() + " "), line);
         assertTrue(line.contains("reason=room_closed"), line);
     }
 
@@ -351,10 +353,22 @@ class GameLifecycleLogTest {
      */
     private static final class SeededStore implements GameStore {
         private final Map<String, Game.Snapshot> rooms = new ConcurrentHashMap<>();
+        private final Map<String, Set<String>> receipts = new ConcurrentHashMap<>();
 
         @Override
         public void save(Game game) {
             rooms.put(game.getCode(), game.toSnapshot());
+        }
+
+        @Override
+        public void saveWithReceipt(Game game, String receiptId) {
+            save(game);
+            receipts.computeIfAbsent(game.getCode(), code -> ConcurrentHashMap.newKeySet()).add(receiptId);
+        }
+
+        @Override
+        public boolean hasWriteReceipt(String code, String receiptId) {
+            return receipts.getOrDefault(code, Set.of()).contains(receiptId);
         }
 
         @Override
@@ -365,6 +379,7 @@ class GameLifecycleLogTest {
         @Override
         public void deleteByCode(String code) {
             rooms.remove(code);
+            receipts.remove(code);
         }
 
         @Override

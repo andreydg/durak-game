@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -56,8 +57,6 @@ public class GameService {
     /* Pace the next bot pass after manual END_ROUND; final-defence display uses its own timer. */
     private static final long AUTO_PLAY_RESCHEDULE_DELAY_MS = 250;
     private static final long AUTOMATIC_ROUND_DELAY_MS = 2500;
-    private static final int AUTOMATIC_ROUND_MAX_RETRIES = 3;
-    private static final long AUTOMATIC_ROUND_RETRY_DELAY_MS = 2000;
     /*
      * Minimum bot "thinking" window so moves feel human-paced even when the decision is instant. The
      * wide jitter also blurs the gap between instant (forced) and deliberated moves, which would
@@ -68,8 +67,8 @@ public class GameService {
     /* Re-plans allowed per pass when a bot decision goes stale because another player moved first. */
     private static final int AUTO_PLAY_MAX_STALE_REPLANS = 5;
     /* Delayed retries after an unexpected failure (e.g. a store outage) before waiting for a read to resume the bot. */
-    private static final int AUTO_PLAY_MAX_FAILURE_RETRIES = 3;
-    private static final long AUTO_PLAY_FAILURE_RETRY_DELAY_MS = 2000;
+    private static final int BACKGROUND_MAX_FAILURE_RETRIES = 3;
+    private static final long BACKGROUND_FAILURE_RETRY_DELAY_MS = 2000;
     /* One retry covers a cross-instance lost-update race; the per-code lock prevents same-JVM races. */
     private static final int MUTATE_RETRY_ATTEMPTS = 2;
     private static final long AUTH_REJECTION_LOG_INTERVAL_MS = 60_000;
@@ -87,9 +86,34 @@ public class GameService {
     private final BiConsumer<Runnable, Long> delayedScheduler;
     private final ConcurrentHashMap<String, PendingRound> pendingRounds = new ConcurrentHashMap<>();
 
-    private record PendingRound(String deal, int bout) {
-        static PendingRound of(Game game) {
-            return new PendingRound(GameLifecycleLog.dealId(game), game.getBoutsCompleted());
+    private record RoundIdentity(String deal, int bout) {
+        static RoundIdentity of(Game game) {
+            return new RoundIdentity(game.getDealId(), game.getBoutsCompleted());
+        }
+    }
+
+    /** Task ownership is by object identity, even when a later task re-arms the same bout. */
+    private static final class PendingRound {
+        final RoundIdentity identity;
+        final WriteAttempt write = new WriteAttempt();
+
+        PendingRound(Game game) {
+            identity = RoundIdentity.of(game);
+        }
+    }
+
+    /** Retained across retries; the store receipt distinguishes our commit from another writer's. */
+    private static final class WriteAttempt {
+        final String receipt = UUID.randomUUID().toString();
+        GameLifecycleLog.Before before;
+        Game game;
+        boolean transitionLogged;
+
+        void logSavedTransition(String trigger) {
+            if (!transitionLogged) {
+                GameLifecycleLog.afterSave(before, game, trigger);
+                transitionLogged = true;
+            }
         }
     }
     /*
@@ -459,8 +483,11 @@ public class GameService {
         Game game = mutateGame(gameCode, g -> g.defend(playerId, attackCard, defendCard));
         log.debug("game_action code={} action=defend playerId={} attackCard={} defenseCard={} tableSize={}",
                 game.getCode(), playerId, attackCard.code(), defendCard.code(), game.getTable().size());
-        // The HTTP controller publishes the last defence before arming its display pause.
-        if (!game.canAutoEndRound()) {
+        // Arm after saving, including for non-HTTP callers. The controller still publishes
+        // the final defence; the delayed task leaves it visible for the display pause.
+        if (game.canAutoEndRound()) {
+            scheduleAutomaticRound(game);
+        } else {
             scheduleAutoPlay(game.getCode());
         }
         return game;
@@ -482,30 +509,50 @@ public class GameService {
         return game;
     }
 
-    Game endRound(String gameCode, String playerId) {
-        return endRound(gameCode, playerId, getGame(gameCode).getBoutId());
-    }
+    public record EndRoundResult(Game game, boolean applied) {}
 
-    public Game endRound(String gameCode, String playerId, String expectedBoutId) {
+    public EndRoundResult endRound(String gameCode, String playerId, String expectedBoutId) {
         String normalizedCode = normalizeCode(gameCode);
-        Game game = withGameLockRetryingStale(normalizedCode, () -> {
+        WriteAttempt write = new WriteAttempt();
+        EndRoundResult result = withGameLockRetryingStale(normalizedCode, () -> {
             Game g = getGame(normalizedCode);
+            // A committed approval may have been cleared by a later throw-in. Recover
+            // it before reapplying the action or replacing its retained transition.
+            if (write.game != null && gameStore.hasWriteReceipt(normalizedCode, write.receipt)) {
+                finishManualRoundWrite(normalizedCode, write);
+                return new EndRoundResult(g, true);
+            }
             GameLifecycleLog.Before before = GameLifecycleLog.Before.of(g);
             if (!g.endRound(playerId, expectedBoutId)) {
-                return g;
+                return new EndRoundResult(g, false);
             }
-            gameStore.save(g);
+            write.before = before;
+            write.game = g;
+            gameStore.saveWithReceipt(g, write.receipt);
             log.debug("game_action code={} action=end_round playerId={} statusBefore={} statusAfter={} tableSize={}",
                     g.getCode(), playerId, before.status(), g.getStatus(), g.getTable().size());
-            GameLifecycleLog.afterSave(before, g, "player");
-            return g;
+            finishManualRoundWrite(normalizedCode, write);
+            return new EndRoundResult(g, true);
         });
+        if (!result.applied()) {
+            return result;
+        }
+        Game game = result.game();
         if (game.canAutoEndRound()) {
             scheduleAutomaticRound(game);
         } else {
             scheduleAutoPlay(normalizedCode);
         }
-        return game;
+        return result;
+    }
+
+    private void finishManualRoundWrite(String code, WriteAttempt write) {
+        write.logSavedTransition("player");
+        RoundIdentity boutBefore = new RoundIdentity(write.before.deal(), write.before.bouts());
+        if (!boutBefore.equals(RoundIdentity.of(write.game))) {
+            pendingRounds.computeIfPresent(code, (key, pending) ->
+                    pending.identity.equals(boutBefore) ? null : pending);
+        }
     }
 
     /**
@@ -701,11 +748,11 @@ public class GameService {
             return;
         }
         String code = game.getCode();
-        PendingRound expected = PendingRound.of(game);
+        PendingRound expected = new PendingRound(game);
         boolean[] schedule = {false};
         pendingRounds.compute(code, (key, pending) -> {
-            if (pending != null && pending.deal().equals(expected.deal())
-                    && pending.bout() >= expected.bout()) {
+            if (pending != null && pending.identity.deal().equals(expected.identity.deal())
+                    && pending.identity.bout() >= expected.identity.bout()) {
                 return pending;
             }
             schedule[0] = true;
@@ -724,33 +771,50 @@ public class GameService {
     }
 
     private void settleAutomaticRound(String code, PendingRound expected, int failures) {
+        // A cancelled/finished task needs neither a stripe lock nor a store read.
+        if (pendingRounds.get(code) != expected) {
+            return;
+        }
         boolean retrying = false;
         Game settled;
         try {
             settled = withGameLockRetryingStale(code, () -> {
+                if (pendingRounds.get(code) != expected) {
+                    return null;
+                }
                 Game fresh = getGame(code);
-                if (!expected.equals(PendingRound.of(fresh))) {
-                    // A save can commit and then report a transport failure. A retry must
-                    // publish/resume that advanced state, without settling or logging it twice.
-                    return failures > 0 ? fresh : null;
+                if (!expected.identity.equals(RoundIdentity.of(fresh))) {
+                    // A committed write can lose its acknowledgement, including a CAS error
+                    // retried inside this very call. An advanced bout alone does not prove
+                    // ownership: another instance may have won the CAS. Check our receipt.
+                    if (expected.write.game != null && gameStore.hasWriteReceipt(code, expected.write.receipt)) {
+                        expected.write.logSavedTransition("automatic");
+                        pendingRounds.remove(code, expected);
+                        return fresh;
+                    }
+                    return null;
                 }
                 GameLifecycleLog.Before before = GameLifecycleLog.Before.of(fresh);
                 if (!fresh.endRoundAutomatically()) {
                     return null;
                 }
-                gameStore.save(fresh);
-                GameLifecycleLog.afterSave(before, fresh, "automatic");
+                expected.write.before = before;
+                expected.write.game = fresh;
+                gameStore.saveWithReceipt(fresh, expected.write.receipt);
+                expected.write.logSavedTransition("automatic");
+                pendingRounds.remove(code, expected);
                 return fresh;
             });
         } catch (NoSuchElementException | RoomExpiredException ignored) {
             // A departure, expiry or removal can legitimately outlive the display pause.
             return;
         } catch (RuntimeException ex) {
-            log.warn("automatic_round_failed code={} failures={} message={}", code, failures + 1, ex.getMessage(), ex);
-            if (failures < AUTOMATIC_ROUND_MAX_RETRIES) {
+            int failureCount = failures + 1;
+            log.warn("automatic_round_failed code={} failures={} message={}", code, failureCount, ex.getMessage(), ex);
+            long retryDelay = backgroundRetryDelay(failureCount);
+            if (retryDelay > 0) {
                 retrying = true; // Keep ownership through backoff; reads/heartbeats cannot restart it.
-                scheduleAutomaticRoundLater(code, expected, failures + 1,
-                        AUTOMATIC_ROUND_RETRY_DELAY_MS * (failures + 1));
+                scheduleAutomaticRoundLater(code, expected, failureCount, retryDelay);
             } else {
                 log.warn("automatic_round_gave_up code={}", code);
             }
@@ -830,6 +894,11 @@ public class GameService {
         });
     }
 
+    /** Consecutive failures are one-based for both bot passes and automatic settlement. */
+    private static long backgroundRetryDelay(int failures) {
+        return failures <= BACKGROUND_MAX_FAILURE_RETRIES ? BACKGROUND_FAILURE_RETRY_DELAY_MS * failures : 0;
+    }
+
     /** The worker can reject only when the delay expires, not at the call to delayedExecutor. */
     private void scheduleDelayed(Runnable task, long delayMs, Runnable onRejected) {
         try {
@@ -864,9 +933,10 @@ public class GameService {
                 int failures = autoPlayFailures.merge(code, 1, Integer::sum);
                 log.warn("autoplay_background_failed code={} failures={} message={}",
                         code, failures, ex.getMessage(), ex);
-                if (failures <= AUTO_PLAY_MAX_FAILURE_RETRIES) {
+                long retryDelay = backgroundRetryDelay(failures);
+                if (retryDelay > 0) {
                     // Keep ownership through the back-off so a concurrent request cannot double-run.
-                    runAutoPlayLater(code, AUTO_PLAY_FAILURE_RETRY_DELAY_MS * failures);
+                    runAutoPlayLater(code, retryDelay);
                     return;
                 }
                 autoPlayFailures.remove(code);
@@ -1007,8 +1077,7 @@ public class GameService {
         Game applied = withGameLockRetryingStale(code, () -> {
             Game fresh = getGame(code);
             if (fresh.getStatus() != GameStatus.IN_PROGRESS
-                    || fresh.getBoutsCompleted() != planned.getBoutsCompleted()
-                    || !GameLifecycleLog.dealId(fresh).equals(GameLifecycleLog.dealId(planned))) {
+                    || !RoundIdentity.of(fresh).equals(RoundIdentity.of(planned))) {
                 // An old throw-in must never become a legal opening lead in a later bout/deal.
                 log.info("autoplay_skip code={} playerId={} reason=stale_bout action={}", code, player.getId(), action);
                 return null;

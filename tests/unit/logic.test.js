@@ -489,9 +489,36 @@ describe("describeTransition", () => {
         ]);
     });
 
-    it("announces a take and throw-ins", () => {
-        const prev = game({ attackerPlayerId: "me", defenderPlayerId: "bot", table: [{ attackCard: "7H", attackerId: "me" }] });
+    it("announces a coalesced opening attack and take in the same bout", () => {
+        const prev = game({ boutId: "deal:1", attackerPlayerId: "me", defenderPlayerId: "bot" });
+        const next = { ...prev, version: 3, takingCardsInProgress: true, takingPlayerId: "bot",
+            table: [{ attackCard: "7H", attackerId: "me" }] };
+
+        expect(L.describeTransition(prev, next, "me")).toEqual([
+            "You attack with 7 of hearts.", "Elektronik takes the cards."
+        ]);
+        expect(L.describeTransition(prev, next, "bot")).toEqual([
+            "Alice attacks with 7 of hearts.", "You take the cards."
+        ]);
+        expect(L.describeTransition(next, { ...next, version: 4 }, "me")).toEqual([]);
+    });
+
+    it("distinguishes the opening attack from later throw-ins in a same-bout batch from an empty table", () => {
+        const prev = game({ boutId: "deal:1", attackerPlayerId: "me", defenderPlayerId: "bot" });
+        const next = { ...prev, version: 4, takingCardsInProgress: true, takingPlayerId: "bot",
+            table: [{ attackCard: "7H", attackerId: "me" }, { attackCard: "7C", attackerId: "me" }] };
+
+        expect(L.describeTransition(prev, next, "me")).toEqual([
+            "You attack with 7 of hearts.",
+            "You throw in 7 of clubs.",
+            "Elektronik takes the cards."
+        ]);
+    });
+
+    it.each([null, "deal:1"])("announces a take and later throw-ins with bout identity %s", boutId => {
+        const prev = game({ boutId, attackerPlayerId: "me", defenderPlayerId: "bot", table: [{ attackCard: "7H", attackerId: "me" }] });
         const taking = game({
+            boutId,
             attackerPlayerId: "me",
             defenderPlayerId: "bot",
             takingCardsInProgress: true,
@@ -501,16 +528,33 @@ describe("describeTransition", () => {
         expect(L.describeTransition(prev, taking, "me")).toEqual(["Elektronik takes the cards."]);
         const thrown = { ...taking, table: [...taking.table, { attackCard: "7C", attackerId: "me" }] };
         expect(L.describeTransition(taking, thrown, "me")).toEqual(["You throw in 7 of clubs."]);
+        expect(L.describeTransition(prev, thrown, "me")).toEqual([
+            "You throw in 7 of clubs.", "Elektronik takes the cards."
+        ]);
     });
 
-    it("announces a transfer", () => {
-        const prev = game({ table: [{ attackCard: "7H", attackerId: "bot" }] });
+    it.each([null, "deal:1"])("announces a transfer with bout identity %s", boutId => {
+        const prev = game({ boutId, table: [{ attackCard: "7H", attackerId: "bot" }] });
         const next = game({
+            boutId,
             attackerPlayerId: "me",
             defenderPlayerId: "bot",
             table: [{ attackCard: "7H", attackerId: "bot" }, { attackCard: "7C", attackerId: "me" }]
         });
         expect(L.describeTransition(prev, next, "me")).toEqual(["You transfer with 7 of clubs."]);
+    });
+
+    it("preserves transfer detection when an opening attack, transfer and take arrive in one same-bout update", () => {
+        const prev = game({ boutId: "deal:1" });
+        const next = { ...prev, version: 4, attackerPlayerId: "me", defenderPlayerId: "bot",
+            takingCardsInProgress: true, takingPlayerId: "bot",
+            table: [{ attackCard: "7H", attackerId: "bot" }, { attackCard: "7C", attackerId: "me" }] };
+
+        expect(L.describeTransition(prev, next, "me")).toEqual([
+            "Elektronik attacks with 7 of hearts.",
+            "You transfer with 7 of clubs.",
+            "Elektronik takes the cards."
+        ]);
     });
 
     it("ends a bout with the viewer's drawn and picked-up cards and who leads next", () => {

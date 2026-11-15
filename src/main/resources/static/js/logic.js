@@ -455,15 +455,17 @@ export function describeTransition(prev, next, viewerId) {
         }
     }
     let newAttacks = 0;
-    for (const pair of nextTable.slice(earlier.length)) {
+    for (let i = earlier.length; i < nextTable.length; i++) {
+        const pair = nextTable[i];
         newAttacks++;
         const transferred = sameBout && pair.attackerId === prev.defenderPlayerId
             && next.defenderPlayerId !== prev.defenderPlayerId;
         if (transferred) {
             out.push(`${says(pair.attackerId, "transfer", "transfers")} with ${cardName(pair.attackCard)}.`);
-        } else if (next.takingCardsInProgress && sameBout) {
+        } else if (next.takingCardsInProgress && sameBout && i > 0) {
             out.push(`${says(pair.attackerId, "throw in", "throws in")} ${cardName(pair.attackCard)}.`);
         } else {
+            // Card 0 opens the bout, even if the opening attack and take arrive together.
             out.push(`${says(pair.attackerId, "attack", "attacks")} with ${cardName(pair.attackCard)}.`);
         }
         if (pair.defenseCard) {

@@ -34,6 +34,7 @@ public class FirestoreGameStore implements GameStore {
     private static final String FIELD_EXPIRE_AT = "expireAt";
     private static final String FIELD_STATUS = "status";
     private static final String FIELD_VERSION = "version";
+    private static final String FIELD_WRITE_RECEIPTS = "writeReceipts";
     // Denormalized lobby summary fields, so the lobby list never decodes full game payloads.
     private static final String FIELD_CODE = "code";
     private static final String FIELD_HOST_NAME = "hostName";
@@ -67,6 +68,16 @@ public class FirestoreGameStore implements GameStore {
 
     @Override
     public void save(Game game) {
+        save(game, null);
+    }
+
+    @Override
+    public void saveWithReceipt(Game game, String receiptId) {
+        WriteReceipts.requireId(receiptId);
+        save(game, receiptId);
+    }
+
+    private void save(Game game, String receiptId) {
         byte[] encoded = encode(game);
         long attemptedVersion = game.getVersion();
         long expectedVersion = game.getLoadedVersion();
@@ -84,6 +95,10 @@ public class FirestoreGameStore implements GameStore {
             DocumentReference ref = collection().document(game.getCode());
             firestore.runTransaction(tx -> {
                 DocumentSnapshot existing = tx.get(ref).get();
+                Map<String, Long> receipts = writeReceipts(existing);
+                if (receiptId != null && receipts.containsKey(receiptId)) {
+                    return null;
+                }
                 Long storedVersion = existing.exists() ? existing.getLong(FIELD_VERSION) : null;
                 boolean matches = expectedVersion == Game.NOT_PERSISTED
                         ? !existing.exists()
@@ -99,6 +114,8 @@ public class FirestoreGameStore implements GameStore {
                         Map.entry(FIELD_LOBBY_STARTED_AT, lobbyStartedTs),
                         Map.entry(FIELD_STATUS, game.getStatus().name()),
                         Map.entry(FIELD_VERSION, attemptedVersion),
+                        Map.entry(FIELD_WRITE_RECEIPTS,
+                                WriteReceipts.merge(receipts, receiptId, System.currentTimeMillis())),
                         Map.entry(FIELD_CODE, game.getCode()),
                         Map.entry(FIELD_HOST_NAME, summary.hostName()),
                         Map.entry(FIELD_PLAYER_NAMES, summary.playerNames()),
@@ -116,6 +133,23 @@ public class FirestoreGameStore implements GameStore {
             throw new GameStoreException("Failed to save game to Firestore", ex);
         } catch (Exception ex) {
             throw new GameStoreException("Failed to save game to Firestore", ex);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Long> writeReceipts(DocumentSnapshot snapshot) {
+        Object receipts = snapshot.exists() ? snapshot.get(FIELD_WRITE_RECEIPTS) : null;
+        return receipts == null ? Map.of() : (Map<String, Long>) receipts;
+    }
+
+    @Override
+    public boolean hasWriteReceipt(String code, String receiptId) {
+        WriteReceipts.requireId(receiptId);
+        try {
+            log.debug("firestore_read code={} op=hasWriteReceipt", code);
+            return writeReceipts(collection().document(code).get().get()).containsKey(receiptId);
+        } catch (Exception ex) {
+            throw new GameStoreException("Failed to read game write receipts from Firestore", ex);
         }
     }
 

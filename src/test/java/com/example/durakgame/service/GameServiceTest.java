@@ -1166,6 +1166,7 @@ class GameServiceTest {
      */
     private static final class SnapshotGameStore implements GameStore {
         private final java.util.Map<String, Game.Snapshot> snapshots = new ConcurrentHashMap<>();
+        private final Map<String, Set<String>> receipts = new ConcurrentHashMap<>();
         private final AtomicInteger saveAttempts = new AtomicInteger();
         private final AtomicInteger failuresRemaining = new AtomicInteger();
 
@@ -1191,6 +1192,17 @@ class GameServiceTest {
         }
 
         @Override
+        public void saveWithReceipt(Game game, String receiptId) {
+            save(game);
+            receipts.computeIfAbsent(game.getCode(), code -> ConcurrentHashMap.newKeySet()).add(receiptId);
+        }
+
+        @Override
+        public boolean hasWriteReceipt(String code, String receiptId) {
+            return receipts.getOrDefault(code, Set.of()).contains(receiptId);
+        }
+
+        @Override
         public Optional<Game> findByCode(String code) {
             Game.Snapshot snap = snapshots.get(code);
             return snap == null ? Optional.empty() : Optional.of(Game.fromSnapshot(snap));
@@ -1199,6 +1211,7 @@ class GameServiceTest {
         @Override
         public void deleteByCode(String code) {
             snapshots.remove(code);
+            receipts.remove(code);
         }
 
         @Override

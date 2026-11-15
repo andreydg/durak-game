@@ -49,6 +49,32 @@ class RoutingGameStoreTest {
     }
 
     @Test
+    void receiptOperationsDelegateToMemoryWithoutBuildingFirestore() {
+        RoutingGameStore store = new RoutingGameStore(memory, firestoreBean, "memory", LOCAL);
+        when(memory.hasWriteReceipt("ROUTE1", "receipt")).thenReturn(true);
+
+        store.saveWithReceipt(game, "receipt");
+        assertTrue(store.hasWriteReceipt("ROUTE1", "receipt"));
+
+        verify(memory).saveWithReceipt(game, "receipt");
+        verify(memory).hasWriteReceipt("ROUTE1", "receipt");
+        verifyNoInteractions(firestoreBean, firestore);
+    }
+
+    @Test
+    void receiptOperationsDelegateToFirestore() {
+        RoutingGameStore store = new RoutingGameStore(memory, firestoreBean, "firestore", LOCAL);
+        when(firestore.hasWriteReceipt("ROUTE1", "receipt")).thenReturn(true);
+
+        store.saveWithReceipt(game, "receipt");
+        assertTrue(store.hasWriteReceipt("ROUTE1", "receipt"));
+
+        verify(firestore).saveWithReceipt(game, "receipt");
+        verify(firestore).hasWriteReceipt("ROUTE1", "receipt");
+        verifyNoInteractions(memory);
+    }
+
+    @Test
     void autoOnCloudRunFailsInsteadOfFallingBackToMemory() {
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> new RoutingGameStore(memory, noFirestoreBean, "auto", CLOUD_RUN));

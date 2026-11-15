@@ -472,9 +472,14 @@ public class Game implements Serializable {
         touch();
     }
 
+    /** Identifies a deal without adding persisted state; rematches renew lobbyStartedAt. */
+    public synchronized String getDealId() {
+        return code + "-" + Long.toString(lobbyStartedAt.toEpochMilli(), 36);
+    }
+
     /** Identifies the current deal/bout independently of heartbeats and ordinary move versions. */
     public synchronized String getBoutId() {
-        return code + "-" + Long.toString(lobbyStartedAt.toEpochMilli(), 36) + "-" + boutsCompleted;
+        return getDealId() + "-" + boutsCompleted;
     }
 
     /** A delayed/repeated HTTP pass belongs only to the bout the player actually saw. */
@@ -909,6 +914,7 @@ public class Game implements Serializable {
                 && !isDefenderSeat
                 && isAttackingSideSeat
                 && canApproveEndRound(viewerSeat)
+                && !(viewer.isBot() && canAutoEndRound())
                 && !endRoundApprovals.contains(viewerPlayerId);
 
         Map<String, List<String>> defensesByAttack = new LinkedHashMap<>();

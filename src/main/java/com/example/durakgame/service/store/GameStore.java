@@ -18,6 +18,18 @@ public interface GameStore {
      */
     void save(Game game);
 
+    /**
+     * Atomically saves with the same CAS as {@link #save}, recording a server-generated operation ID.
+     * A retained receipt makes a retry succeed without overwriting any newer game state. The ID
+     * must stay with the original write attempt and must never be reused for another operation.
+     * Writes retain at most the newest 1024 receipts from the last ten minutes; deletion clears
+     * them. On success the attempted game is marked persisted, not refreshed to any newer state.
+     */
+    void saveWithReceipt(Game game, String receiptId);
+
+    /** Proof that this operation committed; retained receipts remain valid until write-time cleanup. */
+    boolean hasWriteReceipt(String code, String receiptId);
+
     Optional<Game> findByCode(String code);
 
     void deleteByCode(String code);

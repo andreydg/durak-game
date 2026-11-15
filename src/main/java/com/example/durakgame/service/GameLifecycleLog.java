@@ -28,7 +28,7 @@ final class GameLifecycleLog {
     /** What a change needs to remember about the game before it is applied. */
     record Before(GameStatus status, String deal, int bouts) {
         static Before of(Game game) {
-            return new Before(game.getStatus(), dealId(game), game.getBoutsCompleted());
+            return new Before(game.getStatus(), game.getDealId(), game.getBoutsCompleted());
         }
     }
 
@@ -40,7 +40,7 @@ final class GameLifecycleLog {
         }
         if (after == GameStatus.IN_PROGRESS) {
             log.info("game_started code={} deal={} trigger={} hostPlayerId={} players={} humans={} bots={} publicRoom={}",
-                    game.getCode(), dealId(game), trigger, game.getHostPlayerId(), game.getPlayers().size(),
+                    game.getCode(), game.getDealId(), trigger, game.getHostPlayerId(), game.getPlayers().size(),
                     humans(game), bots(game), game.isPublicRoom());
         } else if (before.status() == GameStatus.IN_PROGRESS && after == GameStatus.FINISHED) {
             log.info("game_ended code={} deal={} endedBy={} bouts={} loser={} loserPlayerId={} loserTeam={} humans={} bots={}",
@@ -56,10 +56,6 @@ final class GameLifecycleLog {
         if (before.status() == GameStatus.IN_PROGRESS) {
             interrupted(before, game, "room_closed");
         }
-    }
-
-    static String dealId(Game game) {
-        return game.getCode() + "-" + Long.toString(game.getLobbyStartedAt().toEpochMilli(), 36);
     }
 
     private static void interrupted(Before before, Game game, String reason) {
